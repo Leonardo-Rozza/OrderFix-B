@@ -18,7 +18,7 @@ public class CorsConfig {
         // 🔥 IMPORTANTE: usar patterns cuando hay credenciales/token
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:5173",
-                "http://localhost:3000"
+                "https://mvgr-reparaciones-frontend.vercel.app"
         ));
 
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
