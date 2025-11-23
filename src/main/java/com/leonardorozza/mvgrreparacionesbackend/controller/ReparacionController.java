@@ -53,7 +53,7 @@ public class ReparacionController {
     @PutMapping("/{id}")
     public ResponseEntity<ReparacionResponseDTO> actualizar(
             @PathVariable Long id,
-            @RequestParam ReparacionRequestDTO request) {
+            @Valid @RequestBody ReparacionRequestDTO request) {
 
         return ResponseEntity.ok(reparacionService.actualizar(id, request));
     }

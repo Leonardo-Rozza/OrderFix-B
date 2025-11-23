@@ -24,6 +24,12 @@ public class JwtFilter extends OncePerRequestFilter {
     private final UserDetailsServiceImpl userDetailsService;
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getServletPath();
+        return path.startsWith("/api/auth/"); // <-- EVITAR FILTRAR LOGIN
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain)
@@ -34,7 +40,6 @@ public class JwtFilter extends OncePerRequestFilter {
         String token = null;
         String username = null;
 
-        // Extraemos el token
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             token = authHeader.substring(7);
 
@@ -45,12 +50,10 @@ public class JwtFilter extends OncePerRequestFilter {
             }
         }
 
-        // Si tenemos un username y aún no está autenticado
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
 
             UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
-            // Validamos token
             if (jwtUtils.validateToken(token, userDetails)) {
 
                 UsernamePasswordAuthenticationToken authToken =

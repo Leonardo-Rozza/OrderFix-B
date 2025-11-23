@@ -18,8 +18,7 @@ public class CorsConfig {
         // 🔥 IMPORTANTE: usar patterns cuando hay credenciales/token
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:5173",
-                "http://localhost:3000",
-                "http://localhost:8081"
+                "http://localhost:3000"
         ));
 
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
