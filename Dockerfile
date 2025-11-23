@@ -1,19 +1,19 @@
-# ===========================
-#   BUILD STAGE
-# ===========================
+# ============================
+#       BUILD STAGE
+# ============================
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 
 WORKDIR /app
 
 COPY pom.xml .
-RUN mvn -q -e -DskipTests dependency:go-offline
+RUN mvn -q -DskipTests package
 
 COPY src ./src
-RUN mvn -q -e -DskipTests package
+RUN mvn -q -DskipTests package
 
-# ===========================
-#   RUN STAGE
-# ===========================
+# ============================
+#        RUN STAGE
+# ============================
 FROM eclipse-temurin:21-jre
 
 WORKDIR /app
