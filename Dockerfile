@@ -1,32 +1,30 @@
 # ============================
-#         BUILD STAGE
+#       BUILD STAGE
 # ============================
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 
 WORKDIR /app
 
-# Copia únicamente el pom.xml primero
+# Copiar solo el pom.xml primero → permite usar la cache
 COPY pom.xml .
 
-# Descarga dependencias (cachea en Docker)
+# Descargar dependencias sin compilar
 RUN mvn -q -DskipTests dependency:go-offline
 
-# Copia el código fuente
+# Copiar el código fuente
 COPY src ./src
 
-# Compila el proyecto
+# Compilar
 RUN mvn -q -DskipTests package
 
-
 # ============================
-#         RUN STAGE
+#        RUN STAGE
 # ============================
 FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-# Copia el .jar generado (cualquiera que esté dentro de target/)
-COPY --from=build /app/target/*.jar /app/app.jar
+COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 8080
 
