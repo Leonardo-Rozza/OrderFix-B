@@ -93,6 +93,13 @@ public class Reparacion {
     @Builder.Default
     private List<Repuesto> repuestos = new ArrayList<>();
 
+    // Los presupuestos son parte de la orden: se limpian al borrar la reparación.
+    // (Los cobros NO: son historial/caja y se protegen en el service.)
+    @OneToMany(mappedBy = "reparacion", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
+    @Builder.Default
+    private List<Presupuesto> presupuestos = new ArrayList<>();
+
     @CreatedDate
     @Column(updatable = false)
     private LocalDateTime createdAt;

@@ -1,13 +1,16 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
@@ -40,6 +43,8 @@ public class ReparacionServiceImpl implements ReparacionService {
     private final EquipoRepository equipoRepository;
     private final ClienteRepository clienteRepository;
     private final UserRepository userRepository;
+    private final CobroRepository cobroRepository;
+    private final ArticuloRepository articuloRepository;
     private final ReparacionMapper reparacionMapper;
     private final TenantService tenantService;
     private final PlanLimitService planLimitService;
@@ -235,6 +240,23 @@ public class ReparacionServiceImpl implements ReparacionService {
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
+        // Protege el historial/caja: una reparación con cobros no se borra (anular cobros primero)
+        if (cobroRepository.existsByReparacionId(id)) {
+            throw new BadRequestException(
+                    "No podés borrar una reparación con cobros registrados (afectaría la caja). "
+                            + "Anulá los cobros primero.");
+        }
+
+        // Devuelve al inventario el stock de los repuestos enlazados a un artículo
+        for (var repuesto : reparacion.getRepuestos()) {
+            if (repuesto.getArticulo() != null) {
+                var articulo = repuesto.getArticulo();
+                articulo.setStock(articulo.getStock() + repuesto.getCantidad());
+                articuloRepository.save(articulo);
+            }
+        }
+
+        // Cascade JPA: repuestos, presupuestos y fotos se borran junto con la reparación
         reparacionRepository.delete(reparacion);
     }
 

@@ -18,6 +18,8 @@ public interface CobroRepository extends JpaRepository<Cobro, Long> {
 
     Optional<Cobro> findByIdAndTallerId(Long id, Long tallerId);
 
+    boolean existsByReparacionId(Long reparacionId);
+
     @Query("SELECT COALESCE(SUM(c.monto), 0) FROM Cobro c WHERE c.reparacion.id = :reparacionId")
     BigDecimal sumByReparacionId(@Param("reparacionId") Long reparacionId);
 
