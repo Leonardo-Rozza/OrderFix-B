@@ -444,6 +444,33 @@ ArticuloResponse: `{ id, nombre, descripcion, sku, precio, costo, stock, stockMi
 
 ---
 
+### 4.13 Cobros / Caja / Recibo — requiere token
+
+Pagos de una reparación (parciales o totales), resumen de caja y recibo imprimible.
+
+**Cobros de una reparación** (`/api/reparaciones/{reparacionId}`):
+
+| Método | Ruta | Body | Resp |
+|--------|------|------|------|
+| POST   | `/cobros` | `{ "monto": 20000, "metodo": "EFECTIVO", "observaciones"? }` | `201` CobroResponse |
+| GET    | `/cobros` | — | `200` CobrosReparacion (resumen + lista) |
+| DELETE | `/cobros/{cobroId}` | — | `204` (solo ADMIN, anula el cobro) |
+| GET    | `/recibo` | — | `200` Recibo (datos para imprimir) |
+
+- `metodo`: `EFECTIVO | TRANSFERENCIA | TARJETA | MERCADOPAGO | OTRO`.
+- `GET /cobros` devuelve: `{ total, cobrado, saldo, pagado, cobros: [...] }` (el `total` lo calcula el backend = mano de obra + repuestos).
+- `GET /recibo` trae todo lo del recibo: taller, cliente, equipo, descripción, `repuestos[{nombre,cantidad,precioUnitario,subtotal}]`, `manoDeObra`, `totalRepuestos`, `total`, `cobrado`, `saldo`, `pagado`, `fecha`. El front lo maqueta/imprime.
+
+**Caja** (`/api/caja`):
+
+| Método | Ruta | Resp |
+|--------|------|------|
+| GET | `/api/caja?desde=YYYY-MM-DD&hasta=YYYY-MM-DD` | `200` CajaResumen |
+
+Sin params = **hoy**. Devuelve `{ desde, hasta, totalCobrado, cantidad, porMetodo: { EFECTIVO, TRANSFERENCIA, ... }, cobros: [...] }`.
+
+---
+
 ## 5. Formato de error (todos los endpoints)
 
 ```json
@@ -600,11 +627,13 @@ window.location.href = data.initPoint;
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
 - **Presupuestos** con aprobación del cliente desde el link público (§4.11).
 - **Inventario** con stock, ajustes, descuento automático y aviso de stock bajo (§4.12).
+- **Cobros / Caja / Recibo** (§4.13): pagos parciales, saldo, caja por período y recibo imprimible.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
-**Próximo (afecta al frontend a futuro):**
-- **Cobros / caja** y recibo imprimible.
+**Próximo (ideas a futuro):**
+- **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
+- Proveedores en inventario, reportes avanzados, verificación de email en el registro.
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
 - **Reportes** avanzados.
 

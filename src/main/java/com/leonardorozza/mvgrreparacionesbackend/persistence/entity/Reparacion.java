@@ -99,5 +99,25 @@ public class Reparacion {
 
     @LastModifiedDate
     private LocalDateTime updatedAt;
+
+    /** Suma de los repuestos (precio × cantidad). Fuente única de verdad del total. */
+    @Transient
+    public BigDecimal calcularTotalRepuestos() {
+        if (repuestos == null) {
+            return BigDecimal.ZERO;
+        }
+        return repuestos.stream()
+                .map(r -> (r.getPrecio() == null ? BigDecimal.ZERO : r.getPrecio())
+                        .multiply(BigDecimal.valueOf(Math.max(1, r.getCantidad()))))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /** Total a cobrar: mano de obra (precioFinal ?? precioEstimado ?? 0) + repuestos. */
+    @Transient
+    public BigDecimal calcularTotal() {
+        BigDecimal manoDeObra = precioFinal != null ? precioFinal
+                : (precioEstimado != null ? precioEstimado : BigDecimal.ZERO);
+        return manoDeObra.add(calcularTotalRepuestos());
+    }
 }
 
