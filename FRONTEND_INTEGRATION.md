@@ -364,7 +364,37 @@ Pensado para que el cliente del taller siga su equipo. Datos mínimos, sin info 
 }
 ```
 `404` si el código no existe. La URL pública que se comparte es `{APP_PUBLIC_URL}/seguimiento/{codigo}`
-(la arma el backend en el link de WhatsApp).
+(la arma el backend en el link de WhatsApp). La respuesta incluye `presupuesto` (el último, o `null`).
+
+**Aprobación del presupuesto por el cliente (público, sin token):**
+- `POST /api/seguimiento/{codigo}/presupuesto/aprobar` → marca APROBADO el presupuesto pendiente.
+- `POST /api/seguimiento/{codigo}/presupuesto/rechazar` → marca RECHAZADO.
+- `400` si no hay un presupuesto PENDIENTE para responder.
+
+---
+
+### 4.11 Presupuestos  (`/api/reparaciones/{reparacionId}/presupuestos`) — requiere token
+
+Presupuesto de una reparación, con ítems y aprobación del cliente.
+
+| Método | Ruta | Body | Resp |
+|--------|------|------|------|
+| POST   | `/api/reparaciones/{id}/presupuestos` | PresupuestoRequest | `201` PresupuestoResponse |
+| GET    | `/api/reparaciones/{id}/presupuestos` | — | `200` PresupuestoResponse[] (más nuevo primero) |
+
+PresupuestoRequest:
+```json
+{
+  "items": [
+    { "descripcion": "Pin de carga", "cantidad": 1, "precioUnitario": 8000 },
+    { "descripcion": "Mano de obra", "cantidad": 1, "precioUnitario": 12000 }
+  ],
+  "observaciones": "Demora 48hs"   // opcional
+}
+```
+PresupuestoResponse: `{ id, reparacionId, estado, items[], total, observaciones, fechaRespuesta, createdAt }`
+- `estado`: `PENDIENTE | APROBADO | RECHAZADO`. `total` lo calcula el backend (Σ cantidad×precioUnitario).
+- El cliente **aprueba/rechaza desde el link público** (ver §4.9).
 
 ---
 
@@ -542,11 +572,11 @@ window.location.href = data.initPoint;
 - **Paginación + búsqueda** en todos los listados (§4.2.bis).
 - **Roles ADMIN/USER** (borrados y suscripción solo ADMIN) y **gestión de empleados** (§4.10).
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
+- **Presupuestos** con aprobación del cliente desde el link público (§4.11).
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
 **Próximo (afecta al frontend a futuro):**
-- **Presupuestos** con aprobación del cliente.
 - **Inventario de repuestos con stock** real + proveedores.
 - **Cobros / caja** y recibo imprimible.
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).

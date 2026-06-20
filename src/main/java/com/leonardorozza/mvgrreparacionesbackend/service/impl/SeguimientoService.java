@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundExce
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.SeguimientoPublicoDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.presupuesto.PresupuestoResponseDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class SeguimientoService {
 
     private final ReparacionRepository reparacionRepository;
+    private final PresupuestoService presupuestoService;
 
     @Transactional(readOnly = true)
     public SeguimientoPublicoDTO consultar(String codigo) {
@@ -30,7 +32,8 @@ public class SeguimientoService {
                 r.getEquipo().getModelo(),
                 r.getTaller().getNombre(),
                 r.getFechaIngreso(),
-                r.getFechaEstimadaEntrega()
+                r.getFechaEstimadaEntrega(),
+                presupuestoService.ultimoDeReparacion(r.getId())
         );
     }
 }
