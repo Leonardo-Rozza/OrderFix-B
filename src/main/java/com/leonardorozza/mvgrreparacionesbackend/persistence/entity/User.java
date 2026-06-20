@@ -17,13 +17,15 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 50)
+    // Nombre visible del usuario (ya no es el identificador de login)
+    @Column(nullable = false, length = 50)
     private String username;
 
     @Column(nullable = false)
     private String password;  // Contraseña hasheada con BCrypt
 
-    @Column(unique = true)
+    // Identificador de login: único global
+    @Column(nullable = false, unique = true)
     private String email;
 
     @Enumerated(EnumType.STRING)
@@ -31,5 +33,11 @@ public class User {
     private UserRole role;   // ADMIN / USER
 
     @Column(nullable = false)
+    @Builder.Default
     private Boolean active = true;
+
+    // Tenant al que pertenece el usuario
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "taller_id")
+    private Taller taller;
 }

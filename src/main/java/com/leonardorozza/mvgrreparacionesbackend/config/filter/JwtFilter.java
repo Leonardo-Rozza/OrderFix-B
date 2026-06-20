@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.config.filter;
 
+import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
 import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.UserDetailsServiceImpl;
 import jakarta.servlet.FilterChain;
@@ -7,6 +8,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -17,6 +19,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 @Component
+@Slf4j
 @RequiredArgsConstructor
 public class JwtFilter extends OncePerRequestFilter {
 
@@ -26,7 +29,11 @@ public class JwtFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
-        return path.startsWith("/api/auth/"); // <-- EVITAR FILTRAR LOGIN
+        // No filtramos login, el webhook de MercadoPago ni el health (entran sin JWT).
+        return path.startsWith("/api/auth/")
+                || path.equals("/api/pagos/webhook")
+                || path.startsWith("/api/seguimiento/")
+                || path.startsWith("/actuator/health");
     }
 
     @Override
@@ -46,7 +53,7 @@ public class JwtFilter extends OncePerRequestFilter {
             try {
                 username = jwtUtils.extractUsername(token);
             } catch (Exception ex) {
-                System.out.println("Token inválido: " + ex.getMessage());
+                log.debug("Token inválido: {}", ex.getMessage());
             }
         }
 
@@ -68,9 +75,17 @@ public class JwtFilter extends OncePerRequestFilter {
                 );
 
                 SecurityContextHolder.getContext().setAuthentication(authToken);
+
+                // Tenant del request: lo tomamos del claim del token
+                TenantContext.setTallerId(jwtUtils.extractTallerId(token));
             }
         }
 
-        filterChain.doFilter(request, response);
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            // Evita fugas de tenant entre requests que reutilizan el hilo
+            TenantContext.clear();
+        }
     }
 }

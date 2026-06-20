@@ -25,25 +25,34 @@ public class JwtUtils {
     private String issuer;
 
     /**
-     * Genera un token JWT firmado.
+     * Genera un token JWT firmado, incluyendo el taller (tenant) del usuario.
      */
-    public String generateToken(UserDetails userDetails) {
+    public String generateToken(UserDetails userDetails, Long tallerId) {
         Algorithm algorithm = Algorithm.HMAC256(jwtSecret);
 
         return JWT.create()
                 .withIssuer(issuer)
                 .withSubject(userDetails.getUsername())
                 .withClaim("role", userDetails.getAuthorities().iterator().next().getAuthority())
+                .withClaim("tallerId", tallerId)
                 .withIssuedAt(new Date())
                 .withExpiresAt(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .sign(algorithm);
     }
 
     /**
-     * Obtiene el username desde el token.
+     * Obtiene el username (email) desde el token.
      */
     public String extractUsername(String token) {
         return decodeToken(token).getSubject();
+    }
+
+    /**
+     * Obtiene el taller (tenant) desde el token. Puede ser null para usuarios sin taller.
+     */
+    public Long extractTallerId(String token) {
+        var claim = decodeToken(token).getClaim("tallerId");
+        return claim.isNull() ? null : claim.asLong();
     }
 
     /**
