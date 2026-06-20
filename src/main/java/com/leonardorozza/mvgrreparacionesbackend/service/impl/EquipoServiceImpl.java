@@ -6,6 +6,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.EquipoService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoResponseDTO;
@@ -26,6 +27,7 @@ public class EquipoServiceImpl implements EquipoService {
 
     private final EquipoRepository equipoRepository;
     private final ClienteRepository clienteRepository;
+    private final ReparacionRepository reparacionRepository;
     private final EquipoMapper equipoMapper;
     private final TenantService tenantService;
 
@@ -76,8 +78,20 @@ public class EquipoServiceImpl implements EquipoService {
     @Override
     @Transactional(readOnly = true)
     public Page<EquipoResponseDTO> listar(String q, Pageable pageable) {
-        return equipoRepository.search(tenantService.currentTallerId(), q, pageable)
-                .map(equipoMapper::toDTO);
+        Page<Equipo> page = equipoRepository.search(tenantService.currentTallerId(), q, pageable);
+
+        java.util.List<Long> ids = page.getContent().stream().map(Equipo::getId).toList();
+        java.util.Map<Long, Long> conteos = ids.isEmpty()
+                ? java.util.Map.of()
+                : reparacionRepository.countByEquipoIds(ids).stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                row -> (Long) row[0], row -> (Long) row[1]));
+
+        return page.map(equipo -> {
+            EquipoResponseDTO dto = equipoMapper.toDTO(equipo);
+            dto.setReparacionesCount(conteos.getOrDefault(equipo.getId(), 0L));
+            return dto;
+        });
     }
 
     @Override

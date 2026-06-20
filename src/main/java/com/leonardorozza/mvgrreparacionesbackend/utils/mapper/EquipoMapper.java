@@ -14,5 +14,9 @@ public interface EquipoMapper {
     Equipo toEntity(EquipoRequestDTO dto);
 
     @Mapping(target = "clienteId", source = "cliente.id")
+    @Mapping(target = "clienteNombre", source = "cliente.nombre")
+    @Mapping(target = "clienteApellido", source = "cliente.apellido")
+    @Mapping(target = "clienteTelefono", source = "cliente.telefono")
+    @Mapping(target = "reparacionesCount", ignore = true) // se setea en el service (agregado por página)
     EquipoResponseDTO toDTO(Equipo entity);
 }

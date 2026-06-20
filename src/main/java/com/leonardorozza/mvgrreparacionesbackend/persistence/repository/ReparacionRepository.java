@@ -36,15 +36,47 @@ public interface ReparacionRepository extends JpaRepository<Reparacion, Long> {
 
     long countByTallerIdAndEstado(Long tallerId, EstadoReparacion estado);
 
-    @Query("""
+    @Query(value = """
             SELECT r FROM Reparacion r
+            JOIN FETCH r.equipo e
+            JOIN FETCH e.cliente c
             WHERE r.taller.id = :tallerId
               AND (:estado IS NULL OR r.estado = :estado)
               AND (:q IS NULL OR :q = ''
-                   OR LOWER(r.descripcionProblema) LIKE LOWER(CONCAT('%', :q, '%')))
+                   OR LOWER(r.descripcionProblema) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.apellido) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR c.telefono LIKE CONCAT('%', :q, '%')
+                   OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%')))
+            """,
+            countQuery = """
+            SELECT COUNT(r) FROM Reparacion r
+            JOIN r.equipo e JOIN e.cliente c
+            WHERE r.taller.id = :tallerId
+              AND (:estado IS NULL OR r.estado = :estado)
+              AND (:q IS NULL OR :q = ''
+                   OR LOWER(r.descripcionProblema) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.apellido) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR c.telefono LIKE CONCAT('%', :q, '%')
+                   OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%')))
             """)
     Page<Reparacion> search(@Param("tallerId") Long tallerId,
                             @Param("q") String q,
                             @Param("estado") EstadoReparacion estado,
                             Pageable pageable);
+
+    List<Reparacion> findTop5ByTallerIdOrderByIdDesc(Long tallerId);
+
+    @Query("SELECT r.equipo.id, COUNT(r) FROM Reparacion r WHERE r.equipo.id IN :equipoIds GROUP BY r.equipo.id")
+    List<Object[]> countByEquipoIds(@Param("equipoIds") List<Long> equipoIds);
+
+    @Query("""
+            SELECT r.equipo.cliente.id, COUNT(r), MAX(r.createdAt)
+            FROM Reparacion r WHERE r.equipo.cliente.id IN :clienteIds
+            GROUP BY r.equipo.cliente.id
+            """)
+    List<Object[]> agregadoPorCliente(@Param("clienteIds") List<Long> clienteIds);
 }

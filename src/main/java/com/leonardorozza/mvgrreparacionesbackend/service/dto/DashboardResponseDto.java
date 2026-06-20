@@ -3,7 +3,9 @@ package com.leonardorozza.mvgrreparacionesbackend.service.dto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,6 +19,7 @@ public record DashboardResponseDto(
         long articulosStockBajo,       // artículos con stock <= mínimo
         PlanType plan,
         EstadoSuscripcion estadoSuscripcion,
-        Integer limiteReparacionesMes  // null = ilimitado (PRO)
+        Integer limiteReparacionesMes, // null = ilimitado (PRO)
+        List<ReparacionResponseDTO> ultimasReparaciones
 ) {
 }

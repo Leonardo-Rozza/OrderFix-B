@@ -12,6 +12,13 @@ public class ReparacionResponseDTO {
 
     private Long id;
     private Long equipoId;
+    // Denormalizado (para listados autocontenidos)
+    private String equipoMarca;
+    private String equipoModelo;
+    private Long clienteId;
+    private String clienteNombre;
+    private String clienteApellido;
+    private String clienteTelefono;
     private String descripcionProblema;
     private EstadoReparacion estado;
     private BigDecimal precioEstimado;

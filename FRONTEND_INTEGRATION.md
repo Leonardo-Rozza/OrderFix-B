@@ -131,9 +131,13 @@ Los `GET` de listado (`/api/clientes`, `/api/equipos`, `/api/reparaciones`, `/ap
 **devuelven una página**, no un array. Aceptan query params:
 
 - `page` (0-based, default 0), `size` (default 20), `sort` (ej: `sort=nombre,asc`).
-- `q` = búsqueda por texto (clientes: nombre/apellido/teléfono; equipos: marca/modelo/IMEI;
-  reparaciones: descripción; repuestos: nombre).
-- Reparaciones además: `estado=EN_PROCESO` (filtro por estado).
+- `q` = búsqueda por texto (clientes: nombre/apellido/teléfono; equipos: marca/modelo/IMEI **+ cliente nombre/apellido**;
+  reparaciones: descripción **+ cliente nombre/apellido/teléfono + equipo marca/modelo**; repuestos: nombre).
+- Reparaciones además: `estado=EN_PROCESO` (filtro por estado). Se combinan `estado` + `q` + `page/size/sort`.
+- `sort` ordena por **columnas de la entidad** (no por los campos denormalizados). Campos y defaults:
+  - reparaciones → `id`,`estado`,`fechaIngreso`,`fechaEstimadaEntrega`,`fechaEntrega`,`precioFinal`,`createdAt` · default `id,desc`
+  - clientes → `nombre`,`apellido`,`telefono`,`id` · default `nombre,asc`
+  - equipos → `id`,`marca`,`modelo` · default `id,desc`
 
 Forma de la respuesta (estable):
 ```json
@@ -167,7 +171,8 @@ ClienteRequest:
   "direccion": "Calle 123" // opcional, máx 255
 }
 ```
-ClienteResponse: `{ id, nombre, apellido, telefono, email, direccion }`
+ClienteResponse: `{ id, nombre, apellido, telefono, email, direccion, equiposCount, reparacionesCount, ultimaVisita }`
+- `equiposCount` / `reparacionesCount`: agregados del cliente. `ultimaVisita`: fecha-hora de su última reparación (`null` si no tiene).
 
 Errores: `400` si el teléfono ya existe en el taller (al crear); `409` si choca la unicidad al actualizar.
 
@@ -195,7 +200,7 @@ EquipoRequest:
   "clienteId": 1           // obligatorio
 }
 ```
-EquipoResponse: `{ id, marca, modelo, imei, color, descripcion, clienteId }`
+EquipoResponse: `{ id, marca, modelo, imei, color, descripcion, clienteId, clienteNombre, clienteApellido, clienteTelefono, reparacionesCount }`
 
 Errores: `404` si el `clienteId` no pertenece a tu taller.
 
@@ -235,7 +240,8 @@ ReparacionRequest:
   "fotos": ["https://cdn/foto1.jpg"]   // URLs (la subida del archivo la hace el front)
 }
 ```
-ReparacionResponse: `{ ...campos de arriba..., codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total }`
+ReparacionResponse: `{ ...campos de arriba..., equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total }`
+- **Denormalizado**: cada reparación trae el `equipoMarca/Modelo` y los datos del cliente, así el listado/tablero es autocontenido (no hace falta cruzar con otros endpoints).
 > **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
 - `totalRepuestos`: suma de los repuestos. `total`: mano de obra (`precioFinal ?? precioEstimado ?? 0`) + repuestos.
@@ -310,7 +316,8 @@ RepuestoRequest:
   "cantidad": 2            // opcional, default 1 (cuánto descontar del stock)
 }
 ```
-RepuestoResponse: `{ id, nombre, descripcion, precio, reparacionId, articuloId, cantidad }`
+RepuestoResponse: `{ id, nombre, descripcion, precio, reparacionId, reparacionEquipo, articuloId, cantidad }`
+- `reparacionEquipo`: label "Marca Modelo" de la reparación asociada (`null` si no tiene reparación).
 > Si mandás `articuloId`, el backend **descuenta `cantidad` del stock** (400 si no alcanza) y lo **repone** si borrás el repuesto. Ver inventario en §4.12.
 
 ---
@@ -356,7 +363,8 @@ Métricas del taller para la pantalla de inicio.
   "articulosStockBajo": 1,
   "plan": "PRO",
   "estadoSuscripcion": "ACTIVA",
-  "limiteReparacionesMes": null
+  "limiteReparacionesMes": null,
+  "ultimasReparaciones": [ /* últimas 5 ReparacionResponse (con equipo+cliente denormalizado) */ ]
 }
 ```
 
@@ -574,10 +582,18 @@ export interface Suscripcion {
   reparacionesEsteMes: number; limiteReparacionesMes: number | null;
   funciones: { inventario: boolean; cobros: boolean; empleadosMultiples: boolean };
 }
-export interface Cliente { id: number; nombre: string; apellido: string; telefono: string; email: string | null; direccion: string | null; }
-export interface Equipo { id: number; marca: string; modelo: string; imei: string | null; color: string | null; descripcion: string | null; clienteId: number; }
+export interface Cliente {
+  id: number; nombre: string; apellido: string; telefono: string; email: string | null; direccion: string | null;
+  equiposCount: number; reparacionesCount: number; ultimaVisita: string | null;
+}
+export interface Equipo {
+  id: number; marca: string; modelo: string; imei: string | null; color: string | null; descripcion: string | null;
+  clienteId: number; clienteNombre: string; clienteApellido: string; clienteTelefono: string; reparacionesCount: number;
+}
 export interface Reparacion {
-  id: number; equipoId: number; descripcionProblema: string; estado: EstadoReparacion;
+  id: number; equipoId: number; equipoMarca: string; equipoModelo: string;
+  clienteId: number; clienteNombre: string; clienteApellido: string; clienteTelefono: string;
+  descripcionProblema: string; estado: EstadoReparacion;
   precioEstimado: number | null; precioFinal: number | null;
   fechaIngreso: string | null; fechaEstimadaEntrega: string | null; fechaEntrega: string | null;
   codigoSeguimiento: string | null; totalRepuestos: number; total: number;
@@ -585,7 +601,7 @@ export interface Reparacion {
   condicionesIngreso: string | null; observaciones: string | null;
   tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];
 }
-export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; }
+export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; reparacionEquipo: string | null; articuloId: number | null; cantidad: number; }
 export interface CheckoutResponse { preapprovalId: string; initPoint: string; }
 // Respuesta paginada genérica
 export interface Page<T> { content: T[]; page: { size: number; number: number; totalElements: number; totalPages: number }; }

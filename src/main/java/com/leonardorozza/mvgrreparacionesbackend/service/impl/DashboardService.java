@@ -27,6 +27,7 @@ public class DashboardService {
     private final SuscripcionRepository suscripcionRepository;
     private final ArticuloRepository articuloRepository;
     private final TenantService tenantService;
+    private final com.leonardorozza.mvgrreparacionesbackend.utils.mapper.ReparacionMapper reparacionMapper;
 
     @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
@@ -53,6 +54,9 @@ public class DashboardService {
 
         Integer limite = (suscripcion.getPlan() == PlanType.PRO) ? null : freeMaxReparacionesMes;
 
+        var ultimas = reparacionRepository.findTop5ByTallerIdOrderByIdDesc(tallerId)
+                .stream().map(reparacionMapper::toDTO).toList();
+
         return new DashboardResponseDto(
                 porEstado,
                 total,
@@ -61,7 +65,8 @@ public class DashboardService {
                 articulosStockBajo,
                 suscripcion.getPlan(),
                 suscripcion.getEstado(),
-                limite
+                limite,
+                ultimas
         );
     }
 }

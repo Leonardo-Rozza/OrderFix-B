@@ -12,6 +12,7 @@ public class RepuestoResponseDTO {
     private String descripcion;
     private BigDecimal precio;
     private Long reparacionId;
+    private String reparacionEquipo; // label "Marca Modelo" de la reparación asociada (o null)
     private Long articuloId;
     private int cantidad;
 

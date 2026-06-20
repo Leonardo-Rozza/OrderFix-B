@@ -22,8 +22,16 @@ public interface RepuestoRepository extends JpaRepository<Repuesto, Long> {
 
     List<Repuesto> findByReparacionId(Long reparacionId);
 
-    @Query("""
+    @Query(value = """
             SELECT r FROM Repuesto r
+            LEFT JOIN FETCH r.reparacion rep
+            LEFT JOIN FETCH rep.equipo
+            WHERE r.taller.id = :tallerId
+              AND (:q IS NULL OR :q = ''
+                   OR LOWER(r.nombre) LIKE LOWER(CONCAT('%', :q, '%')))
+            """,
+            countQuery = """
+            SELECT COUNT(r) FROM Repuesto r
             WHERE r.taller.id = :tallerId
               AND (:q IS NULL OR :q = ''
                    OR LOWER(r.nombre) LIKE LOWER(CONCAT('%', :q, '%')))

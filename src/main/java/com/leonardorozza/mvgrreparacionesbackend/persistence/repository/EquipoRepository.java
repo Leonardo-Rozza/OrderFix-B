@@ -22,13 +22,29 @@ public interface EquipoRepository extends JpaRepository<Equipo, Long> {
 
     List<Equipo> findByClienteIdAndTallerId(Long clienteId, Long tallerId);
 
-    @Query("""
+    @Query(value = """
             SELECT e FROM Equipo e
+            JOIN FETCH e.cliente c
             WHERE e.taller.id = :tallerId
               AND (:q IS NULL OR :q = ''
                    OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%'))
-                   OR LOWER(e.imei) LIKE LOWER(CONCAT('%', :q, '%')))
+                   OR LOWER(e.imei) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.apellido) LIKE LOWER(CONCAT('%', :q, '%')))
+            """,
+            countQuery = """
+            SELECT COUNT(e) FROM Equipo e JOIN e.cliente c
+            WHERE e.taller.id = :tallerId
+              AND (:q IS NULL OR :q = ''
+                   OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.imei) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(c.apellido) LIKE LOWER(CONCAT('%', :q, '%')))
             """)
     Page<Equipo> search(@Param("tallerId") Long tallerId, @Param("q") String q, Pageable pageable);
+
+    @Query("SELECT e.cliente.id, COUNT(e) FROM Equipo e WHERE e.cliente.id IN :clienteIds GROUP BY e.cliente.id")
+    List<Object[]> countByClienteIds(@Param("clienteIds") List<Long> clienteIds);
 }

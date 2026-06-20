@@ -16,5 +16,14 @@ public interface RepuestoMapper {
 
     @Mapping(target = "reparacionId", source = "reparacion.id")
     @Mapping(target = "articuloId", source = "articulo.id")
+    @Mapping(target = "reparacionEquipo", expression = "java(labelEquipo(entity))")
     RepuestoResponseDTO toDTO(Repuesto entity);
+
+    default String labelEquipo(Repuesto r) {
+        if (r.getReparacion() == null || r.getReparacion().getEquipo() == null) {
+            return null;
+        }
+        var e = r.getReparacion().getEquipo();
+        return e.getMarca() + " " + e.getModelo();
+    }
 }

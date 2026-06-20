@@ -11,4 +11,9 @@ public class EquipoResponseDTO {
     private String color;
     private String descripcion;
     private Long clienteId;
+    // Denormalizado
+    private String clienteNombre;
+    private String clienteApellido;
+    private String clienteTelefono;
+    private long reparacionesCount;
 }

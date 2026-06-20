@@ -2,6 +2,8 @@ package com.leonardorozza.mvgrreparacionesbackend.service.dto.cliente;
 
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Data
 public class ClienteResponseDTO {
 
@@ -11,4 +13,8 @@ public class ClienteResponseDTO {
     private String telefono;
     private String email;
     private String direccion;
+    // Denormalizado (agregados)
+    private long equiposCount;
+    private long reparacionesCount;
+    private LocalDateTime ultimaVisita;
 }

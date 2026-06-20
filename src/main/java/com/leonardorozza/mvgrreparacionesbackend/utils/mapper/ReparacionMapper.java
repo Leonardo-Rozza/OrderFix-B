@@ -17,6 +17,12 @@ public interface ReparacionMapper {
     Reparacion toEntity(ReparacionRequestDTO dto);
 
     @Mapping(target = "equipoId", source = "equipo.id")
+    @Mapping(target = "equipoMarca", source = "equipo.marca")
+    @Mapping(target = "equipoModelo", source = "equipo.modelo")
+    @Mapping(target = "clienteId", source = "equipo.cliente.id")
+    @Mapping(target = "clienteNombre", source = "equipo.cliente.nombre")
+    @Mapping(target = "clienteApellido", source = "equipo.cliente.apellido")
+    @Mapping(target = "clienteTelefono", source = "equipo.cliente.telefono")
     @Mapping(target = "tecnicoId", source = "tecnico.id")
     @Mapping(target = "tecnicoNombre", source = "tecnico.username")
     @Mapping(target = "totalRepuestos", expression = "java(entity.calcularTotalRepuestos())")

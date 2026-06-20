@@ -5,6 +5,8 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ClienteService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cliente.ClienteRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cliente.ClienteResponseDTO;
@@ -15,12 +17,19 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
 @Service
 @RequiredArgsConstructor
 @Transactional
 public class ClienteServiceImpl implements ClienteService {
 
     private final ClienteRepository clienteRepository;
+    private final EquipoRepository equipoRepository;
+    private final ReparacionRepository reparacionRepository;
     private final ClienteMapper clienteMapper;
     private final TenantService tenantService;
 
@@ -63,8 +72,29 @@ public class ClienteServiceImpl implements ClienteService {
     @Override
     @Transactional(readOnly = true)
     public Page<ClienteResponseDTO> listar(String q, Pageable pageable) {
-        return clienteRepository.search(tenantService.currentTallerId(), q, pageable)
-                .map(clienteMapper::toDTO);
+        Page<Cliente> page = clienteRepository.search(tenantService.currentTallerId(), q, pageable);
+
+        List<Long> ids = page.getContent().stream().map(Cliente::getId).toList();
+
+        Map<Long, Long> equiposPorCliente = ids.isEmpty() ? Map.of()
+                : equipoRepository.countByClienteIds(ids).stream()
+                        .collect(Collectors.toMap(r -> (Long) r[0], r -> (Long) r[1]));
+
+        // [clienteId, count, maxCreatedAt]
+        Map<Long, Object[]> repPorCliente = ids.isEmpty() ? Map.of()
+                : reparacionRepository.agregadoPorCliente(ids).stream()
+                        .collect(Collectors.toMap(r -> (Long) r[0], r -> r));
+
+        return page.map(cliente -> {
+            ClienteResponseDTO dto = clienteMapper.toDTO(cliente);
+            dto.setEquiposCount(equiposPorCliente.getOrDefault(cliente.getId(), 0L));
+            Object[] agg = repPorCliente.get(cliente.getId());
+            if (agg != null) {
+                dto.setReparacionesCount((Long) agg[1]);
+                dto.setUltimaVisita((LocalDateTime) agg[2]);
+            }
+            return dto;
+        });
     }
 
     @Override
