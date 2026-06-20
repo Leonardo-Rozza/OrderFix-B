@@ -396,6 +396,27 @@ Pensado para que el cliente del taller siga su equipo. Datos mínimos, sin info 
 
 ---
 
+### 4.10 Usuarios / Empleados — solo ADMIN  (`/api/usuarios`)
+
+Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un USER recibe `403`).
+
+| Método | Ruta | Body | Resp |
+|--------|------|------|------|
+| POST   | `/api/usuarios` | CrearUsuario | `201` UsuarioResponse |
+| GET    | `/api/usuarios` | — | `200` UsuarioResponse[] |
+| GET    | `/api/usuarios/{id}` | — | `200` UsuarioResponse |
+| PATCH  | `/api/usuarios/{id}` | `{ "role"?, "active"? }` | `200` UsuarioResponse |
+
+CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se crea `USER`).
+> **PRO**: el plan FREE permite **1 usuario** (el dueño). Agregar empleados requiere PRO → si no, `402`. Ver `funciones.empleadosMultiples` en §4.2.
+UsuarioResponse: `{ id, username, email, role, active }`.
+
+- Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
+- Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
+- `400` si el email ya está en uso.
+
+---
+
 ### 4.11 Presupuestos  (`/api/reparaciones/{reparacionId}/presupuestos`) — requiere token
 
 Presupuesto de una reparación, con ítems y aprobación del cliente.
@@ -418,27 +439,6 @@ PresupuestoRequest:
 PresupuestoResponse: `{ id, reparacionId, estado, items[], total, observaciones, fechaRespuesta, createdAt }`
 - `estado`: `PENDIENTE | APROBADO | RECHAZADO`. `total` lo calcula el backend (Σ cantidad×precioUnitario).
 - El cliente **aprueba/rechaza desde el link público** (ver §4.9).
-
----
-
-### 4.10 Usuarios / Empleados — solo ADMIN  (`/api/usuarios`)
-
-Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un USER recibe `403`).
-
-| Método | Ruta | Body | Resp |
-|--------|------|------|------|
-| POST   | `/api/usuarios` | CrearUsuario | `201` UsuarioResponse |
-| GET    | `/api/usuarios` | — | `200` UsuarioResponse[] |
-| GET    | `/api/usuarios/{id}` | — | `200` UsuarioResponse |
-| PATCH  | `/api/usuarios/{id}` | `{ "role"?, "active"? }` | `200` UsuarioResponse |
-
-CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se crea `USER`).
-> **PRO**: el plan FREE permite **1 usuario** (el dueño). Agregar empleados requiere PRO → si no, `402`. Ver `funciones.empleadosMultiples` en §4.2.
-UsuarioResponse: `{ id, username, email, role, active }`.
-
-- Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
-- Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
-- `400` si el email ya está en uso.
 
 ---
 
