@@ -7,10 +7,16 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoRespon
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -25,7 +31,7 @@ public class EquipoController {
 
     @PostMapping
     @Operation(summary = "Crear un equipo")
-    public ResponseEntity<EquipoResponseDTO> crear(@RequestBody EquipoRequestDTO dto) {
+    public ResponseEntity<EquipoResponseDTO> crear(@Valid @RequestBody EquipoRequestDTO dto) {
         return ResponseEntity.status(HttpStatus.CREATED).body(equipoService.crear(dto));
     }
 
@@ -33,7 +39,7 @@ public class EquipoController {
     @Operation(summary = "Actualizar un equipo")
     public ResponseEntity<EquipoResponseDTO> actualizar(
             @PathVariable Long id,
-            @RequestBody EquipoRequestDTO dto
+            @Valid @RequestBody EquipoRequestDTO dto
     ) {
         return ResponseEntity.ok(equipoService.actualizar(id, dto));
     }
@@ -45,9 +51,11 @@ public class EquipoController {
     }
 
     @GetMapping
-    @Operation(summary = "Listar todos los equipos")
-    public ResponseEntity<List<EquipoResponseDTO>> listar() {
-        return ResponseEntity.ok(equipoService.listar());
+    @Operation(summary = "Listar equipos (paginado). Búsqueda por marca/modelo/IMEI con ?q=")
+    public ResponseEntity<Page<EquipoResponseDTO>> listar(
+            @RequestParam(required = false) String q,
+            @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(equipoService.listar(q, pageable));
     }
 
     @GetMapping("/cliente/{clienteId}")
@@ -57,7 +65,8 @@ public class EquipoController {
     }
 
     @DeleteMapping("/{id}")
-    @Operation(summary = "Eliminar un equipo por ID")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Eliminar un equipo por ID (solo ADMIN)")
     public ResponseEntity<Void> eliminar(@PathVariable Long id) {
         equipoService.eliminar(id);
         return ResponseEntity.noContent().build();

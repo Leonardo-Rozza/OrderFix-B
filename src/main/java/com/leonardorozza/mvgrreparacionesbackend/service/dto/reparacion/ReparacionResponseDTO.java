@@ -18,4 +18,13 @@ public class ReparacionResponseDTO {
     private LocalDate fechaIngreso;
     private LocalDate fechaEstimadaEntrega;
     private LocalDate fechaEntrega;
+
+    /** Código público de seguimiento (para compartir con el cliente). */
+    private String codigoSeguimiento;
+
+    /** Suma de los precios de los repuestos asociados. */
+    private BigDecimal totalRepuestos;
+
+    /** Total a cobrar: mano de obra (precioFinal ?? precioEstimado ?? 0) + repuestos. */
+    private BigDecimal total;
 }

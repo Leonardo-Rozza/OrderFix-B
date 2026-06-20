@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -30,5 +31,10 @@ public class Repuesto {
     @ManyToOne
     @JoinColumn(name = "reparacion_id")
     private Reparacion reparacion;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "taller_id", nullable = false)
+    @JsonIgnore
+    private Taller taller;
 }
 

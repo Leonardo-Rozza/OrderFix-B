@@ -8,7 +8,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "clientes")
+@Table(name = "clientes", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_clientes_taller_telefono", columnNames = {"taller_id", "telefono"}),
+        @UniqueConstraint(name = "uk_clientes_taller_email", columnNames = {"taller_id", "email"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -26,14 +29,19 @@ public class Cliente {
     @Column(nullable = false, length = 60)
     private String apellido;
 
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(nullable = false, length = 20)
     private String telefono;
 
-    @Column(unique = true, length = 120)
+    @Column(length = 120)
     private String email;
 
     @Column(length = 255)
     private String direccion;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "taller_id", nullable = false)
+    @JsonIgnore
+    private Taller taller;
 
     @OneToMany(mappedBy = "cliente", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonIgnore

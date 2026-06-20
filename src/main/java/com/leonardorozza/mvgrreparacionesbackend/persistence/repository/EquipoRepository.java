@@ -1,13 +1,34 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.repository;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface EquipoRepository extends JpaRepository<Equipo, Long> {
-    List<Equipo> findByClienteId(Long clienteId);
+
+    List<Equipo> findAllByTallerId(Long tallerId);
+
+    Optional<Equipo> findByIdAndTallerId(Long id, Long tallerId);
+
+    boolean existsByIdAndTallerId(Long id, Long tallerId);
+
+    List<Equipo> findByClienteIdAndTallerId(Long clienteId, Long tallerId);
+
+    @Query("""
+            SELECT e FROM Equipo e
+            WHERE e.taller.id = :tallerId
+              AND (:q IS NULL OR :q = ''
+                   OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(e.imei) LIKE LOWER(CONCAT('%', :q, '%')))
+            """)
+    Page<Equipo> search(@Param("tallerId") Long tallerId, @Param("q") String q, Pageable pageable);
 }

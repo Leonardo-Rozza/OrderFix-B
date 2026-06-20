@@ -3,8 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.service;
 
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cliente.ClienteRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cliente.ClienteResponseDTO;
-
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 public interface ClienteService {
 
@@ -14,7 +14,7 @@ public interface ClienteService {
 
     ClienteResponseDTO obtenerPorId(Long id);
 
-    List<ClienteResponseDTO> listar();
+    Page<ClienteResponseDTO> listar(String q, Pageable pageable);
 
     void eliminar(Long id);
 }
