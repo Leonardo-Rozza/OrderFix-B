@@ -514,12 +514,15 @@ Sin params = **hoy**. Devuelve `{ desde, hasta, totalCobrado, cantidad, porMetod
 
 ## 6. Freemium / límites de plan
 
-- Plan **FREE/TRIAL**: tope de **50 reparaciones por mes** (configurable en backend).
-- Plan **PRO**: ilimitado.
+- Plan **FREE/TRIAL**: tope de **30 reparaciones por mes** (configurable por env `FREE_MAX_REPARACIONES`).
+- Plan **PRO**: reparaciones **ilimitadas** + funciones PRO (inventario, cobros/caja, dashboard, multi-empleado).
+- **Cómo cuenta:** suma 1 por cada reparación **creada** (`POST /api/reparaciones` o `/ingreso-rapido`).
+  - **Borrar una reparación NO baja el contador** (no se puede esquivar el límite).
+  - El contador **se reinicia el día 1 de cada mes** (mes calendario).
 - Suscripción `VENCIDA`/`CANCELADA`: bloquea la creación de reparaciones.
-- Cuando se supera el límite, `POST /api/reparaciones` devuelve **`402`** con un `message` accionable.
-- El front debe leer `GET /api/suscripcion` para mostrar el consumo (ej: "12/50 este mes")
-  y mostrar el modal de upgrade ante un 402.
+- Al superar el tope, crear una reparación devuelve **`402`** con un `message` accionable.
+- El front lee `GET /api/suscripcion` → `reparacionesEsteMes` / `limiteReparacionesMes` (null = ilimitado)
+  para mostrar el consumo (ej: "12/30 este mes") y el modal de upgrade ante un 402.
 
 **Flujo de upgrade a PRO:**
 1. Ante el 402 (o desde la pantalla de Plan), el usuario toca "Pasar a PRO".

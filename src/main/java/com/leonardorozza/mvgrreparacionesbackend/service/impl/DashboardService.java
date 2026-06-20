@@ -29,7 +29,7 @@ public class DashboardService {
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
 
-    @Value("${plan.free.max-reparaciones-mes:50}")
+    @Value("${plan.free.max-reparaciones-mes:30}")
     private int freeMaxReparacionesMes;
 
     @Transactional(readOnly = true)

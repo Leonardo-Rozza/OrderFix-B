@@ -48,6 +48,14 @@ public class Suscripcion {
 
     private LocalDate proximoCobro;
 
+    // Contador de consumo del mes (no baja al borrar; se reinicia al cambiar de mes)
+    @Column(name = "consumo_mes", length = 7)
+    private String consumoMes; // "YYYY-MM"
+
+    @Column(name = "reparaciones_mes", nullable = false)
+    @Builder.Default
+    private int reparacionesMes = 0;
+
     // Identificadores de MercadoPago (cobro recurrente / preapproval)
     @Column(length = 255)
     private String mpPreapprovalId;

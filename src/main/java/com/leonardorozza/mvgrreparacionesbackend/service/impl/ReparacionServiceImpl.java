@@ -56,7 +56,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         Long tallerId = tenantService.currentTallerId();
 
         // Gating freemium: respeta el tope del plan / suscripción vigente
-        planLimitService.assertPuedeCrearReparacion(tallerId);
+        planLimitService.registrarUsoReparacion(tallerId);
 
         Equipo equipo = equipoRepository.findByIdAndTallerId(request.getEquipoId(), tallerId)
                 .orElseThrow(() ->
@@ -89,7 +89,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         Long tallerId = tenantService.currentTallerId();
 
         // Gating freemium: respeta el tope del plan / suscripción vigente
-        planLimitService.assertPuedeCrearReparacion(tallerId);
+        planLimitService.registrarUsoReparacion(tallerId);
 
         // 1) Cliente: si ya existe uno con ese teléfono en el taller, lo reutilizamos
         //    (evita duplicados); si no, lo creamos con los datos mínimos.
