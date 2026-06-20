@@ -6,9 +6,11 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
@@ -26,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -36,6 +39,7 @@ public class ReparacionServiceImpl implements ReparacionService {
     private final ReparacionRepository reparacionRepository;
     private final EquipoRepository equipoRepository;
     private final ClienteRepository clienteRepository;
+    private final UserRepository userRepository;
     private final ReparacionMapper reparacionMapper;
     private final TenantService tenantService;
     private final PlanLimitService planLimitService;
@@ -65,6 +69,13 @@ public class ReparacionServiceImpl implements ReparacionService {
         // Si el usuario no envía estado → equipo recién ingresado
         if (request.getEstado() == null) {
             reparacion.setEstado(EstadoReparacion.INGRESADO);
+        }
+        reparacion.setTecnico(resolverTecnico(request.getTecnicoId(), tallerId));
+        if (reparacion.getFotos() == null) {
+            reparacion.setFotos(new ArrayList<>());
+        }
+        if (request.getFotos() != null) {
+            reparacion.getFotos().addAll(request.getFotos());
         }
         reparacion.setCodigoSeguimiento(generarCodigoSeguimiento());
 
@@ -147,6 +158,21 @@ public class ReparacionServiceImpl implements ReparacionService {
         reparacion.setFechaIngreso(request.getFechaIngreso());
         reparacion.setFechaEstimadaEntrega(request.getFechaEstimadaEntrega());
         reparacion.setFechaEntrega(request.getFechaEntrega());
+
+        // Orden de trabajo ampliada
+        reparacion.setPatronDesbloqueo(request.getPatronDesbloqueo());
+        reparacion.setPinDesbloqueo(request.getPinDesbloqueo());
+        reparacion.setAccesorios(request.getAccesorios());
+        reparacion.setCondicionesIngreso(request.getCondicionesIngreso());
+        reparacion.setObservaciones(request.getObservaciones());
+        reparacion.setTecnico(resolverTecnico(request.getTecnicoId(), tallerId));
+        if (request.getFotos() != null) {
+            if (reparacion.getFotos() == null) {
+                reparacion.setFotos(new ArrayList<>());
+            }
+            reparacion.getFotos().clear();
+            reparacion.getFotos().addAll(request.getFotos());
+        }
 
         return reparacionMapper.toDTO(reparacionRepository.save(reparacion));
     }
@@ -232,6 +258,15 @@ public class ReparacionServiceImpl implements ReparacionService {
 
         String url = "https://wa.me/" + tel + "?text=" + URLEncoder.encode(mensaje, StandardCharsets.UTF_8);
         return new WhatsappLinkDTO(url, tel, mensaje, track);
+    }
+
+    /** Resuelve el técnico (usuario del taller) validando que pertenezca al taller actual. */
+    private User resolverTecnico(Long tecnicoId, Long tallerId) {
+        if (tecnicoId == null) {
+            return null;
+        }
+        return userRepository.findByIdAndTallerId(tecnicoId, tallerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Técnico no encontrado con ID: " + tecnicoId));
     }
 
     private String generarCodigoSeguimiento() {

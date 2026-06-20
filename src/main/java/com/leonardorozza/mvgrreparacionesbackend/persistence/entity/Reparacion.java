@@ -52,6 +52,33 @@ public class Reparacion {
     @Column(name = "codigo_seguimiento", unique = true, length = 20)
     private String codigoSeguimiento;
 
+    // ----- Orden de trabajo ampliada (checklist de ingreso) -----
+    @Column(name = "patron_desbloqueo", length = 60)
+    private String patronDesbloqueo;
+
+    @Column(name = "pin_desbloqueo", length = 20)
+    private String pinDesbloqueo;
+
+    @Column(length = 255)
+    private String accesorios;
+
+    @Column(name = "condiciones_ingreso", length = 500)
+    private String condicionesIngreso;
+
+    @Column(length = 1000)
+    private String observaciones;
+
+    /** Técnico (usuario del taller) asignado a la reparación. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tecnico_id")
+    private User tecnico;
+
+    @ElementCollection
+    @CollectionTable(name = "reparacion_fotos", joinColumns = @JoinColumn(name = "reparacion_id"))
+    @Column(name = "url")
+    @Builder.Default
+    private List<String> fotos = new ArrayList<>();
+
     @ManyToOne(optional = false)
     @JoinColumn(name = "equipo_id", nullable = false)
     private Equipo equipo;

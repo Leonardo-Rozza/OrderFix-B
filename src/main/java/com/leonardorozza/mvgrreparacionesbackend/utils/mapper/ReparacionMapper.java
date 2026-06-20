@@ -12,9 +12,13 @@ import java.math.BigDecimal;
 public interface ReparacionMapper {
 
     @Mapping(target = "equipo.id", source = "equipoId")
+    @Mapping(target = "tecnico", ignore = true) // se resuelve en el service (valida que sea del taller)
+    @Mapping(target = "fotos", ignore = true)   // se setea en el service (evita lista null por @Builder)
     Reparacion toEntity(ReparacionRequestDTO dto);
 
     @Mapping(target = "equipoId", source = "equipo.id")
+    @Mapping(target = "tecnicoId", source = "tecnico.id")
+    @Mapping(target = "tecnicoNombre", source = "tecnico.username")
     @Mapping(target = "totalRepuestos", expression = "java(sumaRepuestos(entity))")
     @Mapping(target = "total", expression = "java(total(entity))")
     ReparacionResponseDTO toDTO(Reparacion entity);

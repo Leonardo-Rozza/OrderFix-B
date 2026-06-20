@@ -213,10 +213,19 @@ ReparacionRequest:
   "precioFinal": null,                 // opcional, decimal
   "fechaIngreso": "2026-06-16",        // opcional, YYYY-MM-DD
   "fechaEstimadaEntrega": "2026-06-20",// opcional
-  "fechaEntrega": null                 // opcional
+  "fechaEntrega": null,                // opcional
+  // ----- Orden de trabajo ampliada (todo opcional) -----
+  "patronDesbloqueo": "L invertida",   // máx 60
+  "pinDesbloqueo": "1234",             // máx 20
+  "accesorios": "cargador, funda, SIM",// máx 255
+  "condicionesIngreso": "rayada",      // máx 500
+  "observaciones": "interno, no público", // máx 1000
+  "tecnicoId": 1,                      // id de un usuario del taller (404 si no existe)
+  "fotos": ["https://cdn/foto1.jpg"]   // URLs (la subida del archivo la hace el front)
 }
 ```
-ReparacionResponse: `{ id, equipoId, descripcionProblema, estado, precioEstimado, precioFinal, fechaIngreso, fechaEstimadaEntrega, fechaEntrega, codigoSeguimiento, totalRepuestos, total }`
+ReparacionResponse: `{ ...campos de arriba..., codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total }`
+> **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
 - `totalRepuestos`: suma de los repuestos. `total`: mano de obra (`precioFinal ?? precioEstimado ?? 0`) + repuestos.
 
@@ -471,6 +480,9 @@ export interface Reparacion {
   precioEstimado: number | null; precioFinal: number | null;
   fechaIngreso: string | null; fechaEstimadaEntrega: string | null; fechaEntrega: string | null;
   codigoSeguimiento: string | null; totalRepuestos: number; total: number;
+  patronDesbloqueo: string | null; pinDesbloqueo: string | null; accesorios: string | null;
+  condicionesIngreso: string | null; observaciones: string | null;
+  tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];
 }
 export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; }
 export interface CheckoutResponse { preapprovalId: string; initPoint: string; }
@@ -526,6 +538,7 @@ window.location.href = data.initPoint;
 - **MercadoPago**: checkout de suscripción PRO (`POST /api/pagos/suscripcion`) + **cancelación**
   (`/cancelar`) + webhook con **firma validada**. *(Requiere Access Token y webhook-secret; ver §10.)*
 - **Carga rápida** de reparación (§4.5), **total** de reparación (mano de obra + repuestos).
+- **Orden de trabajo ampliada**: checklist de ingreso (patrón/PIN, accesorios, condiciones), técnico asignado, observaciones internas y fotos.
 - **Paginación + búsqueda** en todos los listados (§4.2.bis).
 - **Roles ADMIN/USER** (borrados y suscripción solo ADMIN) y **gestión de empleados** (§4.10).
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
@@ -533,7 +546,6 @@ window.location.href = data.initPoint;
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
 **Próximo (afecta al frontend a futuro):**
-- **Orden de trabajo ampliada**: checklist de ingreso (patrón/PIN, accesorios), fotos, técnico, firma.
 - **Presupuestos** con aprobación del cliente.
 - **Inventario de repuestos con stock** real + proveedores.
 - **Cobros / caja** y recibo imprimible.

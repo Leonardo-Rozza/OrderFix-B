@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 @Data
 public class ReparacionResponseDTO {
@@ -21,6 +22,16 @@ public class ReparacionResponseDTO {
 
     /** Código público de seguimiento (para compartir con el cliente). */
     private String codigoSeguimiento;
+
+    // ----- Orden de trabajo ampliada -----
+    private String patronDesbloqueo;
+    private String pinDesbloqueo;
+    private String accesorios;
+    private String condicionesIngreso;
+    private String observaciones;
+    private Long tecnicoId;
+    private String tecnicoNombre;
+    private List<String> fotos;
 
     /** Suma de los precios de los repuestos asociados. */
     private BigDecimal totalRepuestos;
