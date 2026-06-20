@@ -52,7 +52,6 @@ public class PlanFeatureService {
         String que = switch (feature) {
             case INVENTARIO -> "El inventario";
             case COBROS -> "Los cobros, la caja y el recibo";
-            case DASHBOARD -> "El dashboard";
             case EMPLEADOS_MULTIPLES -> "Agregar más empleados";
         };
         return que + " es una función del plan PRO. Pasá a PRO para habilitarla.";

@@ -27,14 +27,12 @@ public class DashboardService {
     private final SuscripcionRepository suscripcionRepository;
     private final ArticuloRepository articuloRepository;
     private final TenantService tenantService;
-    private final PlanFeatureService planFeatureService;
 
-    @Value("${plan.free.max-reparaciones-mes:30}")
+    @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
 
     @Transactional(readOnly = true)
     public DashboardResponseDto obtener() {
-        planFeatureService.requerir(com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature.DASHBOARD);
         Long tallerId = tenantService.currentTallerId();
 
         Map<EstadoReparacion, Long> porEstado = new LinkedHashMap<>();

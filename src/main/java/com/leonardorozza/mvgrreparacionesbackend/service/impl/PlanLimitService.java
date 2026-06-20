@@ -26,7 +26,7 @@ public class PlanLimitService {
 
     private final SuscripcionRepository suscripcionRepository;
 
-    @Value("${plan.free.max-reparaciones-mes:30}")
+    @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
 
     /**

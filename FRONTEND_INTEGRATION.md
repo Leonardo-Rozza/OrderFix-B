@@ -108,21 +108,20 @@ Plan y consumo del taller actual. Úsalo para la pantalla de Planes y el banner 
   "fechaFinTrial": "2026-06-30",   // null si no aplica
   "proximoCobro": null,            // fecha del próximo cobro PRO (la setea el webhook de MercadoPago)
   "reparacionesEsteMes": 12,
-  "limiteReparacionesMes": 50,     // null = ilimitado (PRO)
+  "limiteReparacionesMes": 25,     // null = ilimitado (PRO)
   "funciones": {                   // capacidades del plan: el front habilita/oculta según esto
     "inventario": false,
     "cobros": false,               // cobros + caja + recibo
-    "dashboard": false,
     "empleadosMultiples": false    // agregar más de 1 usuario
   }
 }
 ```
 
-**Funciones PRO:** `inventario`, `cobros` (cobros/caja/recibo), `dashboard` y `empleadosMultiples`
-son **exclusivas de PRO**. El front debe leer `funciones` y **deshabilitar/ocultar** esas secciones
-cuando estén en `false`. Si igual se llama a un endpoint PRO con plan FREE, el backend responde **`402`**
-con un `message` accionable (mostrar el modal "Pasá a PRO"). El plan FREE mantiene clientes, equipos,
-reparaciones (con tope mensual), repuestos, presupuestos y seguimiento público.
+**Funciones PRO:** `inventario`, `cobros` (cobros/caja/recibo) y `empleadosMultiples` son **exclusivas de PRO**.
+El front debe leer `funciones` y **deshabilitar/ocultar** esas secciones cuando estén en `false`. Si igual se
+llama a un endpoint PRO con plan FREE, el backend responde **`402`** con un `message` accionable (modal "Pasá a PRO").
+El plan FREE mantiene clientes, equipos, reparaciones (con tope mensual), repuestos, presupuestos, **dashboard**
+y seguimiento público.
 
 ---
 
@@ -344,8 +343,7 @@ Lo llama MercadoPago, **no el frontend**. Actualiza el plan/estado de la suscrip
 
 ---
 
-### 4.8 Dashboard — requiere token · **PRO**  (`/api/dashboard`)
-> Función PRO: con plan FREE devuelve `402`. Ver `funciones.dashboard` en §4.2.
+### 4.8 Dashboard — requiere token  (`/api/dashboard`)
 
 #### `GET /api/dashboard`
 Métricas del taller para la pantalla de inicio.
@@ -514,15 +512,15 @@ Sin params = **hoy**. Devuelve `{ desde, hasta, totalCobrado, cantidad, porMetod
 
 ## 6. Freemium / límites de plan
 
-- Plan **FREE/TRIAL**: tope de **30 reparaciones por mes** (configurable por env `FREE_MAX_REPARACIONES`).
-- Plan **PRO**: reparaciones **ilimitadas** + funciones PRO (inventario, cobros/caja, dashboard, multi-empleado).
+- Plan **FREE/TRIAL**: tope de **25 reparaciones por mes** (configurable por env `FREE_MAX_REPARACIONES`).
+- Plan **PRO**: reparaciones **ilimitadas** + funciones PRO (inventario, cobros/caja, multi-empleado).
 - **Cómo cuenta:** suma 1 por cada reparación **creada** (`POST /api/reparaciones` o `/ingreso-rapido`).
   - **Borrar una reparación NO baja el contador** (no se puede esquivar el límite).
   - El contador **se reinicia el día 1 de cada mes** (mes calendario).
 - Suscripción `VENCIDA`/`CANCELADA`: bloquea la creación de reparaciones.
 - Al superar el tope, crear una reparación devuelve **`402`** con un `message` accionable.
 - El front lee `GET /api/suscripcion` → `reparacionesEsteMes` / `limiteReparacionesMes` (null = ilimitado)
-  para mostrar el consumo (ej: "12/30 este mes") y el modal de upgrade ante un 402.
+  para mostrar el consumo (ej: "12/25 este mes") y el modal de upgrade ante un 402.
 
 **Flujo de upgrade a PRO:**
 1. Ante el 402 (o desde la pantalla de Plan), el usuario toca "Pasar a PRO".
@@ -574,7 +572,7 @@ export interface Suscripcion {
   plan: Plan; estado: EstadoSuscripcion;
   fechaInicio: string | null; fechaFinTrial: string | null; proximoCobro: string | null;
   reparacionesEsteMes: number; limiteReparacionesMes: number | null;
-  funciones: { inventario: boolean; cobros: boolean; dashboard: boolean; empleadosMultiples: boolean };
+  funciones: { inventario: boolean; cobros: boolean; empleadosMultiples: boolean };
 }
 export interface Cliente { id: number; nombre: string; apellido: string; telefono: string; email: string | null; direccion: string | null; }
 export interface Equipo { id: number; marca: string; modelo: string; imei: string | null; color: string | null; descripcion: string | null; clienteId: number; }
@@ -648,7 +646,7 @@ window.location.href = data.initPoint;
 - **Presupuestos** con aprobación del cliente desde el link público (§4.11).
 - **Inventario** con stock, ajustes, descuento automático y aviso de stock bajo (§4.12).
 - **Cobros / Caja / Recibo** (§4.13): pagos parciales, saldo, caja por período y recibo imprimible.
-- **Gating por plan**: inventario, cobros/caja, dashboard y multi-empleado son PRO (402 + mapa `funciones` en §4.2).
+- **Gating por plan**: inventario, cobros/caja y multi-empleado son PRO (402 + mapa `funciones` en §4.2). Dashboard es FREE.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 

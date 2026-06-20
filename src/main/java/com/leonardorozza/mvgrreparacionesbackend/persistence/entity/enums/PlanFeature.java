@@ -7,7 +7,6 @@ package com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums;
 public enum PlanFeature {
     INVENTARIO("inventario"),
     COBROS("cobros"),
-    DASHBOARD("dashboard"),
     EMPLEADOS_MULTIPLES("empleadosMultiples");
 
     private final String key;

@@ -21,7 +21,7 @@ public class SuscripcionService {
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
 
-    @Value("${plan.free.max-reparaciones-mes:30}")
+    @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
 
     @Transactional(readOnly = true)
