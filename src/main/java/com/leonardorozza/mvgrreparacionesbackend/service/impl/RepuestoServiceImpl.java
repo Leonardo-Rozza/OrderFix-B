@@ -2,9 +2,12 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Articulo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Repuesto;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.RepuestoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.RepuestoService;
@@ -26,6 +29,7 @@ public class RepuestoServiceImpl implements RepuestoService {
 
     private final RepuestoRepository repuestoRepository;
     private final ReparacionRepository reparacionRepository;
+    private final ArticuloRepository articuloRepository;
     private final RepuestoMapper repuestoMapper;
     private final TenantService tenantService;
 
@@ -41,6 +45,14 @@ public class RepuestoServiceImpl implements RepuestoService {
         Repuesto repuesto = repuestoMapper.toEntity(request);
         repuesto.setReparacion(reparacion);
         repuesto.setTaller(tenantService.currentTallerRef());
+
+        int cantidad = cantidadDe(request);
+        repuesto.setCantidad(cantidad);
+        if (request.getArticuloId() != null) {
+            Articulo articulo = resolverArticulo(request.getArticuloId(), tallerId);
+            descontarStock(articulo, cantidad);
+            repuesto.setArticulo(articulo);
+        }
 
         return repuestoMapper.toDTO(repuestoRepository.save(repuesto));
     }
@@ -61,6 +73,20 @@ public class RepuestoServiceImpl implements RepuestoService {
         repuesto.setDescripcion(request.getDescripcion());
         repuesto.setPrecio(request.getPrecio());
         repuesto.setReparacion(reparacion);
+
+        // Ajuste de stock: repongo lo viejo y descuento lo nuevo
+        if (repuesto.getArticulo() != null) {
+            reponerStock(repuesto.getArticulo(), repuesto.getCantidad());
+        }
+        int cantidad = cantidadDe(request);
+        repuesto.setCantidad(cantidad);
+        if (request.getArticuloId() != null) {
+            Articulo articulo = resolverArticulo(request.getArticuloId(), tallerId);
+            descontarStock(articulo, cantidad);
+            repuesto.setArticulo(articulo);
+        } else {
+            repuesto.setArticulo(null);
+        }
 
         return repuestoMapper.toDTO(repuestoRepository.save(repuesto));
     }
@@ -112,7 +138,35 @@ public class RepuestoServiceImpl implements RepuestoService {
         Repuesto repuesto = repuestoRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Repuesto no encontrado con ID: " + id));
 
+        // Si descontó stock de un artículo, lo repongo al borrarlo
+        if (repuesto.getArticulo() != null) {
+            reponerStock(repuesto.getArticulo(), repuesto.getCantidad());
+        }
+
         repuestoRepository.delete(repuesto);
+    }
+
+    private int cantidadDe(RepuestoRequestDTO request) {
+        return (request.getCantidad() != null && request.getCantidad() > 0) ? request.getCantidad() : 1;
+    }
+
+    private Articulo resolverArticulo(Long articuloId, Long tallerId) {
+        return articuloRepository.findByIdAndTallerId(articuloId, tallerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Artículo no encontrado con ID: " + articuloId));
+    }
+
+    private void descontarStock(Articulo articulo, int cantidad) {
+        if (articulo.getStock() < cantidad) {
+            throw new BadRequestException("Stock insuficiente de '" + articulo.getNombre()
+                    + "' (disponible: " + articulo.getStock() + ", pedido: " + cantidad + ").");
+        }
+        articulo.setStock(articulo.getStock() - cantidad);
+        articuloRepository.save(articulo);
+    }
+
+    private void reponerStock(Articulo articulo, int cantidad) {
+        articulo.setStock(articulo.getStock() + cantidad);
+        articuloRepository.save(articulo);
     }
 
     /**

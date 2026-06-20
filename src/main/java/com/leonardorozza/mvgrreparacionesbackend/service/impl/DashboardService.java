@@ -5,6 +5,7 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundExce
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.DashboardResponseDto;
@@ -24,6 +25,7 @@ public class DashboardService {
 
     private final ReparacionRepository reparacionRepository;
     private final SuscripcionRepository suscripcionRepository;
+    private final ArticuloRepository articuloRepository;
     private final TenantService tenantService;
 
     @Value("${plan.free.max-reparaciones-mes:50}")
@@ -44,6 +46,7 @@ public class DashboardService {
         long esteMes = reparacionRepository.countByTallerIdAndCreatedAtAfter(tallerId, inicioMes);
 
         long listos = porEstado.getOrDefault(EstadoReparacion.COMPLETADO, 0L);
+        long articulosStockBajo = articuloRepository.countStockBajo(tallerId);
 
         Suscripcion suscripcion = suscripcionRepository.findByTallerId(tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("El taller no tiene una suscripción asociada."));
@@ -55,6 +58,7 @@ public class DashboardService {
                 total,
                 esteMes,
                 listos,
+                articulosStockBajo,
                 suscripcion.getPlan(),
                 suscripcion.getEstado(),
                 limite

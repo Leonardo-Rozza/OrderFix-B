@@ -28,6 +28,16 @@ public class Repuesto {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal precio;
 
+    /** Cantidad usada (descuenta del stock si está enlazado a un artículo). */
+    @Column(nullable = false)
+    @Builder.Default
+    private int cantidad = 1;
+
+    /** Artículo del inventario del que se descontó stock (opcional). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "articulo_id")
+    private Articulo articulo;
+
     @ManyToOne
     @JoinColumn(name = "reparacion_id")
     private Reparacion reparacion;

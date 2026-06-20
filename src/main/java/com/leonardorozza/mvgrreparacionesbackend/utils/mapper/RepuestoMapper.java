@@ -10,8 +10,11 @@ import org.mapstruct.Mapping;
 public interface RepuestoMapper {
 
     @Mapping(target = "reparacion.id", source = "reparacionId")
+    @Mapping(target = "articulo", ignore = true) // se resuelve en el service (valida taller y descuenta stock)
+    @Mapping(target = "cantidad", ignore = true) // se setea en el service
     Repuesto toEntity(RepuestoRequestDTO dto);
 
     @Mapping(target = "reparacionId", source = "reparacion.id")
+    @Mapping(target = "articuloId", source = "articulo.id")
     RepuestoResponseDTO toDTO(Repuesto entity);
 }

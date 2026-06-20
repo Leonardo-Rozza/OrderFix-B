@@ -19,4 +19,10 @@ public class RepuestoRequestDTO {
     private BigDecimal precio;
 
     private Long reparacionId; // puede ser null si se carga sin asignar todavía
+
+    /** Si se enlaza a un artículo del inventario, se descuenta su stock. */
+    private Long articuloId;
+
+    /** Cantidad usada (default 1). */
+    private Integer cantidad;
 }

@@ -294,10 +294,13 @@ RepuestoRequest:
   "nombre": "Pantalla",    // obligatorio
   "descripcion": "OLED",   // opcional
   "precio": 8000.00,       // obligatorio, decimal
-  "reparacionId": 1        // opcional (puede cargarse sin asignar)
+  "reparacionId": 1,       // opcional (puede cargarse sin asignar)
+  "articuloId": 5,         // opcional: enlaza al inventario y DESCUENTA stock
+  "cantidad": 2            // opcional, default 1 (cuánto descontar del stock)
 }
 ```
-RepuestoResponse: `{ id, nombre, descripcion, precio, reparacionId }`
+RepuestoResponse: `{ id, nombre, descripcion, precio, reparacionId, articuloId, cantidad }`
+> Si mandás `articuloId`, el backend **descuenta `cantidad` del stock** (400 si no alcanza) y lo **repone** si borrás el repuesto. Ver inventario en §4.12.
 
 ---
 
@@ -339,6 +342,7 @@ Métricas del taller para la pantalla de inicio.
   "totalReparaciones": 4,
   "reparacionesEsteMes": 4,
   "equiposListos": 0,
+  "articulosStockBajo": 1,
   "plan": "PRO",
   "estadoSuscripcion": "ACTIVA",
   "limiteReparacionesMes": null
@@ -415,6 +419,28 @@ UsuarioResponse: `{ id, username, email, role, active }`.
 - Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
 - Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
 - `400` si el email ya está en uso.
+
+---
+
+### 4.12 Inventario — requiere token  (`/api/inventario`)
+
+Catálogo de artículos con stock.
+
+| Método | Ruta | Body | Resp |
+|--------|------|------|------|
+| POST   | `/api/inventario` | ArticuloRequest | `201` ArticuloResponse |
+| PUT    | `/api/inventario/{id}` | ArticuloRequest | `200` ArticuloResponse |
+| GET    | `/api/inventario/{id}` | — | `200` ArticuloResponse |
+| GET    | `/api/inventario?q=&page=&size=` | — | `200` Page de ArticuloResponse |
+| GET    | `/api/inventario/stock-bajo` | — | `200` ArticuloResponse[] (stock ≤ mínimo) |
+| POST   | `/api/inventario/{id}/ajuste` | `{ "delta": 10, "motivo": "compra" }` | `200` ArticuloResponse |
+| DELETE | `/api/inventario/{id}` | — | `204` (solo ADMIN) |
+
+ArticuloRequest: `{ nombre, descripcion?, sku?, precio, costo?, stock?, stockMinimo? }`
+ArticuloResponse: `{ id, nombre, descripcion, sku, precio, costo, stock, stockMinimo, activo, stockBajo }`
+- El **stock no se cambia con PUT**: se mueve con `/ajuste` (delta + entrada / − salida; 400 si queda negativo).
+- El stock también **baja automáticamente** al usar el artículo como repuesto en una reparación (§4.6) y se **repone** al borrar ese repuesto.
+- `stockBajo:true` cuando `stock ≤ stockMinimo`; el dashboard trae el contador `articulosStockBajo`.
 
 ---
 
@@ -573,11 +599,11 @@ window.location.href = data.initPoint;
 - **Roles ADMIN/USER** (borrados y suscripción solo ADMIN) y **gestión de empleados** (§4.10).
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
 - **Presupuestos** con aprobación del cliente desde el link público (§4.11).
+- **Inventario** con stock, ajustes, descuento automático y aviso de stock bajo (§4.12).
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
 **Próximo (afecta al frontend a futuro):**
-- **Inventario de repuestos con stock** real + proveedores.
 - **Cobros / caja** y recibo imprimible.
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
 - **Reportes** avanzados.

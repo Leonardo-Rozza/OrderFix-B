@@ -14,6 +14,7 @@ public record DashboardResponseDto(
         long totalReparaciones,
         long reparacionesEsteMes,
         long equiposListos,            // COMPLETADO (listos para entregar)
+        long articulosStockBajo,       // artículos con stock <= mínimo
         PlanType plan,
         EstadoSuscripcion estadoSuscripcion,
         Integer limiteReparacionesMes  // null = ilimitado (PRO)

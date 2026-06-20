@@ -12,5 +12,7 @@ public class RepuestoResponseDTO {
     private String descripcion;
     private BigDecimal precio;
     private Long reparacionId;
+    private Long articuloId;
+    private int cantidad;
 
 }
