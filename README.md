@@ -1,394 +1,183 @@
-# Sistema mvgr
-_Sistema Integral de Gestión de Repuestos y Reparaciones para Técnicos de Celulares_
+# OrdenFix — Backend
+
+SaaS **multi-taller** para la gestión integral de talleres de reparación de celulares/dispositivos:
+clientes, equipos, órdenes de reparación, presupuestos, repuestos, inventario con stock, cobros/caja,
+seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con cobro por MercadoPago.
+
+> 📚 Documentación relacionada:
+> - **`FRONTEND_INTEGRATION.md`** — contrato completo de la API (request/response exactos, tipos TS).
+> - **`DEPLOY.md`** — guía de despliegue y variables de entorno.
 
 ---
 
-## 📌 **Descripción del Proyecto**
+## Stack
 
-**mvgr** es una aplicación full-stack moderna diseñada específicamente para técnicos de reparación de dispositivos móviles. El sistema permite una gestión completa del negocio de reparaciones mediante:
-
-### **Funcionalidades Principales**
-- 👤 **Gestión de Usuarios**: Sistema de roles (Admin, Técnico, Recepcionista)
-- 📱 **Gestión de Clientes**: Registro completo con historial de reparaciones
-- 📦 **Control de Inventario**: Categorías, productos, alertas de stock mínimo
-- 🔧 **Gestión de Reparaciones**: Desde ingreso hasta entrega con seguimiento de estado
-- 💰 **Control Financiero**: Costos, precios y márgenes de ganancia
-- 📊 **Reportes y Estadísticas**: Dashboard con métricas del negocio
-
----
-
-### **Stack Tecnológico**
-
-#### **Backend**
-- **Java 21**
-- **Spring Boot 3.2+**
-- **Spring Security 6** + **JWT** (autenticación stateless)
-- **Spring Data JPA** (persistencia)
-- **Spring Validation** (validación de datos)
-- **MySQL 8.0+** (base de datos principal)
-- **Lombok** (reducción de código boilerplate)
-- **MapStruct** (mapeo DTO ↔ Entity)
-- **Swagger/OpenAPI 3** (documentación API)
----
-
-## 🗂️ **Estructura del Proyecto**
-
-### **Backend - Arquitectura en Capas**
-
-```
-mvgr-backend/
-├── src/main/java/com/mvgr/
-│   ├── config/
-│   │   ├── SecurityConfig.java
-│   │   ├── JwtConfig.java
-│   │   ├── CorsConfig.java
-│   │   └── OpenApiConfig.java
-│   │
-│   ├── controller/
-│   │   ├── AuthController.java
-│   │   ├── UserController.java
-│   │   ├── ClientController.java
-│   │   ├── CategoryController.java
-│   │   ├── ProductController.java
-│   │   ├── RepairController.java
-│   │   └── DashboardController.java
-│   │
-│   ├── dto/
-│   │   ├── request/
-│   │   │   ├── LoginRequestDto.java
-│   │   │   ├── UserCreateDto.java
-│   │   │   ├── ClientCreateDto.java
-│   │   │   ├── ProductCreateDto.java
-│   │   │   └── RepairCreateDto.java
-│   │   │
-│   │   └── response/
-│   │       ├── AuthResponseDto.java
-│   │       ├── UserResponseDto.java
-│   │       ├── ClientResponseDto.java
-│   │       ├── ProductResponseDto.java
-│   │       ├── RepairResponseDto.java
-│   │       └── DashboardStatsDto.java
-│   │
-│   ├── entity/
-│   │   ├── User.java
-│   │   ├── Client.java
-│   │   ├── Category.java
-│   │   ├── Product.java
-│   │   ├── Repair.java
-│   │   └── RepairProduct.java
-│   │
-│   ├── enums/
-│   │   ├── UserRole.java
-│   │   └── RepairStatus.java
-│   │
-│   ├── exception/
-│   │   ├── GlobalExceptionHandler.java
-│   │   ├── ResourceNotFoundException.java
-│   │   ├── InsufficientStockException.java
-│   │   └── ErrorResponse.java
-│   │
-│   ├── mapper/
-│   │   ├── UserMapper.java
-│   │   ├── ClientMapper.java
-│   │   ├── ProductMapper.java
-│   │   └── RepairMapper.java
-│   │
-│   ├── repository/
-│   │   ├── UserRepository.java
-│   │   ├── ClientRepository.java
-│   │   ├── CategoryRepository.java
-│   │   ├── ProductRepository.java
-│   │   ├── RepairRepository.java
-│   │   └── RepairProductRepository.java
-│   │
-│   ├── security/
-│   │   ├── JwtTokenProvider.java
-│   │   ├── JwtAuthenticationFilter.java
-│   │   └── CustomUserDetailsService.java
-│   │
-│   ├── service/
-│   │   ├── AuthService.java
-│   │   ├── UserService.java
-│   │   ├── ClientService.java
-│   │   ├── CategoryService.java
-│   │   ├── ProductService.java
-│   │   ├── RepairService.java
-│   │   └── DashboardService.java
-│   │
-│   └── MvgrApplication.java
-│
-├── src/main/resources/
-│   ├── application.yml
-│   ├── application-dev.yml
-│   └── application-prod.yml
-│
-└── pom.xml
-```
-
-## 📋 **Reglas de Negocio**
-
-### **1. Gestión de Usuarios**
-
-#### **RN-USR-001: Registro de Usuarios**
-- Solo usuarios con rol `ADMIN` pueden crear nuevos usuarios
-- Username debe ser único (3-50 caracteres alfanuméricos)
-- Email debe ser único y válido
-- Password debe tener mínimo 8 caracteres (1 mayúscula, 1 minúscula, 1 número)
-- Por defecto, los nuevos usuarios se crean con `active = true`
-
-#### **RN-USR-002: Autenticación**
-- El login requiere username/email + password
-- JWT con expiración de 24 horas
-- Refresh token con expiración de 7 días
-- Máximo 5 intentos fallidos antes de bloquear cuenta temporalmente (15 minutos)
-
-#### **RN-USR-003: Roles y Permisos**
-- **ADMIN**: Acceso total al sistema
-- **TECHNICIAN**: Gestión de reparaciones, productos (solo lectura), clientes
-- **RECEPTIONIST**: Gestión de clientes, ingreso de reparaciones (sin modificar estados técnicos)
+- **Java 21**, **Spring Boot 4.0.6**
+- **Spring Security 7** + **JWT** (auth0 java-jwt, HMAC-SHA256) — stateless
+- **Spring Data JPA** / Hibernate 7 sobre **PostgreSQL**
+- **Flyway** (dueño del esquema; Hibernate solo valida)
+- **MapStruct** (DTO ↔ entidad) + **Lombok**
+- **MercadoPago** (suscripción PRO vía preapproval, con webhook firmado) — vía `RestClient`
+- **springdoc-openapi** (Swagger) y **Spring Boot Actuator** (`/actuator/health`)
+- Build: Maven wrapper (`./mvnw`)
 
 ---
 
-### **2. Gestión de Clientes**
+## Conceptos clave (cómo funciona)
 
-#### **RN-CLI-001: Registro de Clientes**
-- El nombre completo es obligatorio (2-100 caracteres)
-- El teléfono debe ser único en el sistema
-- Formato de teléfono: 8-15 dígitos numéricos
-- Email es opcional pero debe ser válido si se proporciona
+### Multi-tenancy (aislamiento por taller)
+Cada cuenta es un **Taller** (tenant). El `tallerId` viaja dentro del JWT; un filtro lo deja en un
+`TenantContext` por request y **todas las queries filtran por taller**. Un taller nunca ve ni toca
+datos de otro (hay tests que lo garantizan). El frontend nunca manda `tallerId`.
 
-#### **RN-CLI-002: Búsqueda de Clientes**
-- Búsqueda por: nombre, teléfono, email
-- Búsqueda case-insensitive
-- Autocompletado en formularios de reparación
+### Autenticación
+- `POST /api/auth/register` crea taller + usuario admin + suscripción en TRIAL y devuelve un JWT.
+- `POST /api/auth/login` devuelve el JWT (`sub`=email, `role`, `tallerId`, `exp`; 24 h por defecto).
+- Header en cada request: `Authorization: Bearer <token>`.
+- Roles: **ADMIN** (dueño) y **USER** (empleado). Operaciones sensibles (borrados, suscripción,
+  gestión de usuarios) son solo ADMIN vía `@PreAuthorize`.
 
-#### **RN-CLI-003: Eliminación de Clientes**
-- No se puede eliminar un cliente con reparaciones activas
-- Eliminación lógica (soft delete) recomendada
-- Historial de reparaciones debe mantenerse
+### Freemium (FREE vs PRO)
+- **FREE**: hasta **25 reparaciones/mes** (configurable por `FREE_MAX_REPARACIONES`).
+  El consumo se lleva con un **contador mensual** en la suscripción que **no baja al borrar** y se
+  **reinicia el día 1**. Superar el tope → `402`.
+- **PRO**: reparaciones ilimitadas + funciones exclusivas: **inventario**, **cobros/caja/recibo** y
+  **más de 1 empleado**. Al usarlas sin PRO → `402`.
+- `GET /api/suscripcion` expone el plan, el consumo y un mapa `funciones` para que el front
+  habilite/oculte secciones.
 
----
+### Suscripción PRO (MercadoPago)
+- `POST /api/pagos/suscripcion` crea un preapproval y devuelve el `initPoint` (el front redirige).
+- `POST /api/pagos/webhook` (público) recibe las notificaciones, **valida la firma HMAC** y actualiza
+  plan/estado automáticamente. `POST /api/pagos/suscripcion/cancelar` baja a FREE.
+- Desactivado por defecto; se activa con `MP_ENABLED`, `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET`.
 
-### **3. Gestión de Inventario**
+### Seguimiento público
+Cada reparación tiene un **código** público. `GET /api/seguimiento/{codigo}` (sin login) muestra el
+estado al cliente y le permite **aprobar/rechazar el presupuesto**. También hay un generador de link
+de **WhatsApp** para avisar al cliente.
 
-#### **RN-INV-001: Categorías**
-- El nombre de categoría debe ser único
-- Una categoría no puede eliminarse si tiene productos activos
-- Categorías inactivas no aparecen en formularios de creación
-
-#### **RN-INV-002: Productos**
-- SKU debe ser único en el sistema
-- Stock no puede ser negativo
-- Si `stock <= min_stock`, generar alerta automática
-- `cost_price` debe ser menor que `sale_price`
-- `profit_margin` se calcula automáticamente: `((sale_price - cost_price) / cost_price) × 100`
-
-#### **RN-INV-003: Movimientos de Stock**
-- **Entrada (IN)**: Aumenta stock (compras, devoluciones)
-- **Salida (OUT)**: Disminuye stock (uso en reparaciones, ventas)
-- **Ajuste (ADJUSTMENT)**: Correcciones de inventario (requiere motivo)
-- Cada movimiento registra: tipo, cantidad, stock anterior/posterior, usuario, fecha
-
-#### **RN-INV-004: Alertas de Stock**
-- Notificación automática cuando `stock <= min_stock`
-- Dashboard debe mostrar productos con stock bajo
-- Email/notificación a usuarios ADMIN
+### Listados (paginados, denormalizados)
+Los listados devuelven una **página** (`{ content, page }`) con `?q=`, `?page=`, `?size=`, `?sort=`.
+Vienen **autocontenidos**: p. ej. cada reparación trae equipo + cliente; cada equipo/cliente trae sus
+contadores. Sin N+1 (join fetch + agregados por página).
 
 ---
 
-### **4. Gestión de Reparaciones**
+## Modelo de dominio
 
-#### **RN-REP-001: Creación de Reparación**
-- Número de reparación autogenerado: `REP-{YYYY}-{0001}`
-- Requiere cliente existente (buscar o crear nuevo)
-- Estado inicial: `PENDING`
-- Fecha estimada de entrega debe ser futura
-- Descripción del problema es obligatoria
+```
+Taller (cuenta / tenant)
+ ├── Usuarios (ADMIN / USER, login por email)
+ ├── Suscripción (FREE|PRO · TRIAL|ACTIVA|VENCIDA|CANCELADA · contador mensual)
+ ├── Clientes
+ │    └── Equipos
+ │         └── Reparaciones (estado, orden de trabajo, técnico, fotos, código de seguimiento)
+ │              ├── Repuestos (opcionalmente ligados a un Artículo de inventario)
+ │              ├── Presupuestos (ítems, estado, aprobación del cliente)
+ │              └── Cobros (pagos parciales / total)
+ └── Inventario: Artículos (stock, stock mínimo)
+```
 
-#### **RN-REP-002: Estados de Reparación**
-Flujo de estados permitido:
-1. **PENDING** → IN_PROGRESS | CANCELLED
-2. **IN_PROGRESS** → WAITING_PARTS | COMPLETED | CANCELLED
-3. **WAITING_PARTS** → IN_PROGRESS | CANCELLED
-4. **COMPLETED** → DELIVERED
-5. **DELIVERED** (estado final)
-6. **CANCELLED** (estado final)
-
-#### **RN-REP-003: Asignación de Técnico**
-- Solo usuarios con rol `TECHNICIAN` pueden ser asignados
-- Un técnico puede tener múltiples reparaciones activas
-- La reasignación debe registrar historial
-
-#### **RN-REP-004: Uso de Repuestos**
-- Al agregar un producto a una reparación:
-  - Verificar stock disponible (`quantity <= stock`)
-  - Registrar precio unitario del momento (congelado)
-  - Restar del stock automáticamente
-  - Generar movimiento de stock tipo `OUT`
-  - Calcular subtotal: `quantity × unit_price_at_moment`
-
-#### **RN-REP-005: Cálculo de Costos**
-- `parts_cost` = suma de subtotales de todos los productos usados
-- `total_cost` = `labor_cost + parts_cost`
-- Los costos se actualizan automáticamente al agregar/quitar productos
-
-#### **RN-REP-006: Finalización de Reparación**
-- Para marcar como `COMPLETED`:
-  - Debe haber al menos un producto usado O labor_cost > 0
-  - Debe tener técnico asignado
-  - Notas técnicas son obligatorias
-- Al marcar como `DELIVERED`:
-  - Registrar fecha real de entrega
-  - Cliente debe firmar (registro digital opcional)
-
-#### **RN-REP-007: Cancelación de Reparación**
-- Requiere motivo de cancelación
-- Si tiene productos usados:
-  - Opción 1: Devolver al stock (movimiento tipo `ADJUSTMENT`)
-  - Opción 2: No devolver (pérdida registrada)
-- No se puede cancelar si estado = `DELIVERED`
+**Enums:** `EstadoReparacion` (INGRESADO, EN_PROCESO, ESPERANDO_REPUESTO, COMPLETADO, ENTREGADO) ·
+`PlanType` (FREE, PRO) · `EstadoSuscripcion` (TRIAL, ACTIVA, VENCIDA, CANCELADA) ·
+`EstadoPresupuesto` (PENDIENTE, APROBADO, RECHAZADO) · `MetodoPago` (EFECTIVO, TRANSFERENCIA, TARJETA,
+MERCADOPAGO, OTRO) · `UserRole` (ADMIN, USER).
 
 ---
 
-### **5. Reglas Financieras**
+## API (resumen)
 
-#### **RN-FIN-001: Precios y Márgenes**
-- `cost_price` > 0
-- `sale_price` > `cost_price`
-- `profit_margin` calculado automáticamente
-- Histórico de precios para análisis
+Base URL local: `http://localhost:8080`. Detalle de cada request/response en `FRONTEND_INTEGRATION.md`.
+**PRO** = requiere plan PRO (si no, 402). **ADMIN** = requiere rol ADMIN (si no, 403).
 
-#### **RN-FIN-002: Facturación**
-- El costo total de la reparación es inmutable después de `COMPLETED`
-- Registro de pagos parciales (extensión futura)
-- Generación de comprobantes PDF
+| Área | Endpoints | Notas |
+|------|-----------|-------|
+| **Auth** (público) | `POST /api/auth/register` · `POST /api/auth/login` | Devuelven `{ token, type, email }` |
+| **Suscripción** | `GET /api/suscripcion` | Plan, consumo del mes y mapa `funciones` |
+| **Clientes** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado `?q=`) · `DELETE/{id}` (ADMIN) | Item con `equiposCount`, `reparacionesCount`, `ultimaVisita` |
+| **Equipos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /cliente/{id}` · `DELETE/{id}` (ADMIN) | Item con cliente + `reparacionesCount` |
+| **Reparaciones** | `POST` · `POST /ingreso-rapido` · `PUT/{id}` · `PATCH /{id}/estado` · `GET/{id}` · `GET` (`?q=&estado=&page=`) · `GET /equipo/{id}` · `GET /{id}/whatsapp` · `DELETE/{id}` (ADMIN) | `ingreso-rapido` crea cliente+equipo+reparación de una. Item denormalizado (equipo+cliente). Orden de trabajo ampliada (patrón/PIN, accesorios, técnico, fotos). |
+| **Presupuestos** | `POST /api/reparaciones/{id}/presupuestos` · `GET` | Ítems + total; estados PENDIENTE/APROBADO/RECHAZADO |
+| **Repuestos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /reparacion/{id}` · `DELETE/{id}` (ADMIN) | Con `articuloId` descuenta stock del inventario |
+| **Inventario** (PRO) | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /stock-bajo` · `POST /{id}/ajuste` · `DELETE/{id}` (ADMIN) | Catálogo con stock, ajustes y aviso de stock bajo |
+| **Cobros** (PRO) | `POST /api/reparaciones/{id}/cobros` · `GET /cobros` · `DELETE /cobros/{id}` (ADMIN) · `GET /{id}/recibo` | total/cobrado/saldo; recibo imprimible |
+| **Caja** (PRO) | `GET /api/caja?desde=&hasta=` | Resumen por período + desglose por método |
+| **Dashboard** | `GET /api/dashboard` | Conteos por estado, consumo, stock bajo, últimas 5 reparaciones |
+| **Usuarios/Empleados** (ADMIN) | `POST` · `GET` · `GET/{id}` · `PATCH/{id}` | Más de 1 empleado es PRO |
+| **Seguimiento** (público) | `GET /api/seguimiento/{codigo}` · `POST /{codigo}/presupuesto/aprobar` · `POST /.../rechazar` | Sin login, por código |
+| **Pagos** | `POST /api/pagos/suscripcion` (ADMIN) · `POST /api/pagos/suscripcion/cancelar` (ADMIN) · `POST /api/pagos/webhook` (público) | MercadoPago |
+| **Salud** (público) | `GET /actuator/health` | Para readiness/liveness del deploy |
+
+### Formato de error (uniforme)
+```json
+{ "timestamp": "...", "status": 402, "error": "Límite del plan alcanzado", "message": "...", "path": "/api/..." }
+```
+Códigos: `400` validación · `401` no autenticado · `402` límite/función PRO · `403` sin permiso ·
+`404` no encontrado (o de otro taller) · `409` conflicto de unicidad · `502` error de MercadoPago.
 
 ---
 
-### **6. Reportes y Estadísticas**
+## Base de datos (migraciones Flyway)
 
-#### **RN-REP-001: Dashboard Principal**
-Métricas en tiempo real:
-- Reparaciones activas por estado
-- Productos con stock bajo
-- Ingresos del mes actual vs mes anterior
-- Técnico con más reparaciones completadas
-- Tiempo promedio de reparación
-
-#### **RN-REP-002: Reportes Exportables**
-- Reparaciones por rango de fechas (Excel/PDF)
-- Movimientos de inventario (Excel/PDF)
-- Ventas por producto (Excel/PDF)
-- Desempeño por técnico
-
----
-
-## 🔒 **Seguridad**
-
-### **Autenticación y Autorización**
-- **JWT** con firma HMAC-SHA256
-- Tokens almacenados en `localStorage` (frontend)
-- Refresh token en `httpOnly` cookie
-- Validación de roles en cada endpoint con `@PreAuthorize`
-
-### **Validaciones de Entrada**
-- **Backend**: Bean Validation (JSR-380)
-- **Frontend**: React Hook Form + Zod
-- Sanitización de inputs para prevenir SQL Injection
-- CORS configurado para dominios específicos
-
-### **Manejo de Errores**
-- Excepciones personalizadas con códigos HTTP apropiados
-- Logs estructurados con nivel adecuado
-- No exponer stack traces en producción
+| Versión | Qué agrega |
+|---------|-----------|
+| V1 | Esquema inicial (clientes, equipos, reparaciones, repuestos) |
+| V2 | Multi-tenancy (talleres) + suscripciones |
+| V3 | Login por email |
+| V4 | `taller_id` obligatorio y unicidad por taller |
+| V5 | Auditoría de reparaciones |
+| V6 | Código de seguimiento público |
+| V7 | Orden de trabajo ampliada (+ tabla `reparacion_fotos`) |
+| V8 | Presupuestos (+ `presupuesto_items`) |
+| V9 | Inventario (`articulos` + link en repuestos) |
+| V10 | Cobros |
+| V11 | Contador de consumo mensual en la suscripción |
 
 ---
 
-## 📡 **Especificación de API REST**
+## Correr en local
 
-### **Endpoints Principales**
+Requiere **JDK 21** y una **PostgreSQL**. Las credenciales/secretos van en
+`src/main/resources/application-secret.properties` (gitignored) o como variables de entorno
+(ver `DEPLOY.md` para la lista completa).
 
-#### **Autenticación**
-```
-POST   /api/auth/login          - Iniciar sesión
-POST   /api/auth/refresh        - Renovar token
-POST   /api/auth/logout         - Cerrar sesión
-POST   /api/auth/forgot-password - Recuperar contraseña
-```
-
-#### **Usuarios** (Requiere rol ADMIN)
-```
-GET    /api/users               - Listar usuarios (paginado)
-GET    /api/users/{id}          - Obtener usuario por ID
-POST   /api/users               - Crear usuario
-PUT    /api/users/{id}          - Actualizar usuario
-DELETE /api/users/{id}          - Eliminar usuario (soft delete)
-PATCH  /api/users/{id}/activate - Activar/desactivar usuario
+```bash
+export JAVA_HOME=<ruta-a-un-JDK-21>
+./mvnw spring-boot:run        # levanta en http://localhost:8080
 ```
 
-#### **Clientes**
-```
-GET    /api/clients             - Listar clientes (paginado, búsqueda)
-GET    /api/clients/{id}        - Obtener cliente por ID
-GET    /api/clients/{id}/repairs - Historial de reparaciones del cliente
-POST   /api/clients             - Crear cliente
-PUT    /api/clients/{id}        - Actualizar cliente
-DELETE /api/clients/{id}        - Eliminar cliente
-```
+Flyway crea/actualiza el esquema solo. Swagger queda en `/swagger-ui.html` (detrás de auth).
 
-#### **Categorías**
-```
-GET    /api/categories          - Listar categorías (activas)
-GET    /api/categories/{id}     - Obtener categoría por ID
-POST   /api/categories          - Crear categoría (ADMIN)
-PUT    /api/categories/{id}     - Actualizar categoría (ADMIN)
-DELETE /api/categories/{id}     - Eliminar categoría (ADMIN)
-```
-
-#### **Productos**
-```
-GET    /api/products            - Listar productos (paginado, filtros)
-GET    /api/products/{id}       - Obtener producto por ID
-GET    /api/products/low-stock  - Productos con stock bajo
-GET    /api/products/{id}/movements - Movimientos de stock del producto
-POST   /api/products            - Crear producto
-PUT    /api/products/{id}       - Actualizar producto
-PATCH  /api/products/{id}/stock - Ajustar stock manualmente
-DELETE /api/products/{id}       - Eliminar producto (soft delete)
-```
-
-#### **Reparaciones**
-```
-GET    /api/repairs             - Listar reparaciones (paginado, filtros)
-GET    /api/repairs/{id}        - Obtener reparación por ID
-GET    /api/repairs/{id}/products - Productos usados en la reparación
-POST   /api/repairs             - Crear reparación
-PUT    /api/repairs/{id}        - Actualizar reparación
-PATCH  /api/repairs/{id}/status - Cambiar estado de reparación
-POST   /api/repairs/{id}/products - Agregar producto a reparación
-DELETE /api/repairs/{id}/products/{productId} - Quitar producto
-DELETE /api/repairs/{id}        - Cancelar reparación
-```
-
-#### **Dashboard**
-```
-GET    /api/dashboard/stats     - Estadísticas generales
-GET    /api/dashboard/repairs-by-status - Reparaciones agrupadas por estado
-GET    /api/dashboard/revenue   - Ingresos por período
-GET    /api/dashboard/top-products - Productos más usados
-```
----
-
-## 📄 **Licencia**
-
-Este proyecto es de código abierto bajo la licencia MIT.
+### Verificación sin Docker
+`./mvnw test` levanta el contexto completo sobre una **H2** en memoria (no necesita Postgres).
 
 ---
 
-## 👤 **Autor**
+## Tests
 
-Desarrollado como proyecto de aprendizaje para mejorar habilidades en:
-- **Backend**: Java, Spring Boot, JPA, MySQL
+```bash
+export JAVA_HOME=<ruta-a-un-JDK-21>
+./mvnw test
+```
+
+Suite actual (9 tests):
+- **`MvgrReparacionesBackendApplicationTests`** — carga del contexto completo (H2).
+- **`TenantIsolationTests`** (3) — un taller no ve ni borra datos de otro; sin token → 403.
+- **`PlanLimitTests`** (1) — superar el tope FREE devuelve 402.
+- **`MercadoPagoSignatureTests`** (4) — validación de la firma del webhook (válida/inválida/ausente/sin-secreto).
+
 ---
 
-**¡Gracias por revisar este proyecto! 🚀**
+## Estructura
+
+```
+src/main/java/com/leonardorozza/mvgrreparacionesbackend/
+├── config/            # Security, CORS, JWT filter, tenant, MercadoPago, Web (paginación), auditoría
+├── controller/        # Endpoints REST
+├── service/           # Lógica + impl/ + dto/
+├── persistence/       # entity/ (+ enums) y repository/
+├── exceptions/        # GlobalExceptionHandler + excepciones de dominio
+└── utils/             # mappers (MapStruct) + jwt
+src/main/resources/db/migration/   # Flyway V1..V11
+```
