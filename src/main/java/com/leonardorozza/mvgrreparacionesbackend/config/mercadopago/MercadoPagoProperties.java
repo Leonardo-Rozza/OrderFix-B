@@ -34,7 +34,7 @@ public class MercadoPagoProperties {
     private String reason = "OrdenFix PRO - Suscripción mensual";
 
     /** Monto mensual de la suscripción. */
-    private double amount = 4999.0;
+    private double amount = 24900.0;
 
     /** Moneda (ISO): ARS, etc. */
     private String currency = "ARS";
