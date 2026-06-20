@@ -359,6 +359,26 @@ Pensado para que el cliente del taller siga su equipo. Datos mínimos, sin info 
 
 ---
 
+### 4.10 Usuarios / Empleados — solo ADMIN  (`/api/usuarios`)
+
+Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un USER recibe `403`).
+
+| Método | Ruta | Body | Resp |
+|--------|------|------|------|
+| POST   | `/api/usuarios` | CrearUsuario | `201` UsuarioResponse |
+| GET    | `/api/usuarios` | — | `200` UsuarioResponse[] |
+| GET    | `/api/usuarios/{id}` | — | `200` UsuarioResponse |
+| PATCH  | `/api/usuarios/{id}` | `{ "role"?, "active"? }` | `200` UsuarioResponse |
+
+CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se crea `USER`).
+UsuarioResponse: `{ id, username, email, role, active }`.
+
+- Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
+- Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
+- `400` si el email ya está en uso.
+
+---
+
 ## 5. Formato de error (todos los endpoints)
 
 ```json
@@ -507,7 +527,7 @@ window.location.href = data.initPoint;
   (`/cancelar`) + webhook con **firma validada**. *(Requiere Access Token y webhook-secret; ver §10.)*
 - **Carga rápida** de reparación (§4.5), **total** de reparación (mano de obra + repuestos).
 - **Paginación + búsqueda** en todos los listados (§4.2.bis).
-- **Roles ADMIN/USER** (borrados y suscripción solo ADMIN).
+- **Roles ADMIN/USER** (borrados y suscripción solo ADMIN) y **gestión de empleados** (§4.10).
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
@@ -518,7 +538,7 @@ window.location.href = data.initPoint;
 - **Inventario de repuestos con stock** real + proveedores.
 - **Cobros / caja** y recibo imprimible.
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
-- **Reportes** avanzados, **gestión de empleados** (alta de usuarios USER).
+- **Reportes** avanzados.
 
 ---
 
