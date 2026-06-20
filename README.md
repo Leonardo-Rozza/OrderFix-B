@@ -161,11 +161,19 @@ export JAVA_HOME=<ruta-a-un-JDK-21>
 ./mvnw test
 ```
 
-Suite actual (9 tests):
-- **`MvgrReparacionesBackendApplicationTests`** — carga del contexto completo (H2).
-- **`TenantIsolationTests`** (3) — un taller no ve ni borra datos de otro; sin token → 403.
-- **`PlanLimitTests`** (1) — superar el tope FREE devuelve 402.
-- **`MercadoPagoSignatureTests`** (4) — validación de la firma del webhook (válida/inválida/ausente/sin-secreto).
+Suite de **31 tests** de integración (MockMvc sobre el stack real + H2). Los de flujo extienden
+`support/IntegrationTestBase` (helpers de registro/login/PRO/JSON):
+- **Aplicación** — carga del contexto completo (H2).
+- **TenantIsolationTests** (3) — un taller no ve/borra clientes, equipos ni reparaciones de otro.
+- **AuthTests** (5) — registro, login, credenciales inválidas (401), email duplicado (400), sin token (403).
+- **ReparacionFlowTests** (6) — ingreso rápido + reúso de cliente, denormalización, búsqueda, cambio de estado (DTO + inválido), orden ampliada, paginación.
+- **PresupuestoFlowTests** (2) — crear + aprobar/rechazar desde el link público.
+- **InventarioStockTests** (3) — descuento/reposición de stock, stock insuficiente (400), stock bajo + dashboard.
+- **CobroCajaReciboTests** (1) — cobros parciales, saldo, recibo y caja.
+- **PlanGatingTests** (3) — FREE → 402 en funciones PRO, mapa `funciones`, multi-empleado.
+- **RolTests** (2) — USER vs ADMIN; empleado desactivado no loguea.
+- **PlanLimitTests** (1) — superar el tope FREE devuelve 402.
+- **MercadoPagoSignatureTests** (4) — firma del webhook (válida/inválida/ausente/sin-secreto).
 
 ---
 
