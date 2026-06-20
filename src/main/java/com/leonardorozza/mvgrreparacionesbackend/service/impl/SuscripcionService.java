@@ -22,6 +22,7 @@ public class SuscripcionService {
     private final SuscripcionRepository suscripcionRepository;
     private final ReparacionRepository reparacionRepository;
     private final TenantService tenantService;
+    private final PlanFeatureService planFeatureService;
 
     @Value("${plan.free.max-reparaciones-mes:50}")
     private int freeMaxReparacionesMes;
@@ -45,7 +46,8 @@ public class SuscripcionService {
                 suscripcion.getFechaFinTrial(),
                 suscripcion.getProximoCobro(),
                 usadasEsteMes,
-                limite
+                limite,
+                planFeatureService.capacidades()
         );
     }
 }

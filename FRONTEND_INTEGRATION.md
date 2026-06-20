@@ -108,9 +108,21 @@ Plan y consumo del taller actual. Úsalo para la pantalla de Planes y el banner 
   "fechaFinTrial": "2026-06-30",   // null si no aplica
   "proximoCobro": null,            // fecha del próximo cobro PRO (la setea el webhook de MercadoPago)
   "reparacionesEsteMes": 12,
-  "limiteReparacionesMes": 50      // null = ilimitado (PRO)
+  "limiteReparacionesMes": 50,     // null = ilimitado (PRO)
+  "funciones": {                   // capacidades del plan: el front habilita/oculta según esto
+    "inventario": false,
+    "cobros": false,               // cobros + caja + recibo
+    "dashboard": false,
+    "empleadosMultiples": false    // agregar más de 1 usuario
+  }
 }
 ```
+
+**Funciones PRO:** `inventario`, `cobros` (cobros/caja/recibo), `dashboard` y `empleadosMultiples`
+son **exclusivas de PRO**. El front debe leer `funciones` y **deshabilitar/ocultar** esas secciones
+cuando estén en `false`. Si igual se llama a un endpoint PRO con plan FREE, el backend responde **`402`**
+con un `message` accionable (mostrar el modal "Pasá a PRO"). El plan FREE mantiene clientes, equipos,
+reparaciones (con tope mensual), repuestos, presupuestos y seguimiento público.
 
 ---
 
@@ -332,7 +344,8 @@ Lo llama MercadoPago, **no el frontend**. Actualiza el plan/estado de la suscrip
 
 ---
 
-### 4.8 Dashboard — requiere token  (`/api/dashboard`)
+### 4.8 Dashboard — requiere token · **PRO**  (`/api/dashboard`)
+> Función PRO: con plan FREE devuelve `402`. Ver `funciones.dashboard` en §4.2.
 
 #### `GET /api/dashboard`
 Métricas del taller para la pantalla de inicio.
@@ -414,6 +427,7 @@ Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un U
 | PATCH  | `/api/usuarios/{id}` | `{ "role"?, "active"? }` | `200` UsuarioResponse |
 
 CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se crea `USER`).
+> **PRO**: el plan FREE permite **1 usuario** (el dueño). Agregar empleados requiere PRO → si no, `402`. Ver `funciones.empleadosMultiples` en §4.2.
 UsuarioResponse: `{ id, username, email, role, active }`.
 
 - Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
@@ -422,7 +436,8 @@ UsuarioResponse: `{ id, username, email, role, active }`.
 
 ---
 
-### 4.12 Inventario — requiere token  (`/api/inventario`)
+### 4.12 Inventario — requiere token · **PRO**  (`/api/inventario`)
+> Función PRO: con plan FREE todos estos endpoints devuelven `402`. Ver `funciones.inventario` en §4.2.
 
 Catálogo de artículos con stock.
 
@@ -444,9 +459,10 @@ ArticuloResponse: `{ id, nombre, descripcion, sku, precio, costo, stock, stockMi
 
 ---
 
-### 4.13 Cobros / Caja / Recibo — requiere token
+### 4.13 Cobros / Caja / Recibo — requiere token · **PRO**
 
 Pagos de una reparación (parciales o totales), resumen de caja y recibo imprimible.
+> Función PRO: con plan FREE devuelven `402`. Ver `funciones.cobros` en §4.2.
 
 **Cobros de una reparación** (`/api/reparaciones/{reparacionId}`):
 
@@ -555,6 +571,7 @@ export interface Suscripcion {
   plan: Plan; estado: EstadoSuscripcion;
   fechaInicio: string | null; fechaFinTrial: string | null; proximoCobro: string | null;
   reparacionesEsteMes: number; limiteReparacionesMes: number | null;
+  funciones: { inventario: boolean; cobros: boolean; dashboard: boolean; empleadosMultiples: boolean };
 }
 export interface Cliente { id: number; nombre: string; apellido: string; telefono: string; email: string | null; direccion: string | null; }
 export interface Equipo { id: number; marca: string; modelo: string; imei: string | null; color: string | null; descripcion: string | null; clienteId: number; }
@@ -628,6 +645,7 @@ window.location.href = data.initPoint;
 - **Presupuestos** con aprobación del cliente desde el link público (§4.11).
 - **Inventario** con stock, ajustes, descuento automático y aviso de stock bajo (§4.12).
 - **Cobros / Caja / Recibo** (§4.13): pagos parciales, saldo, caja por período y recibo imprimible.
+- **Gating por plan**: inventario, cobros/caja, dashboard y multi-empleado son PRO (402 + mapa `funciones` en §4.2).
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 

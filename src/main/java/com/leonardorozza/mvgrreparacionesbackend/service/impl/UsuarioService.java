@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.PlanLimitException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.UserRole;
@@ -29,8 +30,15 @@ public class UsuarioService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final TenantService tenantService;
+    private final PlanFeatureService planFeatureService;
 
     public UsuarioResponseDTO crear(CrearUsuarioRequestDTO request) {
+        Long tallerId = tenantService.currentTallerId();
+        // FREE permite 1 usuario (el dueño). Para sumar empleados hay que ser PRO.
+        if (!planFeatureService.esPro(tallerId) && userRepository.countByTallerId(tallerId) >= 1) {
+            throw new PlanLimitException(
+                    "Tu plan FREE permite 1 usuario. Pasá a PRO para agregar empleados.");
+        }
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new BadRequestException("Ya existe una cuenta con ese email.");
         }

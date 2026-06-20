@@ -16,4 +16,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findAllByTallerId(Long tallerId);
 
     Optional<User> findByIdAndTallerId(Long id, Long tallerId);
+
+    long countByTallerId(Long tallerId);
 }

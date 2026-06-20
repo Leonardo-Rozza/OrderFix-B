@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Articulo;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario.AjusteStockRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario.ArticuloRequestDTO;
@@ -26,8 +27,10 @@ public class ArticuloService {
 
     private final ArticuloRepository articuloRepository;
     private final TenantService tenantService;
+    private final PlanFeatureService planFeatureService;
 
     public ArticuloResponseDTO crear(ArticuloRequestDTO request) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         Articulo articulo = Articulo.builder()
                 .taller(tenantService.currentTallerRef())
                 .nombre(request.getNombre())
@@ -43,6 +46,7 @@ public class ArticuloService {
     }
 
     public ArticuloResponseDTO actualizar(Long id, ArticuloRequestDTO request) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         Articulo a = obtenerEntidad(id);
         a.setNombre(request.getNombre());
         a.setDescripcion(request.getDescripcion());
@@ -58,21 +62,25 @@ public class ArticuloService {
 
     @Transactional(readOnly = true)
     public ArticuloResponseDTO obtener(Long id) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         return toDTO(obtenerEntidad(id));
     }
 
     @Transactional(readOnly = true)
     public Page<ArticuloResponseDTO> listar(String q, Pageable pageable) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         return articuloRepository.search(tenantService.currentTallerId(), q, pageable).map(this::toDTO);
     }
 
     @Transactional(readOnly = true)
     public List<ArticuloResponseDTO> stockBajo() {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         return articuloRepository.findStockBajo(tenantService.currentTallerId())
                 .stream().map(this::toDTO).toList();
     }
 
     public ArticuloResponseDTO ajustarStock(Long id, AjusteStockRequestDTO request) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         Articulo a = obtenerEntidad(id);
         int nuevo = a.getStock() + request.getDelta();
         if (nuevo < 0) {
@@ -84,6 +92,7 @@ public class ArticuloService {
     }
 
     public void eliminar(Long id) {
+        planFeatureService.requerir(PlanFeature.INVENTARIO);
         Articulo a = obtenerEntidad(id);
         articuloRepository.delete(a);
     }

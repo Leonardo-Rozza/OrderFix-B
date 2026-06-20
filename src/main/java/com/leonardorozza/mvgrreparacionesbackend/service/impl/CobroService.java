@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cobro;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.MetodoPago;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.*;
@@ -28,8 +29,10 @@ public class CobroService {
     private final CobroRepository cobroRepository;
     private final ReparacionRepository reparacionRepository;
     private final TenantService tenantService;
+    private final PlanFeatureService planFeatureService;
 
     public CobroResponseDTO registrar(Long reparacionId, CobroRequestDTO request) {
+        planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
         Reparacion reparacion = reparacionRepository.findByIdAndTallerId(reparacionId, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reparación no encontrada con ID: " + reparacionId));
@@ -47,6 +50,7 @@ public class CobroService {
 
     @Transactional(readOnly = true)
     public CobrosReparacionDTO listarPorReparacion(Long reparacionId) {
+        planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
         Reparacion reparacion = reparacionRepository.findByIdAndTallerId(reparacionId, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reparación no encontrada con ID: " + reparacionId));
@@ -63,6 +67,7 @@ public class CobroService {
     }
 
     public void eliminar(Long cobroId) {
+        planFeatureService.requerir(PlanFeature.COBROS);
         Cobro cobro = cobroRepository.findByIdAndTallerId(cobroId, tenantService.currentTallerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Cobro no encontrado con ID: " + cobroId));
         cobroRepository.delete(cobro);
@@ -70,6 +75,7 @@ public class CobroService {
 
     @Transactional(readOnly = true)
     public CajaResumenDTO caja(LocalDate desde, LocalDate hasta) {
+        planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
         LocalDate d = desde != null ? desde : LocalDate.now();
         LocalDate h = hasta != null ? hasta : LocalDate.now();
@@ -93,6 +99,7 @@ public class CobroService {
 
     @Transactional(readOnly = true)
     public ReciboDTO recibo(Long reparacionId) {
+        planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
         Reparacion r = reparacionRepository.findByIdAndTallerId(reparacionId, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reparación no encontrada con ID: " + reparacionId));
