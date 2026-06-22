@@ -240,11 +240,14 @@ ReparacionRequest:
   "fotos": ["https://cdn/foto1.jpg"]   // URLs (la subida del archivo la hace el front)
 }
 ```
-ReparacionResponse: `{ ...campos de arriba..., equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total }`
+ReparacionResponse: `{ ...campos de arriba..., equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total, cobrado, saldo, estadoPago }`
 - **Denormalizado**: cada reparación trae el `equipoMarca/Modelo` y los datos del cliente, así el listado/tablero es autocontenido (no hace falta cruzar con otros endpoints).
 > **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
 - `totalRepuestos`: suma de los repuestos. `total`: mano de obra (`precioFinal ?? precioEstimado ?? 0`) + repuestos.
+- **Estado de pago** (dimensión independiente del estado de reparación): `cobrado` (suma de cobros; **0 en planes FREE**, que no usan cobros), `saldo` = `max(0, total - cobrado)`, y `estadoPago` derivado: `SIN_COBRAR | PARCIAL | PAGADO`.
+  - En el tablero mostrá **las dos dimensiones**: ej. chip de estado ("Listo") + chip de pago ("Falta cobrar $X" si `saldo > 0`).
+  - **No bloquea la entrega**: se puede pasar a `ENTREGADO` con saldo pendiente (pago al retirar). El front decide si avisa.
 
 **Avisar al cliente por WhatsApp:** `GET /api/reparaciones/{id}/whatsapp` → `{ url, telefono, mensaje, linkSeguimiento }`.
 El front abre `url` (wa.me con mensaje prearmado que incluye el link de seguimiento). Útil al pasar a COMPLETADO.
@@ -376,7 +379,10 @@ Lo llama MercadoPago, **no el frontend**. Actualiza el plan/estado de la suscrip
 Métricas del taller para la pantalla de inicio.
 ```json
 {
-  "reparacionesPorEstado": { "INGRESADO": 3, "EN_PROCESO": 1, "ESPERANDO_REPUESTO": 0, "COMPLETADO": 0, "ENTREGADO": 0 },
+  // un contador por CADA estado del enum (12 claves: INGRESADO, EN_DIAGNOSTICO, PRESUPUESTADO,
+  // EN_PROCESO, ESPERANDO_REPUESTO, ESPERANDO_ADICIONAL, NO_REPARABLE, COMPLETADO,
+  // LISTO_SIN_REPARAR, ENTREGADO, ABANDONADO, CANCELADO)
+  "reparacionesPorEstado": { "INGRESADO": 3, "EN_PROCESO": 1, "COMPLETADO": 0, "ENTREGADO": 0, "...": 0 },
   "totalReparaciones": 4,
   "reparacionesEsteMes": 4,
   "equiposListos": 0,
@@ -384,7 +390,7 @@ Métricas del taller para la pantalla de inicio.
   "plan": "PRO",
   "estadoSuscripcion": "ACTIVA",
   "limiteReparacionesMes": null,
-  "ultimasReparaciones": [ /* últimas 5 ReparacionResponse (con equipo+cliente denormalizado) */ ]
+  "ultimasReparaciones": [ /* últimas 5 ReparacionResponse (con equipo+cliente y estado de pago) */ ]
 }
 ```
 
@@ -596,6 +602,7 @@ export type EstadoReparacion =
   | "INGRESADO" | "EN_DIAGNOSTICO" | "PRESUPUESTADO" | "EN_PROCESO"
   | "ESPERANDO_REPUESTO" | "ESPERANDO_ADICIONAL" | "NO_REPARABLE"
   | "COMPLETADO" | "LISTO_SIN_REPARAR" | "ENTREGADO" | "ABANDONADO" | "CANCELADO";
+export type EstadoPago = "SIN_COBRAR" | "PARCIAL" | "PAGADO";
 
 export interface AuthResponse { token: string; type: string; email: string; }
 export interface Suscripcion {
@@ -619,6 +626,7 @@ export interface Reparacion {
   precioEstimado: number | null; precioFinal: number | null;
   fechaIngreso: string | null; fechaEstimadaEntrega: string | null; fechaEntrega: string | null;
   codigoSeguimiento: string | null; totalRepuestos: number; total: number;
+  cobrado: number; saldo: number; estadoPago: EstadoPago;
   patronDesbloqueo: string | null; pinDesbloqueo: string | null; accesorios: string | null;
   condicionesIngreso: string | null; observaciones: string | null;
   tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];

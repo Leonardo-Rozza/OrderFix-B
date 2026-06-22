@@ -6,6 +6,7 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundExce
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TransicionesEstado;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
@@ -29,11 +30,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -87,7 +91,7 @@ public class ReparacionServiceImpl implements ReparacionService {
 
         Reparacion guardada = reparacionRepository.save(reparacion);
 
-        return reparacionMapper.toDTO(guardada);
+        return toDtoConPago(guardada);
     }
 
     @Override
@@ -137,7 +141,7 @@ public class ReparacionServiceImpl implements ReparacionService {
                 cliente.getId(),
                 equipo.getId(),
                 clienteNuevo,
-                reparacionMapper.toDTO(guardada)
+                toDtoConPago(guardada)
         );
     }
 
@@ -182,7 +186,7 @@ public class ReparacionServiceImpl implements ReparacionService {
             reparacion.getFotos().addAll(request.getFotos());
         }
 
-        return reparacionMapper.toDTO(reparacionRepository.save(reparacion));
+        return toDtoConPago(reparacionRepository.save(reparacion));
     }
 
     @Override
@@ -194,7 +198,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         TransicionesEstado.validar(reparacion.getEstado(), nuevoEstado);
         reparacion.setEstado(nuevoEstado);
 
-        return reparacionMapper.toDTO(reparacionRepository.save(reparacion));
+        return toDtoConPago(reparacionRepository.save(reparacion));
     }
 
     @Override
@@ -204,14 +208,17 @@ public class ReparacionServiceImpl implements ReparacionService {
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
-        return reparacionMapper.toDTO(reparacion);
+        return toDtoConPago(reparacion);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Page<ReparacionResponseDTO> listar(String q, EstadoReparacion estado, Pageable pageable) {
-        return reparacionRepository.search(tenantService.currentTallerId(), q, estado, pageable)
+        Page<ReparacionResponseDTO> page = reparacionRepository
+                .search(tenantService.currentTallerId(), q, estado, pageable)
                 .map(reparacionMapper::toDTO);
+        aplicarPagoBatch(page.getContent());
+        return page;
     }
 
     @Override
@@ -223,19 +230,58 @@ public class ReparacionServiceImpl implements ReparacionService {
             throw new ResourceNotFoundException("Equipo no encontrado con ID: " + equipoId);
         }
 
-        return reparacionRepository.findByEquipoIdAndTallerId(equipoId, tallerId)
+        return aplicarPagoBatch(reparacionRepository.findByEquipoIdAndTallerId(equipoId, tallerId)
                 .stream()
                 .map(reparacionMapper::toDTO)
-                .toList();
+                .toList());
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ReparacionResponseDTO> listarPorEstado(EstadoReparacion estado) {
-        return reparacionRepository.findByEstadoAndTallerId(estado, tenantService.currentTallerId())
+        return aplicarPagoBatch(reparacionRepository.findByEstadoAndTallerId(estado, tenantService.currentTallerId())
                 .stream()
                 .map(reparacionMapper::toDTO)
-                .toList();
+                .toList());
+    }
+
+    // ---- Estado de pago (dimensión derivada de los cobros) ----
+
+    /** Mapea una reparación a DTO y lo enriquece con cobrado/saldo/estadoPago. */
+    private ReparacionResponseDTO toDtoConPago(Reparacion entity) {
+        ReparacionResponseDTO dto = reparacionMapper.toDTO(entity);
+        aplicarPago(dto, cobroRepository.sumByReparacionId(entity.getId()));
+        return dto;
+    }
+
+    private void aplicarPago(ReparacionResponseDTO dto, BigDecimal cobrado) {
+        BigDecimal total = dto.getTotal() != null ? dto.getTotal() : BigDecimal.ZERO;
+        BigDecimal c = cobrado != null ? cobrado : BigDecimal.ZERO;
+        BigDecimal saldo = total.subtract(c);
+        dto.setCobrado(c);
+        dto.setSaldo(saldo.signum() > 0 ? saldo : BigDecimal.ZERO);
+        dto.setEstadoPago(EstadoPago.de(total, c));
+    }
+
+    /** Enriquece una lista de DTOs con una sola query de cobros (sin N+1). */
+    private List<ReparacionResponseDTO> aplicarPagoBatch(List<ReparacionResponseDTO> dtos) {
+        if (dtos.isEmpty()) {
+            return dtos;
+        }
+        List<Long> ids = dtos.stream().map(ReparacionResponseDTO::getId).toList();
+        Map<Long, BigDecimal> cobrados = new HashMap<>();
+        for (Object[] row : cobroRepository.sumByReparacionIds(ids)) {
+            cobrados.put((Long) row[0], toBigDecimal(row[1]));
+        }
+        dtos.forEach(d -> aplicarPago(d, cobrados.get(d.getId())));
+        return dtos;
+    }
+
+    private static BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return BigDecimal.ZERO;
+        }
+        return value instanceof BigDecimal b ? b : new BigDecimal(value.toString());
     }
 
     @Override

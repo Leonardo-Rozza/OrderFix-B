@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import lombok.Data;
 
@@ -45,4 +46,12 @@ public class ReparacionResponseDTO {
 
     /** Total a cobrar: mano de obra (precioFinal ?? precioEstimado ?? 0) + repuestos. */
     private BigDecimal total;
+
+    // ----- Estado de pago (dimensión independiente del estado de reparación) -----
+    /** Suma de los cobros registrados (0 en planes FREE: cobros es PRO). */
+    private BigDecimal cobrado;
+    /** Saldo pendiente = max(0, total - cobrado). */
+    private BigDecimal saldo;
+    /** Derivado de total vs cobrado: SIN_COBRAR | PARCIAL | PAGADO. */
+    private EstadoPago estadoPago;
 }
