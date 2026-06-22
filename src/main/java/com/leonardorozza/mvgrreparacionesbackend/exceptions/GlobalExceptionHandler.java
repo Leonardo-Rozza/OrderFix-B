@@ -173,6 +173,24 @@ public class GlobalExceptionHandler {
     }
 
     // ================================
+    // 409 - Conflicto con el estado actual del recurso (ej: transición de estado no permitida)
+    // ================================
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiError> handleConflict(ConflictException ex,
+                                                   HttpServletRequest request) {
+
+        ApiError error = new ApiError(
+                LocalDateTime.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflicto de estado",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    // ================================
     // 409 - Conflicto de integridad (ej: teléfono/email duplicado)
     // ================================
     @ExceptionHandler(DataIntegrityViolationException.class)

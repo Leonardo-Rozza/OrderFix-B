@@ -79,7 +79,9 @@ Taller (cuenta / tenant)
  └── Inventario: Artículos (stock, stock mínimo)
 ```
 
-**Enums:** `EstadoReparacion` (INGRESADO, EN_PROCESO, ESPERANDO_REPUESTO, COMPLETADO, ENTREGADO) ·
+**Enums:** `EstadoReparacion` (INGRESADO, EN_DIAGNOSTICO, PRESUPUESTADO, EN_PROCESO, ESPERANDO_REPUESTO,
+ESPERANDO_ADICIONAL, NO_REPARABLE, COMPLETADO, LISTO_SIN_REPARAR, ENTREGADO, ABANDONADO, CANCELADO — con
+**máquina de transiciones**: un salto ilegal devuelve `409`) ·
 `PlanType` (FREE, PRO) · `EstadoSuscripcion` (TRIAL, ACTIVA, VENCIDA, CANCELADA) ·
 `EstadoPresupuesto` (PENDIENTE, APROBADO, RECHAZADO) · `MetodoPago` (EFECTIVO, TRANSFERENCIA, TARJETA,
 MERCADOPAGO, OTRO) · `UserRole` (ADMIN, USER).
@@ -114,7 +116,7 @@ Base URL local: `http://localhost:8080`. Detalle de cada request/response en `FR
 { "timestamp": "...", "status": 402, "error": "Límite del plan alcanzado", "message": "...", "path": "/api/..." }
 ```
 Códigos: `400` validación · `401` no autenticado · `402` límite/función PRO · `403` sin permiso ·
-`404` no encontrado (o de otro taller) · `409` conflicto de unicidad · `502` error de MercadoPago.
+`404` no encontrado (o de otro taller) · `409` conflicto (unicidad o transición de estado no permitida) · `502` error de MercadoPago.
 
 ---
 
@@ -161,12 +163,13 @@ export JAVA_HOME=<ruta-a-un-JDK-21>
 ./mvnw test
 ```
 
-Suite de **33 tests** de integración (MockMvc sobre el stack real + H2). Los de flujo extienden
+Suite de **37 tests** de integración (MockMvc sobre el stack real + H2). Los de flujo extienden
 `support/IntegrationTestBase` (helpers de registro/login/PRO/JSON):
 - **Aplicación** — carga del contexto completo (H2).
 - **TenantIsolationTests** (3) — un taller no ve/borra clientes, equipos ni reparaciones de otro.
 - **AuthTests** (5) — registro, login, credenciales inválidas (401), email duplicado (400), sin token (403).
 - **ReparacionFlowTests** (6) — ingreso rápido + reúso de cliente, denormalización, búsqueda, cambio de estado (DTO + inválido), orden ampliada, paginación.
+- **EstadoTransicionTests** (4) — máquina de estados: camino legal completo, salto ilegal → 409, mismo estado idempotente, terminal sin salida.
 - **ReparacionDeleteTests** (2) — al borrar limpia presupuestos (cascade) y repone stock; bloquea si hay cobros.
 - **PresupuestoFlowTests** (2) — crear + aprobar/rechazar desde el link público.
 - **InventarioStockTests** (3) — descuento/reposición de stock, stock insuficiente (400), stock bajo + dashboard.

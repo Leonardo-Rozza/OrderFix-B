@@ -212,7 +212,7 @@ Errores: `404` si el `clienteId` no pertenece a tu taller.
 |--------|------|------|------|
 | POST   | `/api/reparaciones` | ReparacionRequest | `201` ReparacionResponse |
 | PUT    | `/api/reparaciones/{id}` | ReparacionRequest | `200` ReparacionResponse |
-| PATCH  | `/api/reparaciones/{id}/estado` | `{ "estado": "EN_PROCESO" }` | `200` ReparacionResponse |
+| PATCH  | `/api/reparaciones/{id}/estado` | `{ "estado": "EN_PROCESO" }` | `200` ReparacionResponse · `409` si la transición no es legal |
 | GET    | `/api/reparaciones/{id}` | — | `200` ReparacionResponse |
 | GET    | `/api/reparaciones?q=&estado=&page=&size=` | — | `200` Page de ReparacionResponse |
 | GET    | `/api/reparaciones/equipo/{equipoId}` | — | `200` ReparacionResponse[] |
@@ -253,12 +253,32 @@ El front abre `url` (wa.me con mensaje prearmado que incluye el link de seguimie
 ```json
 { "estado": "EN_PROCESO" }
 ```
-(Header `Content-Type: application/json`.) Estado inválido → `400`.
+(Header `Content-Type: application/json`.)
+- Estado inexistente (no está en el enum) → `400`.
+- **Transición no permitida** (el salto desde el estado actual no es legal) → **`409`**. Repetir el estado actual (X → X) es un no-op válido (`200`).
 
 Errores: `404` si el equipo/reparación no es de tu taller; **`402` si alcanzaste el límite del plan** (ver §6).
 
 Estados posibles (enum `EstadoReparacion`):
-`INGRESADO`, `EN_PROCESO`, `ESPERANDO_REPUESTO`, `COMPLETADO`, `ENTREGADO`
+`INGRESADO`, `EN_DIAGNOSTICO`, `PRESUPUESTADO`, `EN_PROCESO`, `ESPERANDO_REPUESTO`,
+`ESPERANDO_ADICIONAL`, `NO_REPARABLE`, `COMPLETADO`, `LISTO_SIN_REPARAR`, `ENTREGADO`,
+`ABANDONADO`, `CANCELADO`
+
+**Máquina de estados (transiciones permitidas).** El backend valida el salto; el front
+debería ofrecer solo las opciones legales según el estado actual:
+
+| Desde | Hacia (permitidos) |
+|-------|--------------------|
+| `INGRESADO` | `EN_DIAGNOSTICO`, `EN_PROCESO` (arreglo simple), `CANCELADO` |
+| `EN_DIAGNOSTICO` | `PRESUPUESTADO`, `NO_REPARABLE`, `CANCELADO` |
+| `PRESUPUESTADO` | `EN_PROCESO` (cliente aprueba), `LISTO_SIN_REPARAR` (rechaza), `CANCELADO` |
+| `EN_PROCESO` | `ESPERANDO_REPUESTO`, `ESPERANDO_ADICIONAL`, `COMPLETADO`, `NO_REPARABLE` |
+| `ESPERANDO_REPUESTO` | `EN_PROCESO`, `NO_REPARABLE`, `CANCELADO` |
+| `ESPERANDO_ADICIONAL` | `EN_PROCESO` (aprueba), `COMPLETADO` (solo lo aprobado), `LISTO_SIN_REPARAR` (rechaza) |
+| `NO_REPARABLE` | `LISTO_SIN_REPARAR` |
+| `COMPLETADO` | `ENTREGADO`, `ABANDONADO` |
+| `LISTO_SIN_REPARAR` | `ENTREGADO`, `ABANDONADO` |
+| `ENTREGADO` / `ABANDONADO` / `CANCELADO` | *(terminales: sin salida)* |
 
 ---
 
@@ -573,7 +593,9 @@ api.interceptors.response.use(
 export type Plan = "FREE" | "PRO";
 export type EstadoSuscripcion = "TRIAL" | "ACTIVA" | "VENCIDA" | "CANCELADA";
 export type EstadoReparacion =
-  | "INGRESADO" | "EN_PROCESO" | "ESPERANDO_REPUESTO" | "COMPLETADO" | "ENTREGADO";
+  | "INGRESADO" | "EN_DIAGNOSTICO" | "PRESUPUESTADO" | "EN_PROCESO"
+  | "ESPERANDO_REPUESTO" | "ESPERANDO_ADICIONAL" | "NO_REPARABLE"
+  | "COMPLETADO" | "LISTO_SIN_REPARAR" | "ENTREGADO" | "ABANDONADO" | "CANCELADO";
 
 export interface AuthResponse { token: string; type: string; email: string; }
 export interface Suscripcion {

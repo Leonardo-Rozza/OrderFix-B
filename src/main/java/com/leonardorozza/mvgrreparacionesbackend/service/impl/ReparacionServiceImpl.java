@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TransicionesEstado;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
@@ -154,8 +155,10 @@ public class ReparacionServiceImpl implements ReparacionService {
 
         reparacion.setEquipo(equipo);
         reparacion.setDescripcionProblema(request.getDescripcionProblema());
-        // No pisamos el estado con null: si el request no trae estado, conservamos el actual
+        // No pisamos el estado con null: si el request no trae estado, conservamos el actual.
+        // Si trae un estado distinto, debe ser una transición válida desde el actual.
         if (request.getEstado() != null) {
+            TransicionesEstado.validar(reparacion.getEstado(), request.getEstado());
             reparacion.setEstado(request.getEstado());
         }
         reparacion.setPrecioEstimado(request.getPrecioEstimado());
@@ -188,6 +191,7 @@ public class ReparacionServiceImpl implements ReparacionService {
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
+        TransicionesEstado.validar(reparacion.getEstado(), nuevoEstado);
         reparacion.setEstado(nuevoEstado);
 
         return reparacionMapper.toDTO(reparacionRepository.save(reparacion));
