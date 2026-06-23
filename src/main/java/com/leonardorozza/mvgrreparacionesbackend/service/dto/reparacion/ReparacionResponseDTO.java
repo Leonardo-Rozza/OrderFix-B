@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import lombok.Data;
@@ -30,6 +31,19 @@ public class ReparacionResponseDTO {
 
     /** Código público de seguimiento (para compartir con el cliente). */
     private String codigoSeguimiento;
+
+    /** Número de orden mostrable (correlativo por taller, ej: ORD-2026-0042). */
+    private String numeroOrden;
+
+    // ----- Flags de riesgo del ingreso -----
+    private boolean mojado;
+    private boolean trabajoEnPlaca;
+    private boolean noTesteableAlIngreso;
+    private boolean tieneBloqueoPantalla;
+    private CuentaVinculada tieneCuentaVinculada;
+    private boolean clienteConoceCredenciales;
+    /** Derivada: cuenta activa + cliente no conoce credenciales → puede no entregarse activado. */
+    private boolean riesgoCuentaSinCredenciales;
 
     // ----- Orden de trabajo ampliada -----
     private String patronDesbloqueo;

@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import jakarta.persistence.*;
 import lombok.*;
@@ -51,6 +52,42 @@ public class Reparacion {
     /** Código público para que el cliente consulte el estado sin login. */
     @Column(name = "codigo_seguimiento", unique = true, length = 20)
     private String codigoSeguimiento;
+
+    /** Número de orden mostrable, correlativo por taller con reinicio anual (ej: ORD-2026-0042). */
+    @Column(name = "numero_orden", length = 20)
+    private String numeroOrden;
+
+    // ----- Flags de riesgo del ingreso (§1/§2: disparan avisos y afectan garantía) -----
+    /** Cayó al agua / humedad: fallas impredecibles, garantía limitada. */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean mojado = false;
+
+    /** Reparación a nivel placa: riesgo de que no vuelva a encender. */
+    @Column(name = "trabajo_en_placa", nullable = false)
+    @Builder.Default
+    private boolean trabajoEnPlaca = false;
+
+    /** No enciende / sin carga: el diagnóstico es provisorio y la condición no se pudo verificar. */
+    @Column(name = "no_testeable_al_ingreso", nullable = false)
+    @Builder.Default
+    private boolean noTesteableAlIngreso = false;
+
+    /** Tiene PIN/patrón de pantalla (se guarda en pinDesbloqueo/patronDesbloqueo). */
+    @Column(name = "tiene_bloqueo_pantalla", nullable = false)
+    @Builder.Default
+    private boolean tieneBloqueoPantalla = false;
+
+    /** Cuenta vinculada activa (Activation Lock / FRP). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tiene_cuenta_vinculada", nullable = false, length = 10)
+    @Builder.Default
+    private CuentaVinculada tieneCuentaVinculada = CuentaVinculada.NINGUNA;
+
+    /** El cliente conoce las credenciales para quitar la cuenta. */
+    @Column(name = "cliente_conoce_credenciales", nullable = false)
+    @Builder.Default
+    private boolean clienteConoceCredenciales = false;
 
     // ----- Orden de trabajo ampliada (checklist de ingreso) -----
     @Column(name = "patron_desbloqueo", length = 60)
@@ -117,6 +154,17 @@ public class Reparacion {
                 .map(r -> (r.getPrecio() == null ? BigDecimal.ZERO : r.getPrecio())
                         .multiply(BigDecimal.valueOf(Math.max(1, r.getCantidad()))))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * Bandera roja (§2): equipo con cuenta activa y el cliente no conoce las credenciales.
+     * Puede no poder entregarse activado tras la reparación.
+     */
+    @Transient
+    public boolean isRiesgoCuentaSinCredenciales() {
+        return tieneCuentaVinculada != null
+                && tieneCuentaVinculada != CuentaVinculada.NINGUNA
+                && !clienteConoceCredenciales;
     }
 
     /** Total a cobrar: mano de obra (precioFinal ?? precioEstimado ?? 0) + repuestos. */

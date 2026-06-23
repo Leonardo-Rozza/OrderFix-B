@@ -14,6 +14,7 @@ public interface ReparacionMapper {
     @Mapping(target = "equipo.id", source = "equipoId")
     @Mapping(target = "tecnico", ignore = true) // se resuelve en el service (valida que sea del taller)
     @Mapping(target = "fotos", ignore = true)   // se setea en el service (evita lista null por @Builder)
+    @Mapping(target = "tieneCuentaVinculada", ignore = true) // se setea en el service (default NINGUNA si null)
     Reparacion toEntity(ReparacionRequestDTO dto);
 
     @Mapping(target = "equipoId", source = "equipo.id")

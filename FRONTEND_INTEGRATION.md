@@ -236,11 +236,22 @@ ReparacionRequest:
   "accesorios": "cargador, funda, SIM",// máx 255
   "condicionesIngreso": "rayada",      // máx 500
   "observaciones": "interno, no público", // máx 1000
+  // ----- Flags de riesgo del ingreso (todo opcional; default false / NINGUNA) -----
+  "mojado": false,                     // cayó al agua: garantía limitada
+  "trabajoEnPlaca": false,             // reparación a nivel placa
+  "noTesteableAlIngreso": false,       // no enciende / sin carga → diagnóstico provisorio
+  "tieneBloqueoPantalla": false,       // tiene PIN/patrón (se guarda en pin/patronDesbloqueo)
+  "tieneCuentaVinculada": "NINGUNA",   // NINGUNA | ICLOUD | GOOGLE | OTRA
+  "clienteConoceCredenciales": false,  // ¿puede quitar la cuenta?
   "tecnicoId": 1,                      // id de un usuario del taller (404 si no existe)
   "fotos": ["https://cdn/foto1.jpg"]   // URLs (la subida del archivo la hace el front)
 }
 ```
-ReparacionResponse: `{ ...campos de arriba..., equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total, cobrado, saldo, estadoPago }`
+> El **`numeroOrden`** NO se envía: lo genera el backend al crear (correlativo por taller con
+> reinicio anual, ej. `ORD-2026-0042`) y es inmutable. El ingreso rápido también lo asigna; los
+> flags de riesgo se pueden completar después editando la reparación.
+
+ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total, cobrado, saldo, estadoPago, mojado, trabajoEnPlaca, noTesteableAlIngreso, tieneBloqueoPantalla, tieneCuentaVinculada, clienteConoceCredenciales, riesgoCuentaSinCredenciales }`
 - **Denormalizado**: cada reparación trae el `equipoMarca/Modelo` y los datos del cliente, así el listado/tablero es autocontenido (no hace falta cruzar con otros endpoints).
 > **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
@@ -248,6 +259,9 @@ ReparacionResponse: `{ ...campos de arriba..., equipoMarca, equipoModelo, client
 - **Estado de pago** (dimensión independiente del estado de reparación): `cobrado` (suma de cobros; **0 en planes FREE**, que no usan cobros), `saldo` = `max(0, total - cobrado)`, y `estadoPago` derivado: `SIN_COBRAR | PARCIAL | PAGADO`.
   - En el tablero mostrá **las dos dimensiones**: ej. chip de estado ("Listo") + chip de pago ("Falta cobrar $X" si `saldo > 0`).
   - **No bloquea la entrega**: se puede pasar a `ENTREGADO` con saldo pendiente (pago al retirar). El front decide si avisa.
+- **`numeroOrden`**: correlativo por taller con reinicio anual (`ORD-2026-0042`). Útil para etiquetar/buscar el equipo en el estante. Inmutable.
+- **Flags de riesgo del ingreso**: `mojado`, `trabajoEnPlaca`, `noTesteableAlIngreso`, `tieneBloqueoPantalla`, `tieneCuentaVinculada` (`NINGUNA|ICLOUD|GOOGLE|OTRA`), `clienteConoceCredenciales`.
+  - **`riesgoCuentaSinCredenciales`** (derivado, solo lectura): `true` cuando `tieneCuentaVinculada != NINGUNA` y `!clienteConoceCredenciales`. Mostrá una **bandera roja**: *"Riesgo: equipo con cuenta activa sin credenciales. Puede no poder entregarse activado."*
 
 **Avisar al cliente por WhatsApp:** `GET /api/reparaciones/{id}/whatsapp` → `{ url, telefono, mensaje, linkSeguimiento }`.
 El front abre `url` (wa.me con mensaje prearmado que incluye el link de seguimiento). Útil al pasar a COMPLETADO.
@@ -603,6 +617,7 @@ export type EstadoReparacion =
   | "ESPERANDO_REPUESTO" | "ESPERANDO_ADICIONAL" | "NO_REPARABLE"
   | "COMPLETADO" | "LISTO_SIN_REPARAR" | "ENTREGADO" | "ABANDONADO" | "CANCELADO";
 export type EstadoPago = "SIN_COBRAR" | "PARCIAL" | "PAGADO";
+export type CuentaVinculada = "NINGUNA" | "ICLOUD" | "GOOGLE" | "OTRA";
 
 export interface AuthResponse { token: string; type: string; email: string; }
 export interface Suscripcion {
@@ -625,8 +640,12 @@ export interface Reparacion {
   descripcionProblema: string; estado: EstadoReparacion;
   precioEstimado: number | null; precioFinal: number | null;
   fechaIngreso: string | null; fechaEstimadaEntrega: string | null; fechaEntrega: string | null;
-  codigoSeguimiento: string | null; totalRepuestos: number; total: number;
+  codigoSeguimiento: string | null; numeroOrden: string | null;
+  totalRepuestos: number; total: number;
   cobrado: number; saldo: number; estadoPago: EstadoPago;
+  mojado: boolean; trabajoEnPlaca: boolean; noTesteableAlIngreso: boolean;
+  tieneBloqueoPantalla: boolean; tieneCuentaVinculada: CuentaVinculada;
+  clienteConoceCredenciales: boolean; riesgoCuentaSinCredenciales: boolean;
   patronDesbloqueo: string | null; pinDesbloqueo: string | null; accesorios: string | null;
   condicionesIngreso: string | null; observaciones: string | null;
   tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];

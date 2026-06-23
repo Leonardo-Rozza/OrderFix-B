@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -46,6 +47,15 @@ public class ReparacionRequestDTO {
 
     @Size(max = 1000)
     private String observaciones;
+
+    // ----- Flags de riesgo del ingreso (todo opcional; default false / NINGUNA) -----
+    private boolean mojado;
+    private boolean trabajoEnPlaca;
+    private boolean noTesteableAlIngreso;
+    private boolean tieneBloqueoPantalla;
+    /** NINGUNA | ICLOUD | GOOGLE | OTRA (null = NINGUNA). */
+    private CuentaVinculada tieneCuentaVinculada;
+    private boolean clienteConoceCredenciales;
 
     /** ID del usuario del taller asignado como técnico. */
     private Long tecnicoId;

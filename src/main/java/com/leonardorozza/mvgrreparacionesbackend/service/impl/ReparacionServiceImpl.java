@@ -6,6 +6,8 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundExce
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TransicionesEstado;
@@ -15,6 +17,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteR
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
@@ -32,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.net.URLEncoder;
+import java.time.LocalDate;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -50,6 +54,7 @@ public class ReparacionServiceImpl implements ReparacionService {
     private final UserRepository userRepository;
     private final CobroRepository cobroRepository;
     private final ArticuloRepository articuloRepository;
+    private final TallerRepository tallerRepository;
     private final ReparacionMapper reparacionMapper;
     private final TenantService tenantService;
     private final PlanLimitService planLimitService;
@@ -80,6 +85,10 @@ public class ReparacionServiceImpl implements ReparacionService {
         if (request.getEstado() == null) {
             reparacion.setEstado(EstadoReparacion.INGRESADO);
         }
+        // Cuenta vinculada: el mapper la ignora; default NINGUNA si no vino.
+        reparacion.setTieneCuentaVinculada(request.getTieneCuentaVinculada() != null
+                ? request.getTieneCuentaVinculada() : CuentaVinculada.NINGUNA);
+        reparacion.setNumeroOrden(generarNumeroOrden(tallerId));
         reparacion.setTecnico(resolverTecnico(request.getTecnicoId(), tallerId));
         if (reparacion.getFotos() == null) {
             reparacion.setFotos(new ArrayList<>());
@@ -133,6 +142,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         reparacion.setPrecioEstimado(request.getPrecioEstimado());
         reparacion.setEstado(EstadoReparacion.INGRESADO);
         reparacion.setCodigoSeguimiento(generarCodigoSeguimiento());
+        reparacion.setNumeroOrden(generarNumeroOrden(tallerId));
         reparacion.setEquipo(equipo);
         reparacion.setTaller(tenantService.currentTallerRef());
         Reparacion guardada = reparacionRepository.save(reparacion);
@@ -177,6 +187,16 @@ public class ReparacionServiceImpl implements ReparacionService {
         reparacion.setAccesorios(request.getAccesorios());
         reparacion.setCondicionesIngreso(request.getCondicionesIngreso());
         reparacion.setObservaciones(request.getObservaciones());
+
+        // Flags de riesgo del ingreso
+        reparacion.setMojado(request.isMojado());
+        reparacion.setTrabajoEnPlaca(request.isTrabajoEnPlaca());
+        reparacion.setNoTesteableAlIngreso(request.isNoTesteableAlIngreso());
+        reparacion.setTieneBloqueoPantalla(request.isTieneBloqueoPantalla());
+        reparacion.setTieneCuentaVinculada(request.getTieneCuentaVinculada() != null
+                ? request.getTieneCuentaVinculada() : CuentaVinculada.NINGUNA);
+        reparacion.setClienteConoceCredenciales(request.isClienteConoceCredenciales());
+
         reparacion.setTecnico(resolverTecnico(request.getTecnicoId(), tallerId));
         if (request.getFotos() != null) {
             if (reparacion.getFotos() == null) {
@@ -351,5 +371,25 @@ public class ReparacionServiceImpl implements ReparacionService {
             codigo = sb.toString();
         } while (reparacionRepository.existsByCodigoSeguimiento(codigo));
         return codigo;
+    }
+
+    /**
+     * Número de orden correlativo por taller con reinicio anual (ORD-2026-0042).
+     * Toma el taller con lock de escritura para que dos ingresos simultáneos no
+     * repitan el número; el correlativo reinicia al cambiar de año.
+     */
+    private String generarNumeroOrden(Long tallerId) {
+        Taller taller = tallerRepository.findByIdForUpdate(tallerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Taller no encontrado con ID: " + tallerId));
+
+        int anio = LocalDate.now().getYear();
+        Integer anioActual = taller.getAnioSecuenciaOrden();
+        int secuencia = (anioActual != null && anioActual == anio) ? taller.getSecuenciaOrden() + 1 : 1;
+
+        taller.setAnioSecuenciaOrden(anio);
+        taller.setSecuenciaOrden(secuencia);
+        tallerRepository.save(taller);
+
+        return String.format("ORD-%d-%04d", anio, secuencia);
     }
 }

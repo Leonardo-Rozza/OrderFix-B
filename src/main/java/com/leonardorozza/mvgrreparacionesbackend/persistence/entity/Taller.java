@@ -38,6 +38,16 @@ public class Taller {
     @Builder.Default
     private Boolean activo = true;
 
+    // ----- Numeración de órdenes (correlativo por taller con reinicio anual) -----
+    /** Último correlativo de orden usado en el año {@code anioSecuenciaOrden}. */
+    @Column(name = "secuencia_orden", nullable = false)
+    @Builder.Default
+    private int secuenciaOrden = 0;
+
+    /** Año al que corresponde {@code secuenciaOrden} (al cambiar de año, reinicia). */
+    @Column(name = "anio_secuencia_orden")
+    private Integer anioSecuenciaOrden;
+
     @OneToOne(mappedBy = "taller", cascade = CascadeType.ALL, orphanRemoval = true)
     private Suscripcion suscripcion;
 
