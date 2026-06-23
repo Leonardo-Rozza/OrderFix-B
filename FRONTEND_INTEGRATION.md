@@ -459,26 +459,35 @@ UsuarioResponse: `{ id, username, email, role, active }`.
 
 ### 4.11 Presupuestos  (`/api/reparaciones/{reparacionId}/presupuestos`) — requiere token
 
-Presupuesto de una reparación, con ítems y aprobación del cliente.
+Presupuesto de una reparación, con ítems discriminados, validez y aprobación del cliente.
 
 | Método | Ruta | Body | Resp |
 |--------|------|------|------|
 | POST   | `/api/reparaciones/{id}/presupuestos` | PresupuestoRequest | `201` PresupuestoResponse |
 | GET    | `/api/reparaciones/{id}/presupuestos` | — | `200` PresupuestoResponse[] (más nuevo primero) |
+| POST   | `/api/reparaciones/{id}/presupuestos/{presupuestoId}/aprobar` | — | `200` PresupuestoResponse |
+| POST   | `/api/reparaciones/{id}/presupuestos/{presupuestoId}/rechazar` | — | `200` PresupuestoResponse |
+| POST   | `/api/reparaciones/{id}/presupuestos/{presupuestoId}/represupuestar` | PresupuestoRequest (opcional) | `201` PresupuestoResponse |
 
 PresupuestoRequest:
 ```json
 {
   "items": [
-    { "descripcion": "Pin de carga", "cantidad": 1, "precioUnitario": 8000 },
-    { "descripcion": "Mano de obra", "cantidad": 1, "precioUnitario": 12000 }
+    { "descripcion": "Mano de obra", "cantidad": 1, "precioUnitario": 12000, "tipoItem": "MANO_DE_OBRA" },
+    { "descripcion": "Pantalla", "cantidad": 1, "precioUnitario": 30000, "tipoItem": "REPUESTO", "calidad": "ALTERNATIVO" }
   ],
-  "observaciones": "Demora 48hs"   // opcional
+  "observaciones": "Demora 48hs",  // opcional
+  "tipo": "ORIGINAL",              // opcional: ORIGINAL (default) | ADICIONAL
+  "validezDias": 7                 // opcional: default 7
 }
 ```
-PresupuestoResponse: `{ id, reparacionId, estado, items[], total, observaciones, fechaRespuesta, createdAt }`
-- `estado`: `PENDIENTE | APROBADO | RECHAZADO`. `total` lo calcula el backend (Σ cantidad×precioUnitario).
-- El cliente **aprueba/rechaza desde el link público** (ver §4.9).
+- `tipoItem`: `MANO_DE_OBRA` (default si se omite) | `REPUESTO`. `calidad` (solo repuestos, opcional): `ORIGINAL | ALTERNATIVO | USADO_REACONDICIONADO`.
+
+PresupuestoResponse: `{ id, reparacionId, estado, tipo, items[], total, manoDeObraTotal, repuestosTotal, validezDias, validoHasta, vencido, observaciones, fechaRespuesta, createdAt }`
+- `estado`: `PENDIENTE | APROBADO | RECHAZADO | VENCIDO`. **VENCIDO es derivado** (un PENDIENTE cuyo `validoHasta` ya pasó); `vencido: true` lo marca también como bool. `total` = Σ cantidad×precioUnitario; `manoDeObraTotal`/`repuestosTotal` lo discriminan.
+- **Aprobar/rechazar**: lo puede hacer el **taller** (endpoints de arriba) o el **cliente** desde el link público (§4.9). Un presupuesto **vencido o ya respondido** → `400`.
+- **Re-presupuestar**: clona el presupuesto (mismos ítems) en uno nuevo PENDIENTE con validez fresca; si mandás `items` en el body, usa esos (precios nuevos). Útil cuando venció.
+- **Auto-estado de la reparación** (best-effort, respeta la máquina de estados): crear ORIGINAL → `PRESUPUESTADO`; crear ADICIONAL → `ESPERANDO_ADICIONAL`; aprobar → `EN_PROCESO`; rechazar original → `LISTO_SIN_REPARAR`. Si el salto no es legal desde el estado actual, no se fuerza (no rompe).
 
 ---
 
@@ -651,6 +660,20 @@ export interface Reparacion {
   tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];
 }
 export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; reparacionEquipo: string | null; articuloId: number | null; cantidad: number; }
+export type EstadoPresupuesto = "PENDIENTE" | "APROBADO" | "RECHAZADO" | "VENCIDO";
+export type TipoPresupuesto = "ORIGINAL" | "ADICIONAL";
+export type TipoItemPresupuesto = "MANO_DE_OBRA" | "REPUESTO";
+export type CalidadRepuesto = "ORIGINAL" | "ALTERNATIVO" | "USADO_REACONDICIONADO";
+export interface ItemPresupuesto {
+  descripcion: string; cantidad: number; precioUnitario: number;
+  tipoItem: TipoItemPresupuesto; calidad: CalidadRepuesto | null;
+}
+export interface Presupuesto {
+  id: number; reparacionId: number; estado: EstadoPresupuesto; tipo: TipoPresupuesto;
+  items: ItemPresupuesto[]; total: number; manoDeObraTotal: number; repuestosTotal: number;
+  validezDias: number; validoHasta: string | null; vencido: boolean;
+  observaciones: string | null; fechaRespuesta: string | null; createdAt: string;
+}
 export interface CheckoutResponse { preapprovalId: string; initPoint: string; }
 // Respuesta paginada genérica
 export interface Page<T> { content: T[]; page: { size: number; number: number; totalElements: number; totalPages: number }; }

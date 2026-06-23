@@ -34,4 +34,28 @@ public class PresupuestoController {
     public ResponseEntity<List<PresupuestoResponseDTO>> listar(@PathVariable Long reparacionId) {
         return ResponseEntity.ok(presupuestoService.listarPorReparacion(reparacionId));
     }
+
+    @Operation(summary = "El taller aprueba el presupuesto (ej: el cliente lo acepta en persona)")
+    @PostMapping("/{presupuestoId}/aprobar")
+    public ResponseEntity<PresupuestoResponseDTO> aprobar(
+            @PathVariable Long reparacionId, @PathVariable Long presupuestoId) {
+        return ResponseEntity.ok(presupuestoService.responder(reparacionId, presupuestoId, true));
+    }
+
+    @Operation(summary = "El taller rechaza el presupuesto")
+    @PostMapping("/{presupuestoId}/rechazar")
+    public ResponseEntity<PresupuestoResponseDTO> rechazar(
+            @PathVariable Long reparacionId, @PathVariable Long presupuestoId) {
+        return ResponseEntity.ok(presupuestoService.responder(reparacionId, presupuestoId, false));
+    }
+
+    @Operation(summary = "Re-presupuestar: clona un presupuesto (vencido) con validez nueva; "
+            + "opcionalmente con precios/ítems nuevos en el body")
+    @PostMapping("/{presupuestoId}/represupuestar")
+    public ResponseEntity<PresupuestoResponseDTO> represupuestar(
+            @PathVariable Long reparacionId, @PathVariable Long presupuestoId,
+            @RequestBody(required = false) @Valid PresupuestoRequestDTO request) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(presupuestoService.represupuestar(reparacionId, presupuestoId, request));
+    }
 }

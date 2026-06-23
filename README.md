@@ -84,7 +84,9 @@ ESPERANDO_ADICIONAL, NO_REPARABLE, COMPLETADO, LISTO_SIN_REPARAR, ENTREGADO, ABA
 **máquina de transiciones**: un salto ilegal devuelve `409`) · `EstadoPago` (SIN_COBRAR, PARCIAL, PAGADO —
 **derivado** de cobrado vs total, no se almacena) ·
 `PlanType` (FREE, PRO) · `EstadoSuscripcion` (TRIAL, ACTIVA, VENCIDA, CANCELADA) ·
-`EstadoPresupuesto` (PENDIENTE, APROBADO, RECHAZADO) · `MetodoPago` (EFECTIVO, TRANSFERENCIA, TARJETA,
+`EstadoPresupuesto` (PENDIENTE, APROBADO, RECHAZADO, VENCIDO — derivado) · `TipoPresupuesto` (ORIGINAL,
+ADICIONAL) · `TipoItemPresupuesto` (MANO_DE_OBRA, REPUESTO) · `CalidadRepuesto` (ORIGINAL, ALTERNATIVO,
+USADO_REACONDICIONADO) · `MetodoPago` (EFECTIVO, TRANSFERENCIA, TARJETA,
 MERCADOPAGO, OTRO) · `UserRole` (ADMIN, USER) · `CuentaVinculada` (NINGUNA, ICLOUD, GOOGLE, OTRA — bloqueo de cuenta del equipo).
 
 ---
@@ -101,7 +103,7 @@ Base URL local: `http://localhost:8080`. Detalle de cada request/response en `FR
 | **Clientes** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado `?q=`) · `DELETE/{id}` (ADMIN) | Item con `equiposCount`, `reparacionesCount`, `ultimaVisita` |
 | **Equipos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /cliente/{id}` · `DELETE/{id}` (ADMIN) | Item con cliente + `reparacionesCount` |
 | **Reparaciones** | `POST` · `POST /ingreso-rapido` · `PUT/{id}` · `PATCH /{id}/estado` · `GET/{id}` · `GET` (`?q=&estado=&page=`) · `GET /equipo/{id}` · `GET /{id}/whatsapp` · `DELETE/{id}` (ADMIN) | `ingreso-rapido` crea cliente+equipo+reparación de una. Item denormalizado (equipo+cliente). Orden de trabajo ampliada (patrón/PIN, accesorios, técnico, fotos). |
-| **Presupuestos** | `POST /api/reparaciones/{id}/presupuestos` · `GET` | Ítems + total; estados PENDIENTE/APROBADO/RECHAZADO |
+| **Presupuestos** | `POST /api/reparaciones/{id}/presupuestos` · `GET` · `POST /{pid}/aprobar` · `/rechazar` · `/represupuestar` | Ítems discriminados (mano de obra/repuesto + calidad), validez/vencimiento, tipo ORIGINAL/ADICIONAL; mueve el estado de la reparación |
 | **Repuestos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /reparacion/{id}` · `DELETE/{id}` (ADMIN) | Con `articuloId` descuenta stock del inventario |
 | **Inventario** (PRO) | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /stock-bajo` · `POST /{id}/ajuste` · `DELETE/{id}` (ADMIN) | Catálogo con stock, ajustes y aviso de stock bajo |
 | **Cobros** (PRO) | `POST /api/reparaciones/{id}/cobros` · `GET /cobros` · `DELETE /cobros/{id}` (ADMIN) · `GET /{id}/recibo` | total/cobrado/saldo; recibo imprimible |
@@ -137,6 +139,7 @@ Códigos: `400` validación · `401` no autenticado · `402` límite/función PR
 | V10 | Cobros |
 | V11 | Contador de consumo mensual en la suscripción |
 | V12 | Ingreso enriquecido (flags de riesgo, bloqueo de cuenta) + número de orden por taller |
+| V13 | Presupuesto pro (tipo, validez/vencimiento, mano de obra vs repuesto + calidad) |
 
 ---
 
@@ -165,7 +168,7 @@ export JAVA_HOME=<ruta-a-un-JDK-21>
 ./mvnw test
 ```
 
-Suite de **41 tests** de integración (MockMvc sobre el stack real + H2). Los de flujo extienden
+Suite de **47 tests** (integración MockMvc sobre el stack real + H2, y algunos unitarios puros). Los de flujo extienden
 `support/IntegrationTestBase` (helpers de registro/login/PRO/JSON):
 - **Aplicación** — carga del contexto completo (H2).
 - **TenantIsolationTests** (3) — un taller no ve/borra clientes, equipos ni reparaciones de otro.
@@ -176,12 +179,14 @@ Suite de **41 tests** de integración (MockMvc sobre el stack real + H2). Los de
 - **IngresoEnriquecidoTests** (2) — número de orden correlativo por taller y bandera roja de cuenta sin credenciales.
 - **ReparacionDeleteTests** (2) — al borrar limpia presupuestos (cascade) y repone stock; bloquea si hay cobros.
 - **PresupuestoFlowTests** (2) — crear + aprobar/rechazar desde el link público.
+- **PresupuestoProTests** (3) — totales discriminados (mano de obra/repuesto + calidad), auto-estado, aprobación del taller, re-presupuestar y vencido.
 - **InventarioStockTests** (3) — descuento/reposición de stock, stock insuficiente (400), stock bajo + dashboard.
 - **CobroCajaReciboTests** (1) — cobros parciales, saldo, recibo y caja.
 - **PlanGatingTests** (3) — FREE → 402 en funciones PRO, mapa `funciones`, multi-empleado.
 - **RolTests** (2) — USER vs ADMIN; empleado desactivado no loguea.
 - **PlanLimitTests** (1) — superar el tope FREE devuelve 402.
 - **MercadoPagoSignatureTests** (4) — firma del webhook (válida/inválida/ausente/sin-secreto).
+- **PresupuestoVencidoTest** (3) — lógica pura de vencimiento (PENDIENTE expirado → VENCIDO; aprobado nunca vence).
 
 ---
 

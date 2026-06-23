@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.entity;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPresupuesto;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoPresupuesto;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.data.annotation.CreatedDate;
@@ -43,6 +44,21 @@ public class Presupuesto {
     @Builder.Default
     private EstadoPresupuesto estado = EstadoPresupuesto.PENDIENTE;
 
+    /** Original del trabajo o adicional (trabajo extra que aparece al abrir). */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    @Builder.Default
+    private TipoPresupuesto tipo = TipoPresupuesto.ORIGINAL;
+
+    /** Días de validez del presupuesto (en AR los precios cambian seguido). */
+    @Column(name = "validez_dias", nullable = false)
+    @Builder.Default
+    private int validezDias = 7;
+
+    /** Fecha/hora hasta la que el presupuesto es válido; pasada, se considera VENCIDO. */
+    @Column(name = "valido_hasta")
+    private LocalDateTime validoHasta;
+
     @ElementCollection
     @CollectionTable(name = "presupuesto_items", joinColumns = @JoinColumn(name = "presupuesto_id"))
     @Builder.Default
@@ -63,4 +79,18 @@ public class Presupuesto {
 
     @LastModifiedDate
     private LocalDateTime updatedAt;
+
+    /** Está vencido si sigue PENDIENTE y ya pasó su validez. */
+    @Transient
+    public boolean isVencido() {
+        return estado == EstadoPresupuesto.PENDIENTE
+                && validoHasta != null
+                && LocalDateTime.now().isAfter(validoHasta);
+    }
+
+    /** Estado para mostrar: VENCIDO si corresponde, si no el estado real. */
+    @Transient
+    public EstadoPresupuesto getEstadoEfectivo() {
+        return isVencido() ? EstadoPresupuesto.VENCIDO : estado;
+    }
 }

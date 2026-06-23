@@ -13,6 +13,8 @@ public interface PresupuestoRepository extends JpaRepository<Presupuesto, Long> 
 
     List<Presupuesto> findByReparacionIdAndTallerIdOrderByCreatedAtDesc(Long reparacionId, Long tallerId);
 
+    Optional<Presupuesto> findByIdAndReparacionIdAndTallerId(Long id, Long reparacionId, Long tallerId);
+
     Optional<Presupuesto> findFirstByReparacionIdOrderByCreatedAtDesc(Long reparacionId);
 
     Optional<Presupuesto> findFirstByReparacionIdAndEstadoOrderByCreatedAtDesc(
