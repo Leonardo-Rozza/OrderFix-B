@@ -286,7 +286,7 @@ debería ofrecer solo las opciones legales según el estado actual:
 
 | Desde | Hacia (permitidos) |
 |-------|--------------------|
-| `INGRESADO` | `EN_DIAGNOSTICO`, `EN_PROCESO` (arreglo simple), `CANCELADO` |
+| `INGRESADO` | `EN_DIAGNOSTICO`, `PRESUPUESTADO` (presupuesto directo), `EN_PROCESO` (arreglo simple), `CANCELADO` |
 | `EN_DIAGNOSTICO` | `PRESUPUESTADO`, `NO_REPARABLE`, `CANCELADO` |
 | `PRESUPUESTADO` | `EN_PROCESO` (cliente aprueba), `LISTO_SIN_REPARAR` (rechaza), `CANCELADO` |
 | `EN_PROCESO` | `ESPERANDO_REPUESTO`, `ESPERANDO_ADICIONAL`, `COMPLETADO`, `NO_REPARABLE` |

@@ -42,10 +42,7 @@ class PresupuestoProTests extends IntegrationTestBase {
         String t = registrar("Taller Pro", "presupro@test.com");
         long repId = ingreso(t, "6101").get("reparacion").get("id").asLong();
 
-        // Para que crear presupuesto ORIGINAL → PRESUPUESTADO sea una transición legal
-        authPatch("/api/reparaciones/" + repId + "/estado", t, json(Map.of("estado", "EN_DIAGNOSTICO")))
-                .andExpect(status().isOk());
-
+        // Crear el presupuesto directo desde INGRESADO mueve a PRESUPUESTADO (edge directo)
         JsonNode creado = node(authPost("/api/reparaciones/" + repId + "/presupuestos", t, itemsManoYRepuesto())
                 .andExpect(status().isCreated()));
         assertThat(creado.get("tipo").asText()).isEqualTo("ORIGINAL");
