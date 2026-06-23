@@ -211,6 +211,7 @@ Errores: `404` si el `clienteId` no pertenece a tu taller.
 | Método | Ruta | Body | Resp |
 |--------|------|------|------|
 | POST   | `/api/reparaciones` | ReparacionRequest | `201` ReparacionResponse |
+| POST   | `/api/reparaciones/{id}/garantia` | `{ "descripcionProblema": "..." }` | `201` ReparacionResponse (reclamo en garantía) |
 | PUT    | `/api/reparaciones/{id}` | ReparacionRequest | `200` ReparacionResponse |
 | PATCH  | `/api/reparaciones/{id}/estado` | `{ "estado": "EN_PROCESO" }` | `200` ReparacionResponse · `409` si la transición no es legal |
 | GET    | `/api/reparaciones/{id}` | — | `200` ReparacionResponse |
@@ -248,7 +249,9 @@ ReparacionRequest:
     { "url": "https://cdn/ingreso1.jpg", "momento": "INGRESO" },
     { "url": "https://cdn/post1.jpg",    "momento": "POST_REPARACION" }
   ],
-  "fechaConformidadEntrega": null      // opcional; si no, se sella solo al pasar a ENTREGADO
+  "fechaConformidadEntrega": null,     // opcional; si no, se sella solo al pasar a ENTREGADO
+  "garantiaDias": 90,                  // opcional; si no, el default del backend al entregar
+  "garantiaCondiciones": "Cubre solo el repuesto cambiado" // opcional
 }
 ```
 > **Fotos**: cada una lleva `momento` (`INGRESO` | `POST_REPARACION`; si se omite, `INGRESO`).
@@ -258,7 +261,7 @@ ReparacionRequest:
 > reinicio anual, ej. `ORD-2026-0042`) y es inmutable. El ingreso rápido también lo asigna; los
 > flags de riesgo se pueden completar después editando la reparación.
 
-ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos (FotoDTO[]), fechaConformidadEntrega, totalRepuestos, total, cobrado, saldo, estadoPago, mojado, trabajoEnPlaca, noTesteableAlIngreso, tieneBloqueoPantalla, tieneCuentaVinculada, clienteConoceCredenciales, riesgoCuentaSinCredenciales }`
+ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos (FotoDTO[]), fechaConformidadEntrega, totalRepuestos, total, cobrado, saldo, estadoPago, mojado, trabajoEnPlaca, noTesteableAlIngreso, tieneBloqueoPantalla, tieneCuentaVinculada, clienteConoceCredenciales, riesgoCuentaSinCredenciales, garantiaDias, garantiaInicio, garantiaFin, garantiaCondiciones, garantiaVigente, esGarantia, reparacionOrigenId }`
 - **Denormalizado**: cada reparación trae el `equipoMarca/Modelo` y los datos del cliente, así el listado/tablero es autocontenido (no hace falta cruzar con otros endpoints).
 > **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
@@ -270,6 +273,8 @@ ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoM
 - **Flags de riesgo del ingreso**: `mojado`, `trabajoEnPlaca`, `noTesteableAlIngreso`, `tieneBloqueoPantalla`, `tieneCuentaVinculada` (`NINGUNA|ICLOUD|GOOGLE|OTRA`), `clienteConoceCredenciales`.
   - **`riesgoCuentaSinCredenciales`** (derivado, solo lectura): `true` cuando `tieneCuentaVinculada != NINGUNA` y `!clienteConoceCredenciales`. Mostrá una **bandera roja**: *"Riesgo: equipo con cuenta activa sin credenciales. Puede no poder entregarse activado."*
 - **`fechaConformidadEntrega`**: cuándo el cliente retiró conforme (anti-disputa). Se **sella automáticamente** al pasar la reparación a `ENTREGADO` (si no se mandó antes); también se puede setear a mano en el PUT.
+- **Garantía**: al pasar a `ENTREGADO`, el backend fija `garantiaInicio` (hoy), `garantiaFin` (= inicio + `garantiaDias`, default **90**) y deja `garantiaCondiciones`. `garantiaVigente` (derivado) indica si todavía no venció. `esGarantia`/`reparacionOrigenId` marcan los retrabajos en garantía.
+  - **Reclamo en garantía**: `POST /api/reparaciones/{id}/garantia` con `{ descripcionProblema }` crea una **reparación nueva** vinculada al original (mismo equipo, `esGarantia: true`, `reparacionOrigenId`). **No consume cupo** del plan FREE y **arranca sin precio** (`total: 0`); el taller cobra solo si el diagnóstico revela falla ajena (golpe/mojado nuevo).
 
 **Avisar al cliente por WhatsApp:** `GET /api/reparaciones/{id}/whatsapp` → `{ url, telefono, mensaje, linkSeguimiento }`.
 El front abre `url` (wa.me con mensaje prearmado que incluye el link de seguimiento). Útil al pasar a COMPLETADO.
@@ -669,6 +674,9 @@ export interface Reparacion {
   condicionesIngreso: string | null; observaciones: string | null;
   tecnicoId: number | null; tecnicoNombre: string | null;
   fotos: Foto[]; fechaConformidadEntrega: string | null;
+  garantiaDias: number | null; garantiaInicio: string | null; garantiaFin: string | null;
+  garantiaCondiciones: string | null; garantiaVigente: boolean;
+  esGarantia: boolean; reparacionOrigenId: number | null;
 }
 export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; reparacionEquipo: string | null; articuloId: number | null; cantidad: number; }
 export type EstadoPresupuesto = "PENDIENTE" | "APROBADO" | "RECHAZADO" | "VENCIDO";

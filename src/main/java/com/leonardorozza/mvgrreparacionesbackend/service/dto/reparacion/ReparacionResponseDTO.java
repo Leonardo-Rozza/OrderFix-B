@@ -58,6 +58,18 @@ public class ReparacionResponseDTO {
     /** Fecha/hora en que el cliente retiró conforme (null si todavía no se entregó). */
     private LocalDateTime fechaConformidadEntrega;
 
+    // ----- Garantía -----
+    private Integer garantiaDias;
+    private LocalDate garantiaInicio;
+    private LocalDate garantiaFin;
+    private String garantiaCondiciones;
+    /** Derivado: hay garantiaFin y todavía no pasó. */
+    private boolean garantiaVigente;
+    /** Esta reparación es un retrabajo en garantía (no cobra ni consume cupo). */
+    private boolean esGarantia;
+    /** Si es reclamo en garantía, ID de la reparación original. */
+    private Long reparacionOrigenId;
+
     /** Suma de los precios de los repuestos asociados. */
     private BigDecimal totalRepuestos;
 

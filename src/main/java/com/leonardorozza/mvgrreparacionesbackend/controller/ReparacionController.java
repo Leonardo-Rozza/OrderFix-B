@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.controller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.CambiarEstadoRequestDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
@@ -65,6 +66,18 @@ public class ReparacionController {
             @Valid @RequestBody IngresoRapidoRequestDTO request) {
 
         return ResponseEntity.status(201).body(reparacionService.crearIngresoRapido(request));
+    }
+
+    // =====================================================
+    // RECLAMO EN GARANTÍA (reparación vinculada a la original)
+    // =====================================================
+    @Operation(summary = "Crear un reclamo en garantía de una reparación (no consume cupo ni arranca con precio)")
+    @PostMapping("/{id}/garantia")
+    public ResponseEntity<ReparacionResponseDTO> reclamoGarantia(
+            @PathVariable Long id,
+            @Valid @RequestBody GarantiaReclamoRequestDTO request) {
+
+        return ResponseEntity.status(201).body(reparacionService.crearReclamoGarantia(id, request));
     }
 
     // =====================================================

@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -68,4 +69,11 @@ public class ReparacionRequestDTO {
 
     /** Fecha/hora de conformidad de entrega (opcional; si no, se setea al pasar a ENTREGADO). */
     private LocalDateTime fechaConformidadEntrega;
+
+    /** Días de garantía (opcional; si no, el default del backend al entregar). */
+    @Min(0)
+    private Integer garantiaDias;
+
+    @Size(max = 1000)
+    private String garantiaCondiciones;
 }

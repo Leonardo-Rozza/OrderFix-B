@@ -23,6 +23,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRe
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.FotoDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
@@ -65,6 +66,9 @@ public class ReparacionServiceImpl implements ReparacionService {
 
     @Value("${app.public-url:http://localhost:5173}")
     private String publicUrl;
+
+    @Value("${garantia.dias-default:90}")
+    private int garantiaDiasDefault;
 
     private static final SecureRandom RANDOM = new SecureRandom();
     // Sin caracteres ambiguos (O/0, I/1) para dictarlo por teléfono
@@ -158,6 +162,27 @@ public class ReparacionServiceImpl implements ReparacionService {
     }
 
     @Override
+    public ReparacionResponseDTO crearReclamoGarantia(Long origenId, GarantiaReclamoRequestDTO request) {
+        Long tallerId = tenantService.currentTallerId();
+        Reparacion original = reparacionRepository.findByIdAndTallerId(origenId, tallerId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Reparación no encontrada con ID: " + origenId));
+
+        // Reclamo en garantía: NO consume cupo del plan ni arranca con precio.
+        Reparacion reclamo = new Reparacion();
+        reclamo.setDescripcionProblema(request.getDescripcionProblema());
+        reclamo.setEstado(EstadoReparacion.INGRESADO);
+        reclamo.setEquipo(original.getEquipo());
+        reclamo.setTaller(tenantService.currentTallerRef());
+        reclamo.setEsGarantia(true);
+        reclamo.setReparacionOrigenId(original.getId());
+        reclamo.setCodigoSeguimiento(generarCodigoSeguimiento());
+        reclamo.setNumeroOrden(generarNumeroOrden(tallerId));
+
+        return toDtoConPago(reparacionRepository.save(reclamo));
+    }
+
+    @Override
     public ReparacionResponseDTO actualizar(Long id, ReparacionRequestDTO request) {
         Long tallerId = tenantService.currentTallerId();
 
@@ -208,11 +233,15 @@ public class ReparacionServiceImpl implements ReparacionService {
             reparacion.getFotos().addAll(mapFotos(request.getFotos()));
         }
 
+        // Garantía: el taller puede fijar días/condiciones antes de entregar.
+        reparacion.setGarantiaDias(request.getGarantiaDias());
+        reparacion.setGarantiaCondiciones(request.getGarantiaCondiciones());
+
         // Conformidad de entrega: explícita por request, o auto al quedar ENTREGADO.
         if (request.getFechaConformidadEntrega() != null) {
             reparacion.setFechaConformidadEntrega(request.getFechaConformidadEntrega());
         }
-        marcarConformidadSiEntregado(reparacion);
+        procesarEntrega(reparacion);
 
         return toDtoConPago(reparacionRepository.save(reparacion));
     }
@@ -225,7 +254,7 @@ public class ReparacionServiceImpl implements ReparacionService {
 
         TransicionesEstado.validar(reparacion.getEstado(), nuevoEstado);
         reparacion.setEstado(nuevoEstado);
-        marcarConformidadSiEntregado(reparacion);
+        procesarEntrega(reparacion);
 
         return toDtoConPago(reparacionRepository.save(reparacion));
     }
@@ -395,11 +424,23 @@ public class ReparacionServiceImpl implements ReparacionService {
                 .toList();
     }
 
-    /** Si la reparación quedó ENTREGADA y no hay conformidad registrada, la sella con ahora. */
-    private void marcarConformidadSiEntregado(Reparacion reparacion) {
-        if (reparacion.getEstado() == EstadoReparacion.ENTREGADO
-                && reparacion.getFechaConformidadEntrega() == null) {
+    /**
+     * Al quedar ENTREGADA: sella la conformidad (si falta) y fija la garantía
+     * (inicio = hoy, fin = inicio + garantiaDias), una sola vez.
+     */
+    private void procesarEntrega(Reparacion reparacion) {
+        if (reparacion.getEstado() != EstadoReparacion.ENTREGADO) {
+            return;
+        }
+        if (reparacion.getFechaConformidadEntrega() == null) {
             reparacion.setFechaConformidadEntrega(LocalDateTime.now());
+        }
+        if (reparacion.getGarantiaFin() == null) {
+            int dias = reparacion.getGarantiaDias() != null ? reparacion.getGarantiaDias() : garantiaDiasDefault;
+            LocalDate inicio = LocalDate.now();
+            reparacion.setGarantiaDias(dias);
+            reparacion.setGarantiaInicio(inicio);
+            reparacion.setGarantiaFin(inicio.plusDays(dias));
         }
     }
 

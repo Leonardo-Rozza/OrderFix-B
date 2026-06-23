@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
@@ -17,6 +18,12 @@ public interface ReparacionService {
 
         /** Carga rápida: crea (o reutiliza) cliente + equipo + reparación de una sola vez. */
         IngresoRapidoResponseDTO crearIngresoRapido(IngresoRapidoRequestDTO request);
+
+        /**
+         * Reclamo en garantía: crea una reparación nueva vinculada a la original
+         * (mismo equipo), marcada esGarantia. No consume cupo del plan ni arranca con precio.
+         */
+        ReparacionResponseDTO crearReclamoGarantia(Long origenId, GarantiaReclamoRequestDTO request);
 
         ReparacionResponseDTO actualizar(Long id, ReparacionRequestDTO request);
 
