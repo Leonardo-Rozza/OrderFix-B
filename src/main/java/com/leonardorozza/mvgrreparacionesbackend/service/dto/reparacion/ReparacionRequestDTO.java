@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -9,6 +10,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
@@ -60,6 +62,10 @@ public class ReparacionRequestDTO {
     /** ID del usuario del taller asignado como técnico. */
     private Long tecnicoId;
 
-    /** URLs de fotos del equipo (la subida la hace el front a su storage). */
-    private List<String> fotos;
+    /** Fotos del equipo con su momento (la subida la hace el front a su storage). */
+    @Valid
+    private List<FotoDTO> fotos;
+
+    /** Fecha/hora de conformidad de entrega (opcional; si no, se setea al pasar a ENTREGADO). */
+    private LocalDateTime fechaConformidadEntrega;
 }

@@ -5,11 +5,13 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.FotoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.MomentoFoto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TransicionesEstado;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
@@ -20,6 +22,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.Reparaci
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.FotoDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
@@ -36,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.net.URLEncoder;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -93,9 +97,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         if (reparacion.getFotos() == null) {
             reparacion.setFotos(new ArrayList<>());
         }
-        if (request.getFotos() != null) {
-            reparacion.getFotos().addAll(request.getFotos());
-        }
+        reparacion.getFotos().addAll(mapFotos(request.getFotos()));
         reparacion.setCodigoSeguimiento(generarCodigoSeguimiento());
 
         Reparacion guardada = reparacionRepository.save(reparacion);
@@ -203,8 +205,14 @@ public class ReparacionServiceImpl implements ReparacionService {
                 reparacion.setFotos(new ArrayList<>());
             }
             reparacion.getFotos().clear();
-            reparacion.getFotos().addAll(request.getFotos());
+            reparacion.getFotos().addAll(mapFotos(request.getFotos()));
         }
+
+        // Conformidad de entrega: explícita por request, o auto al quedar ENTREGADO.
+        if (request.getFechaConformidadEntrega() != null) {
+            reparacion.setFechaConformidadEntrega(request.getFechaConformidadEntrega());
+        }
+        marcarConformidadSiEntregado(reparacion);
 
         return toDtoConPago(reparacionRepository.save(reparacion));
     }
@@ -217,6 +225,7 @@ public class ReparacionServiceImpl implements ReparacionService {
 
         TransicionesEstado.validar(reparacion.getEstado(), nuevoEstado);
         reparacion.setEstado(nuevoEstado);
+        marcarConformidadSiEntregado(reparacion);
 
         return toDtoConPago(reparacionRepository.save(reparacion));
     }
@@ -371,6 +380,27 @@ public class ReparacionServiceImpl implements ReparacionService {
             codigo = sb.toString();
         } while (reparacionRepository.existsByCodigoSeguimiento(codigo));
         return codigo;
+    }
+
+    /** Mapea las fotos del request a entidad; momento default INGRESO si no vino. */
+    private List<FotoReparacion> mapFotos(List<FotoDTO> fotos) {
+        if (fotos == null) {
+            return List.of();
+        }
+        return fotos.stream()
+                .map(f -> FotoReparacion.builder()
+                        .url(f.url())
+                        .momento(f.momento() != null ? f.momento() : MomentoFoto.INGRESO)
+                        .build())
+                .toList();
+    }
+
+    /** Si la reparación quedó ENTREGADA y no hay conformidad registrada, la sella con ahora. */
+    private void marcarConformidadSiEntregado(Reparacion reparacion) {
+        if (reparacion.getEstado() == EstadoReparacion.ENTREGADO
+                && reparacion.getFechaConformidadEntrega() == null) {
+            reparacion.setFechaConformidadEntrega(LocalDateTime.now());
+        }
     }
 
     /**

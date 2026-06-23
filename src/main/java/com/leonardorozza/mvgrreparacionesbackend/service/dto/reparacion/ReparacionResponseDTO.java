@@ -7,6 +7,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
@@ -53,7 +54,9 @@ public class ReparacionResponseDTO {
     private String observaciones;
     private Long tecnicoId;
     private String tecnicoNombre;
-    private List<String> fotos;
+    private List<FotoDTO> fotos;
+    /** Fecha/hora en que el cliente retiró conforme (null si todavía no se entregó). */
+    private LocalDateTime fechaConformidadEntrega;
 
     /** Suma de los precios de los repuestos asociados. */
     private BigDecimal totalRepuestos;

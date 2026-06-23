@@ -244,14 +244,21 @@ ReparacionRequest:
   "tieneCuentaVinculada": "NINGUNA",   // NINGUNA | ICLOUD | GOOGLE | OTRA
   "clienteConoceCredenciales": false,  // ¿puede quitar la cuenta?
   "tecnicoId": 1,                      // id de un usuario del taller (404 si no existe)
-  "fotos": ["https://cdn/foto1.jpg"]   // URLs (la subida del archivo la hace el front)
+  "fotos": [                           // la subida del archivo la hace el front a su storage
+    { "url": "https://cdn/ingreso1.jpg", "momento": "INGRESO" },
+    { "url": "https://cdn/post1.jpg",    "momento": "POST_REPARACION" }
+  ],
+  "fechaConformidadEntrega": null      // opcional; si no, se sella solo al pasar a ENTREGADO
 }
 ```
+> **Fotos**: cada una lleva `momento` (`INGRESO` | `POST_REPARACION`; si se omite, `INGRESO`).
+> Las de ingreso prueban la condición de entrada; las post, el trabajo (QA). **Cambió el formato:**
+> antes era `string[]`, ahora es `{ url, momento }[]`.
 > El **`numeroOrden`** NO se envía: lo genera el backend al crear (correlativo por taller con
 > reinicio anual, ej. `ORD-2026-0042`) y es inmutable. El ingreso rápido también lo asigna; los
 > flags de riesgo se pueden completar después editando la reparación.
 
-ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos, totalRepuestos, total, cobrado, saldo, estadoPago, mojado, trabajoEnPlaca, noTesteableAlIngreso, tieneBloqueoPantalla, tieneCuentaVinculada, clienteConoceCredenciales, riesgoCuentaSinCredenciales }`
+ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoModelo, clienteId, clienteNombre, clienteApellido, clienteTelefono, codigoSeguimiento, tecnicoId, tecnicoNombre, fotos (FotoDTO[]), fechaConformidadEntrega, totalRepuestos, total, cobrado, saldo, estadoPago, mojado, trabajoEnPlaca, noTesteableAlIngreso, tieneBloqueoPantalla, tieneCuentaVinculada, clienteConoceCredenciales, riesgoCuentaSinCredenciales }`
 - **Denormalizado**: cada reparación trae el `equipoMarca/Modelo` y los datos del cliente, así el listado/tablero es autocontenido (no hace falta cruzar con otros endpoints).
 > **Privacidad:** `patronDesbloqueo`, `pinDesbloqueo` y `observaciones` se ven en la app (con token) pero **nunca** en el seguimiento público (§4.9).
 - `codigoSeguimiento`: código público para compartir con el cliente (ver §4.9).
@@ -262,6 +269,7 @@ ReparacionResponse: `{ ...campos de arriba..., numeroOrden, equipoMarca, equipoM
 - **`numeroOrden`**: correlativo por taller con reinicio anual (`ORD-2026-0042`). Útil para etiquetar/buscar el equipo en el estante. Inmutable.
 - **Flags de riesgo del ingreso**: `mojado`, `trabajoEnPlaca`, `noTesteableAlIngreso`, `tieneBloqueoPantalla`, `tieneCuentaVinculada` (`NINGUNA|ICLOUD|GOOGLE|OTRA`), `clienteConoceCredenciales`.
   - **`riesgoCuentaSinCredenciales`** (derivado, solo lectura): `true` cuando `tieneCuentaVinculada != NINGUNA` y `!clienteConoceCredenciales`. Mostrá una **bandera roja**: *"Riesgo: equipo con cuenta activa sin credenciales. Puede no poder entregarse activado."*
+- **`fechaConformidadEntrega`**: cuándo el cliente retiró conforme (anti-disputa). Se **sella automáticamente** al pasar la reparación a `ENTREGADO` (si no se mandó antes); también se puede setear a mano en el PUT.
 
 **Avisar al cliente por WhatsApp:** `GET /api/reparaciones/{id}/whatsapp` → `{ url, telefono, mensaje, linkSeguimiento }`.
 El front abre `url` (wa.me con mensaje prearmado que incluye el link de seguimiento). Útil al pasar a COMPLETADO.
@@ -627,6 +635,8 @@ export type EstadoReparacion =
   | "COMPLETADO" | "LISTO_SIN_REPARAR" | "ENTREGADO" | "ABANDONADO" | "CANCELADO";
 export type EstadoPago = "SIN_COBRAR" | "PARCIAL" | "PAGADO";
 export type CuentaVinculada = "NINGUNA" | "ICLOUD" | "GOOGLE" | "OTRA";
+export type MomentoFoto = "INGRESO" | "POST_REPARACION";
+export interface Foto { url: string; momento: MomentoFoto; }
 
 export interface AuthResponse { token: string; type: string; email: string; }
 export interface Suscripcion {
@@ -657,7 +667,8 @@ export interface Reparacion {
   clienteConoceCredenciales: boolean; riesgoCuentaSinCredenciales: boolean;
   patronDesbloqueo: string | null; pinDesbloqueo: string | null; accesorios: string | null;
   condicionesIngreso: string | null; observaciones: string | null;
-  tecnicoId: number | null; tecnicoNombre: string | null; fotos: string[];
+  tecnicoId: number | null; tecnicoNombre: string | null;
+  fotos: Foto[]; fechaConformidadEntrega: string | null;
 }
 export interface Repuesto { id: number; nombre: string; descripcion: string | null; precio: number; reparacionId: number | null; reparacionEquipo: string | null; articuloId: number | null; cantidad: number; }
 export type EstadoPresupuesto = "PENDIENTE" | "APROBADO" | "RECHAZADO" | "VENCIDO";

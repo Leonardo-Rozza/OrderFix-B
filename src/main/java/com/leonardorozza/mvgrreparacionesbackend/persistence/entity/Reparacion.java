@@ -112,9 +112,12 @@ public class Reparacion {
 
     @ElementCollection
     @CollectionTable(name = "reparacion_fotos", joinColumns = @JoinColumn(name = "reparacion_id"))
-    @Column(name = "url")
     @Builder.Default
-    private List<String> fotos = new ArrayList<>();
+    private List<FotoReparacion> fotos = new ArrayList<>();
+
+    /** Fecha/hora en que el cliente retiró conforme (registro anti-disputa, §8). */
+    @Column(name = "fecha_conformidad_entrega")
+    private LocalDateTime fechaConformidadEntrega;
 
     @ManyToOne(optional = false)
     @JoinColumn(name = "equipo_id", nullable = false)

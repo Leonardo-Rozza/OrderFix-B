@@ -87,7 +87,8 @@ ESPERANDO_ADICIONAL, NO_REPARABLE, COMPLETADO, LISTO_SIN_REPARAR, ENTREGADO, ABA
 `EstadoPresupuesto` (PENDIENTE, APROBADO, RECHAZADO, VENCIDO — derivado) · `TipoPresupuesto` (ORIGINAL,
 ADICIONAL) · `TipoItemPresupuesto` (MANO_DE_OBRA, REPUESTO) · `CalidadRepuesto` (ORIGINAL, ALTERNATIVO,
 USADO_REACONDICIONADO) · `MetodoPago` (EFECTIVO, TRANSFERENCIA, TARJETA,
-MERCADOPAGO, OTRO) · `UserRole` (ADMIN, USER) · `CuentaVinculada` (NINGUNA, ICLOUD, GOOGLE, OTRA — bloqueo de cuenta del equipo).
+MERCADOPAGO, OTRO) · `UserRole` (ADMIN, USER) · `CuentaVinculada` (NINGUNA, ICLOUD, GOOGLE, OTRA — bloqueo de cuenta del equipo) ·
+`MomentoFoto` (INGRESO, POST_REPARACION).
 
 ---
 
@@ -140,6 +141,7 @@ Códigos: `400` validación · `401` no autenticado · `402` límite/función PR
 | V11 | Contador de consumo mensual en la suscripción |
 | V12 | Ingreso enriquecido (flags de riesgo, bloqueo de cuenta) + número de orden por taller |
 | V13 | Presupuesto pro (tipo, validez/vencimiento, mano de obra vs repuesto + calidad) |
+| V14 | Fotos con momento (ingreso/post) + conformidad de entrega |
 
 ---
 
@@ -168,7 +170,7 @@ export JAVA_HOME=<ruta-a-un-JDK-21>
 ./mvnw test
 ```
 
-Suite de **47 tests** (integración MockMvc sobre el stack real + H2, y algunos unitarios puros). Los de flujo extienden
+Suite de **49 tests** (integración MockMvc sobre el stack real + H2, y algunos unitarios puros). Los de flujo extienden
 `support/IntegrationTestBase` (helpers de registro/login/PRO/JSON):
 - **Aplicación** — carga del contexto completo (H2).
 - **TenantIsolationTests** (3) — un taller no ve/borra clientes, equipos ni reparaciones de otro.
@@ -180,6 +182,7 @@ Suite de **47 tests** (integración MockMvc sobre el stack real + H2, y algunos 
 - **ReparacionDeleteTests** (2) — al borrar limpia presupuestos (cascade) y repone stock; bloquea si hay cobros.
 - **PresupuestoFlowTests** (2) — crear + aprobar/rechazar desde el link público.
 - **PresupuestoProTests** (3) — totales discriminados (mano de obra/repuesto + calidad), auto-estado, aprobación del taller, re-presupuestar y vencido.
+- **EntregaYFotosTests** (2) — fotos con momento (default INGRESO) y conformidad de entrega sellada al pasar a ENTREGADO.
 - **InventarioStockTests** (3) — descuento/reposición de stock, stock insuficiente (400), stock bajo + dashboard.
 - **CobroCajaReciboTests** (1) — cobros parciales, saldo, recibo y caja.
 - **PlanGatingTests** (3) — FREE → 402 en funciones PRO, mapa `funciones`, multi-empleado.
