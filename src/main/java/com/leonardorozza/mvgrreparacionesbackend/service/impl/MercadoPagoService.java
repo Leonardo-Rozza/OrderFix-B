@@ -223,14 +223,18 @@ public class MercadoPagoService {
 
     /**
      * Valida la firma del webhook de MercadoPago (header x-signature) usando HMAC-SHA256.
-     * Devuelve true si la firma es válida. Si no hay webhookSecret configurado, NO valida
-     * (devuelve true) y deja un warning — cómodo en dev; en prod conviene setear el secreto.
+     * Devuelve true si la firma es válida. Sin webhookSecret configurado: si MercadoPago
+     * está deshabilitado el webhook es un no-op y se tolera; si está habilitado se rechaza
+     * (fail-closed) — con la integración activa el secreto es obligatorio.
      */
     public boolean firmaWebhookValida(String dataId, String xSignature, String xRequestId) {
         String secret = props.getWebhookSecret();
         if (secret == null || secret.isBlank()) {
-            log.warn("Webhook MP sin clave secreta configurada: la firma NO se valida (seteá mercadopago.webhook-secret en prod).");
-            return true;
+            if (!props.isEnabled()) {
+                return true;
+            }
+            log.warn("Webhook MP rechazado: mercadopago.enabled=true sin webhook-secret. Seteá MP_WEBHOOK_SECRET.");
+            return false;
         }
         if (xSignature == null || xSignature.isBlank()) {
             log.warn("Webhook MP rechazado: falta el header x-signature.");

@@ -28,8 +28,13 @@ class MercadoPagoSignatureTests {
     }
 
     private MercadoPagoService service(String secret) {
+        return service(secret, false);
+    }
+
+    private MercadoPagoService service(String secret, boolean enabled) {
         MercadoPagoProperties props = new MercadoPagoProperties();
         props.setWebhookSecret(secret);
+        props.setEnabled(enabled);
         return new MercadoPagoService(props, null, null, null);
     }
 
@@ -57,8 +62,16 @@ class MercadoPagoSignatureTests {
     }
 
     @Test
-    void sinSecretoConfiguradoNoSeValida() {
-        MercadoPagoService svc = service(null); // webhookSecret no configurado
+    void sinSecretoConMpDeshabilitadoSeTolera() {
+        // MP apagado: el webhook es un no-op, no hay nada que proteger
+        MercadoPagoService svc = service(null, false);
         assertThat(svc.firmaWebhookValida("abc123", "cualquier-cosa", "req-1")).isTrue();
+    }
+
+    @Test
+    void sinSecretoConMpHabilitadoSeRechaza() {
+        // Fail-closed: integración activa sin secreto no acepta webhooks
+        MercadoPagoService svc = service(null, true);
+        assertThat(svc.firmaWebhookValida("abc123", "cualquier-cosa", "req-1")).isFalse();
     }
 }

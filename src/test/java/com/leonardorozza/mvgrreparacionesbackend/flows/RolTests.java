@@ -54,4 +54,22 @@ class RolTests extends IntegrationTestBase {
                 .content(json(Map.of("email", "rol2-emp@test.com", "password", "secret123"))))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void empleadoDesactivadoPierdeAccesoConTokenViejo() throws Exception {
+        String admin = registrar("Taller Rol3", "rol3-admin@test.com");
+        activarPro(admin);
+        long empId = idOf(authPost("/api/usuarios", admin, json(Map.of(
+                "username", "Emp3", "email", "rol3-emp@test.com", "password", "secret123")))
+                .andExpect(status().isCreated()));
+        String emp = login("rol3-emp@test.com", "secret123");
+
+        // Con el token vigente el empleado opera normal
+        authGet("/api/clientes", emp).andExpect(status().isOk());
+
+        // Lo desactivan: el token ya emitido deja de servir al instante
+        authPatch("/api/usuarios/" + empId, admin, json(Map.of("active", false)))
+                .andExpect(status().isOk());
+        authGet("/api/clientes", emp).andExpect(status().isForbidden());
+    }
 }

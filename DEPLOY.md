@@ -26,7 +26,7 @@ Todas se configuran en el panel del hosting (o en `application-secret.properties
 | `LOG_LEVEL` | ⬜ | `INFO` | `DEBUG` para depurar |
 | `MP_ENABLED` | ⬜ | `false` | `true` para activar MercadoPago |
 | `MP_ACCESS_TOKEN` | ⬜ | `APP_USR-...` | Token de MercadoPago |
-| `MP_WEBHOOK_SECRET` | ⬜ | (del panel MP) | Valida la firma del webhook |
+| `MP_WEBHOOK_SECRET` | ✅ si `MP_ENABLED=true` | (del panel MP) | Valida la firma del webhook. Con MP activo y sin secreto, el webhook rechaza todo (fail-closed) |
 | `MP_AMOUNT` / `MP_CURRENCY` / `MP_BACK_URL` | ⬜ | `4999` / `ARS` / URL del front | Config del checkout PRO |
 | `plan.free.max-reparaciones-mes` | ⬜ | `50` | Tope mensual del plan FREE |
 
