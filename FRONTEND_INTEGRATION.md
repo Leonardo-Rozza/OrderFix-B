@@ -5,6 +5,36 @@ Copiá este archivo al repo del frontend (o usalo como referencia para Claude Co
 
 ---
 
+## ⚡ Novedades de esta versión (para actualizar un front existente)
+
+Si venís de una versión anterior del contrato, esto es lo que cambió / se agregó:
+
+1. **⚠️ BREAKING — Fotos**: el campo `fotos` de reparación pasó de `string[]` a
+   `{ url, momento }[]` con `momento: "INGRESO" | "POST_REPARACION"` (§4.5).
+2. **Máquina de estados**: `EstadoReparacion` ahora tiene **12 estados** y el backend valida las
+   transiciones → un salto ilegal en `PATCH /estado` devuelve **`409`**. El front debería ofrecer
+   solo los estados legales según la tabla de transiciones (§4.5).
+3. **Estado de pago** en cada reparación: `cobrado`, `saldo` y `estadoPago`
+   (`SIN_COBRAR | PARCIAL | PAGADO`) — mostrar como chip aparte del estado (§4.5).
+4. **Ingreso enriquecido**: flags de riesgo (`mojado`, `trabajoEnPlaca`, `noTesteableAlIngreso`),
+   bloqueo de cuenta (`tieneCuentaVinculada`, `clienteConoceCredenciales`) y la bandera roja
+   derivada **`riesgoCuentaSinCredenciales`** (§4.5). Nuevo **`numeroOrden`** (`ORD-2026-0042`,
+   lo genera el backend, solo lectura).
+5. **Presupuestos pro** (§4.11): ítems con `tipoItem` (`MANO_DE_OBRA|REPUESTO`) y `calidad`,
+   `tipo` (`ORIGINAL|ADICIONAL`), validez con estado **`VENCIDO`** derivado, re-presupuestar,
+   aprobar/rechazar desde el taller, y auto-estado de la reparación.
+6. **Conformidad de entrega**: `fechaConformidadEntrega` se sella sola al pasar a `ENTREGADO` (§4.5).
+7. **Garantía** (§4.5): `garantiaDias/Inicio/Fin/Condiciones`, `garantiaVigente` derivado, y
+   **reclamo en garantía** `POST /api/reparaciones/{id}/garantia` (crea reparación vinculada,
+   no consume cupo FREE). En la ficha de una reparación entregada, si `garantiaVigente`,
+   ofrecé el botón "Reclamo en garantía".
+8. **Seguridad**: un usuario desactivado pierde acceso **al instante** (su token viejo deja de
+   servir → `403`); manejalo igual que un 401 (logout).
+
+Los tipos TS de §7 ya reflejan todo esto.
+
+---
+
 ## 1. Qué es OrdenFix
 
 SaaS para **talleres de reparación de tecnología** (celulares y dispositivos). Multi-empresa
@@ -464,7 +494,8 @@ CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se 
 > **PRO**: el plan FREE permite **1 usuario** (el dueño). Agregar empleados requiere PRO → si no, `402`. Ver `funciones.empleadosMultiples` en §4.2.
 UsuarioResponse: `{ id, username, email, role, active }`.
 
-- Un usuario **desactivado** (`active:false`) no puede loguear (`401`).
+- Un usuario **desactivado** (`active:false`) no puede loguear (`401`) y sus tokens ya emitidos
+  **dejan de funcionar al instante** (las requests pasan a dar `403`).
 - Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
 - `400` si el email ya está en uso.
 
@@ -574,7 +605,7 @@ Sin params = **hoy**. Devuelve `{ desde, hasta, totalCobrado, cantidad, porMetod
 | 402 | **Límite del plan / suscripción no vigente** | Modal "Pasá a PRO" con el `message` |
 | 403 | Falta token o sin permiso | Logout o "sin permisos" |
 | 404 | No encontrado (o recurso de otro taller) | "No existe" |
-| 409 | Conflicto de unicidad (al actualizar) | Mostrar `message` |
+| 409 | Conflicto: unicidad (al actualizar) o **transición de estado ilegal** (§4.5) | Mostrar `message` |
 | 500 | Error interno (mensaje genérico) | Toast genérico "Intentá más tarde" |
 | 502 | Falló el proveedor de pagos (MercadoPago) | Toast "No pudimos iniciar el pago, probá de nuevo" |
 
@@ -746,7 +777,10 @@ window.location.href = data.initPoint;
 - **MercadoPago**: checkout de suscripción PRO (`POST /api/pagos/suscripcion`) + **cancelación**
   (`/cancelar`) + webhook con **firma validada**. *(Requiere Access Token y webhook-secret; ver §10.)*
 - **Carga rápida** de reparación (§4.5), **total** de reparación (mano de obra + repuestos).
-- **Orden de trabajo ampliada**: checklist de ingreso (patrón/PIN, accesorios, condiciones), técnico asignado, observaciones internas y fotos.
+- **Máquina de estados** (12 estados, transición ilegal → 409) y **estado de pago** derivado (cobrado/saldo/estadoPago).
+- **Orden de trabajo ampliada**: checklist de ingreso (patrón/PIN, accesorios, condiciones), técnico asignado, observaciones internas y **fotos con momento** (INGRESO/POST_REPARACION).
+- **Ingreso enriquecido**: flags de riesgo, bloqueo de cuenta (iCloud/FRP) con bandera roja, y `numeroOrden` correlativo por taller.
+- **Conformidad de entrega** (sellada al ENTREGADO) y **garantía** (default 90 días) con **reclamo en garantía** que no consume cupo.
 - **Paginación + búsqueda** en todos los listados (§4.2.bis).
 - **Roles ADMIN/USER** (borrados y suscripción solo ADMIN) y **gestión de empleados** (§4.10).
 - **Dashboard** (§4.8), **seguimiento público** + **link de WhatsApp** (§4.9).
@@ -759,9 +793,9 @@ window.location.href = data.initPoint;
 
 **Próximo (ideas a futuro):**
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
-- Proveedores en inventario, reportes avanzados, verificación de email en el registro.
-- **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
-- **Reportes** avanzados.
+- Cargo por diagnóstico y seña/anticipo; recordatorio de retiro + ABANDONADO automático.
+- Inventario fino (catálogo por modelo/SKU, orden a proveedor con ETA) y **reportes** (tiempo de ciclo, margen).
+- Verificación de email en el registro; auditoría de eventos.
 
 ---
 
@@ -774,7 +808,7 @@ sin tocar nada. Para operar pagos en vivo, definí estas variables de entorno (o
 |----------|---------|-------------|
 | `MP_ENABLED` | `false` | `true` para activar las llamadas a MercadoPago |
 | `MP_ACCESS_TOKEN` | *(vacío)* | Access Token de MercadoPago (las de prueba también empiezan con `APP_USR-`) |
-| `MP_WEBHOOK_SECRET` | *(vacío)* | Clave secreta del webhook (panel MP → Webhooks). Si está vacía, **no se valida la firma** (solo dev). En prod, obligatoria. |
+| `MP_WEBHOOK_SECRET` | *(vacío)* | Clave secreta del webhook (panel MP → Webhooks). **Obligatoria si `MP_ENABLED=true`**: con MP activo y sin secreto, el webhook rechaza todo (fail-closed). |
 | `MP_AMOUNT` | `4999` | Monto mensual de la suscripción PRO |
 | `MP_CURRENCY` | `ARS` | Moneda |
 | `MP_REASON` | `OrdenFix PRO - Suscripción mensual` | Texto que ve el usuario en el checkout |
@@ -789,4 +823,3 @@ configurar los probes de readiness/liveness en Render/Railway. No expone otros e
 
 > Diseñá la navegación contemplando estas secciones futuras (Dashboard, Caja, Inventario, Reportes)
 > para no rehacer el layout más adelante.
-```
