@@ -14,8 +14,8 @@ RUN mvn -q -DskipTests dependency:go-offline
 # Copiar el código fuente
 COPY src ./src
 
-# Compilar
-RUN mvn -q -DskipTests package
+# Compilar (los tests corren en CI/local, no en el build de la imagen)
+RUN mvn -q -DskipTests -Dmaven.test.skip=true package
 
 # ============================
 #        RUN STAGE
@@ -26,6 +26,12 @@ WORKDIR /app
 
 COPY --from=build /app/target/*.jar app.jar
 
+# Correr sin privilegios
+RUN useradd --system --no-create-home appuser
+USER appuser
+
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# MaxRAMPercentage=75: en una instancia de 512 MB el default de la JVM (25%)
+# deja un heap de ~128 MB, demasiado chico para Spring Boot.
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]

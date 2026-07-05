@@ -44,7 +44,7 @@ Creá la base y copiá la cadena de conexión en formato JDBC:
 `jdbc:postgresql://<host>:<port>/<database>?sslmode=require` (Neon/Supabase requieren SSL).
 Usuario y password van en `DB_USERNAME` / `DB_PASSWORD`.
 
-> No hace falta crear tablas: **Flyway** las crea solas (migraciones V1…V10) en el primer arranque.
+> No hace falta crear tablas: **Flyway** las crea solas (migraciones V1…V15) en el primer arranque.
 
 ---
 

@@ -1,0 +1,16 @@
+target/
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+*.log
+.mvn/wrapper/maven-wrapper.jar
+mvnw
+mvnw.cmd
+Dockerfile
+.dockerignore
+*.md
+src/test/
+application-secret.properties
+**/application-secret.properties

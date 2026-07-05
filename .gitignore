@@ -166,7 +166,6 @@ application-local.yml
 *.keystore
 
 ### Docker ###
-.dockerignore
 docker-compose.override.yml
 .docker/
 
