@@ -36,6 +36,7 @@ public class RegistroService {
     private final UserDetailsServiceImpl userDetailsService;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
+    private final CuentaService cuentaService;
 
     @Value("${plan.trial-dias:14}")
     private int trialDias;
@@ -70,21 +71,25 @@ public class RegistroService {
         );
 
         // 3) Usuario administrador del taller
-        userRepository.save(
+        User admin = userRepository.save(
                 User.builder()
                         .username(request.nombreAdmin())
                         .password(passwordEncoder.encode(request.password()))
                         .email(request.email())
                         .role(UserRole.ADMIN)
                         .active(true)
+                        .emailVerificado(false)
                         .taller(taller)
                         .build()
         );
 
-        // 4) Auto-login: emitimos el token con el taller recién creado
+        // 4) Email de bienvenida + verificación (si falla el envío, el registro sigue igual)
+        cuentaService.enviarVerificacion(admin);
+
+        // 5) Auto-login: emitimos el token con el taller recién creado
         UserDetails userDetails = userDetailsService.loadUserByUsername(request.email());
         String token = jwtUtils.generateToken(userDetails, taller.getId());
 
-        return new AuthResponseDto(token, "Bearer", request.email());
+        return new AuthResponseDto(token, "Bearer", request.email(), false);
     }
 }

@@ -32,6 +32,11 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
    servir → `403`); manejalo igual que un 401 (logout).
 9. **Exportar datos**: `GET /api/export/excel` (solo ADMIN, todos los planes) descarga un `.xlsx`
    con clientes, órdenes, cobros y presupuestos del taller (§4.14).
+10. **Cuentas por email** (§4.1): login/register ahora devuelven **`emailVerificado`** (mostrar
+    banner "Confirmá tu email" si es `false` — puede operar igual). Nuevas pantallas:
+    **olvidé mi contraseña** (`/password/olvide` + `/password/reset`) y **verificación de email**
+    (`/verificar-email` + `/verificar-email/reenviar`). El front necesita las rutas
+    `/reset-password?token=...` y `/verificar-email?token=...` (ahí llegan los links del email).
 
 Los tipos TS de §7 ya reflejan todo esto.
 
@@ -111,9 +116,10 @@ Request:
 ```
 Respuesta `201`:
 ```json
-{ "token": "eyJ...", "type": "Bearer", "email": "juan@celexpress.com" }
+{ "token": "eyJ...", "type": "Bearer", "email": "juan@celexpress.com", "emailVerificado": false }
 ```
 Errores: `400` (email ya registrado o validación).
+> Además manda el email de bienvenida con el link de verificación (ver más abajo).
 
 #### `POST /api/auth/login`
 Request:
@@ -122,9 +128,34 @@ Request:
 ```
 Respuesta `200`:
 ```json
-{ "token": "eyJ...", "type": "Bearer", "email": "juan@celexpress.com" }
+{ "token": "eyJ...", "type": "Bearer", "email": "juan@celexpress.com", "emailVerificado": true }
 ```
 Errores: `401` (email o contraseña incorrectos).
+
+> **`emailVerificado`** también viene en el register (siempre `false` ahí). Si es `false`,
+> mostrá un banner "Confirmá tu email (revisá tu casilla)" con botón de reenviar — el usuario
+> **puede operar igual** (verificación suave).
+
+#### Olvidé mi contraseña — `POST /api/auth/password/olvide` / `POST /api/auth/password/reset`
+
+1. `POST /api/auth/password/olvide` con `{ "email": "..." }` → **siempre `200`** (no revela si
+   el email existe). Si existe, le llega un email con un link a `{front}/reset-password?token=...`
+   (el token vence en **1 hora**).
+2. En esa pantalla del front, pedís la contraseña nueva y mandás
+   `POST /api/auth/password/reset` con `{ "token": "...", "nuevaPassword": "..." }` → `200`.
+   El token es de **un solo uso**; inválido/vencido/usado → `400` ("El link no es válido o ya venció").
+3. Pedir un link nuevo invalida el anterior.
+
+#### Verificación de email — `POST /api/auth/verificar-email` (+ `/reenviar`)
+
+- Al registrarse, llega un email de bienvenida con link a `{front}/verificar-email?token=...` (vence en 48 h).
+- En esa pantalla el front manda `POST /api/auth/verificar-email` con `{ "token": "..." }` → `200`
+  (inválido/vencido → `400`).
+- `POST /api/auth/verificar-email/reenviar` con `{ "email": "..." }` → siempre `200` (reenvía solo
+  si la cuenta existe y no está verificada).
+
+> **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
+> de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
 
 ---
 
@@ -702,7 +733,7 @@ export type CuentaVinculada = "NINGUNA" | "ICLOUD" | "GOOGLE" | "OTRA";
 export type MomentoFoto = "INGRESO" | "POST_REPARACION";
 export interface Foto { url: string; momento: MomentoFoto; }
 
-export interface AuthResponse { token: string; type: string; email: string; }
+export interface AuthResponse { token: string; type: string; email: string; emailVerificado: boolean; }
 export interface Suscripcion {
   plan: Plan; estado: EstadoSuscripcion;
   fechaInicio: string | null; fechaFinTrial: string | null; proximoCobro: string | null;
@@ -799,6 +830,7 @@ window.location.href = data.initPoint;
 
 **Listo y funcionando:**
 - Auth (registro + login por email), JWT con tenant.
+- **Recuperación de contraseña** por email y **verificación de email** suave (§4.1) — emails vía Resend.
 - Multi-tenancy con aislamiento total por taller.
 - CRUD de Clientes, Equipos, Reparaciones, Repuestos.
 - Suscripciones freemium (FREE/PRO) con límite mensual y gating 402.
@@ -824,7 +856,7 @@ window.location.href = data.initPoint;
 - **WhatsApp Business API** (envío automático real; hoy es link wa.me manual).
 - Cargo por diagnóstico y seña/anticipo; recordatorio de retiro + ABANDONADO automático.
 - Inventario fino (catálogo por modelo/SKU, orden a proveedor con ETA) y **reportes** (tiempo de ciclo, margen).
-- Verificación de email en el registro; auditoría de eventos.
+- Login con Google; auditoría de eventos.
 
 ---
 

@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.AuthResponseDto;
 import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -20,7 +21,7 @@ public class AuthService {
     private final JwtUtils jwtUtils;
     private final UserRepository userRepository;
 
-    public String login(String email, String password) {
+    public AuthResponseDto login(String email, String password) {
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(email, password)
         );
@@ -33,7 +34,8 @@ public class AuthService {
 
         Long tallerId = user.getTaller() != null ? user.getTaller().getId() : null;
 
-        return jwtUtils.generateToken(userDetails, tallerId);
+        String token = jwtUtils.generateToken(userDetails, tallerId);
+        return new AuthResponseDto(token, "Bearer", email, Boolean.TRUE.equals(user.getEmailVerificado()));
     }
 }
 

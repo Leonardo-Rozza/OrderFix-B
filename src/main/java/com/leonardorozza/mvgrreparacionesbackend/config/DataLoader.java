@@ -73,6 +73,7 @@ public class DataLoader implements CommandLineRunner {
                         .email(email)
                         .role(UserRole.ADMIN)
                         .active(true)
+                        .emailVerificado(true)
                         .taller(taller)
                         .build()
         );

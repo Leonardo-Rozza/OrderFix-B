@@ -49,6 +49,8 @@ public class UsuarioService {
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole() != null ? request.getRole() : UserRole.USER)
                 .active(true)
+                // Lo da de alta el ADMIN del taller: el email viene "avalado", no se verifica
+                .emailVerificado(true)
                 .taller(tenantService.currentTallerRef())
                 .build();
 

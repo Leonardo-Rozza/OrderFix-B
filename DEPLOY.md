@@ -28,6 +28,9 @@ Todas se configuran en el panel del hosting (o en `application-secret.properties
 | `MP_ACCESS_TOKEN` | ⬜ | `APP_USR-...` | Token de MercadoPago |
 | `MP_WEBHOOK_SECRET` | ✅ si `MP_ENABLED=true` | (del panel MP) | Valida la firma del webhook. Con MP activo y sin secreto, el webhook rechaza todo (fail-closed) |
 | `MP_AMOUNT` / `MP_CURRENCY` / `MP_BACK_URL` | ⬜ | `4999` / `ARS` / URL del front | Config del checkout PRO |
+| `MAIL_ENABLED` | ⬜ | `false` | `true` para mandar emails reales (reset de contraseña, verificación). En `false` se loguean |
+| `MAIL_PASSWORD` | ✅ si `MAIL_ENABLED=true` | `re_...` (API key de Resend) | SMTP de Resend (host/usuario ya vienen con default) |
+| `MAIL_FROM` | ⬜ | `OrdenFix <no-reply@tudominio.com>` | Remitente. Sin dominio verificado en Resend: `onboarding@resend.dev` (solo manda a tu propio email) |
 | `plan.free.max-reparaciones-mes` | ⬜ | `50` | Tope mensual del plan FREE |
 
 > **Importante:** Java necesita ~512 MB de RAM. Evitá instancias de 256 MB.

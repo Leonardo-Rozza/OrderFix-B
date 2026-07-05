@@ -36,6 +36,11 @@ public class User {
     @Builder.Default
     private Boolean active = true;
 
+    /** Confirmó su email (verificación suave: sin confirmar puede operar igual). */
+    @Column(name = "email_verificado", nullable = false)
+    @Builder.Default
+    private Boolean emailVerificado = false;
+
     // Tenant al que pertenece el usuario
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "taller_id")

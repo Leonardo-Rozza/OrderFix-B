@@ -42,6 +42,10 @@ public abstract class IntegrationTestBase {
     @Autowired
     protected SuscripcionRepository suscripcionRepository;
 
+    /** Captura los emails "enviados" (reemplaza al SMTP real vía @Primary). */
+    @Autowired
+    protected RecordingEmailSender emails;
+
     protected MockMvc mvc;
 
     protected final ObjectMapper om = new ObjectMapper();
