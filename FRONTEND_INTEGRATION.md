@@ -30,6 +30,8 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
    ofrecé el botón "Reclamo en garantía".
 8. **Seguridad**: un usuario desactivado pierde acceso **al instante** (su token viejo deja de
    servir → `403`); manejalo igual que un 401 (logout).
+9. **Exportar datos**: `GET /api/export/excel` (solo ADMIN, todos los planes) descarga un `.xlsx`
+   con clientes, órdenes, cobros y presupuestos del taller (§4.14).
 
 Los tipos TS de §7 ya reflejan todo esto.
 
@@ -586,6 +588,32 @@ Sin params = **hoy**. Devuelve `{ desde, hasta, totalCobrado, cantidad, porMetod
 
 ---
 
+### 4.14 Exportar datos — solo ADMIN  (`/api/export`)
+
+El dueño del taller se descarga **todos sus datos** en un Excel (disponible en todos los planes).
+
+| Método | Ruta | Resp |
+|--------|------|------|
+| GET | `/api/export/excel` | `200` archivo `.xlsx` (binario) |
+
+- Devuelve un `.xlsx` con 4 hojas: **Clientes**, **Órdenes** (estado, técnico, total/cobrado/saldo, estado de pago, garantía), **Cobros** y **Presupuestos**.
+- Responde con `Content-Disposition: attachment; filename="ordenfix-export-YYYY-MM-DD.xlsx"`.
+- En el front: pedirlo con `responseType: 'blob'` (Axios) y disparar la descarga:
+
+```ts
+const { data } = await api.get('/api/export/excel', { responseType: 'blob' });
+const url = URL.createObjectURL(data);
+const a = document.createElement('a');
+a.href = url;
+a.download = `ordenfix-export-${new Date().toISOString().slice(0, 10)}.xlsx`;
+a.click();
+URL.revokeObjectURL(url);
+```
+
+- Empleado con rol USER → `403`. Botón sugerido: "Exportar mis datos" en Configuración.
+
+---
+
 ## 5. Formato de error (todos los endpoints)
 
 ```json
@@ -787,6 +815,7 @@ window.location.href = data.initPoint;
 - **Presupuestos** con aprobación del cliente desde el link público (§4.11).
 - **Inventario** con stock, ajustes, descuento automático y aviso de stock bajo (§4.12).
 - **Cobros / Caja / Recibo** (§4.13): pagos parciales, saldo, caja por período y recibo imprimible.
+- **Exportación a Excel** (§4.14): el ADMIN descarga todos los datos del taller en un `.xlsx`.
 - **Gating por plan**: inventario, cobros/caja y multi-empleado son PRO (402 + mapa `funciones` en §4.2). Dashboard es FREE.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.

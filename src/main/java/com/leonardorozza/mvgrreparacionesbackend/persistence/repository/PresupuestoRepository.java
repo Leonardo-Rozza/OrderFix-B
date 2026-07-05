@@ -19,4 +19,6 @@ public interface PresupuestoRepository extends JpaRepository<Presupuesto, Long> 
 
     Optional<Presupuesto> findFirstByReparacionIdAndEstadoOrderByCreatedAtDesc(
             Long reparacionId, EstadoPresupuesto estado);
+
+    List<Presupuesto> findAllByTallerIdOrderByIdAsc(Long tallerId);
 }

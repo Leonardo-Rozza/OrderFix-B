@@ -28,4 +28,6 @@ public interface CobroRepository extends JpaRepository<Cobro, Long> {
     List<Object[]> sumByReparacionIds(@Param("ids") List<Long> ids);
 
     List<Cobro> findByTallerIdAndCreatedAtBetween(Long tallerId, LocalDateTime desde, LocalDateTime hasta);
+
+    List<Cobro> findAllByTallerIdOrderByIdAsc(Long tallerId);
 }
