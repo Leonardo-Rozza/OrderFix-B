@@ -11,6 +11,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRe
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -40,7 +41,7 @@ public class DataLoader implements CommandLineRunner {
 
     @Override
     @Transactional
-    public void run(String... args) {
+    public void run(String @NonNull ... args) {
 
         if (userRepository.count() > 0) {
             return;
