@@ -231,3 +231,5 @@ generated-test-sources/
 .sass-cache/
 connect.lock
 typings/
+FRONTEND_INTEGRATION.md
+DEPLOY.md
