@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
@@ -99,8 +100,14 @@ public class ClienteServiceImpl implements ClienteService {
 
     @Override
     public void eliminar(Long id) {
-        Cliente cliente = clienteRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
+        Long tallerId = tenantService.currentTallerId();
+        Cliente cliente = clienteRepository.findByIdAndTallerId(id, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cliente no encontrado"));
+
+        if (equipoRepository.existsByClienteIdAndTallerId(id, tallerId)) {
+            throw new ConflictException(
+                    "No se puede eliminar el cliente porque tiene equipos asociados.");
+        }
 
         clienteRepository.delete(cliente);
     }

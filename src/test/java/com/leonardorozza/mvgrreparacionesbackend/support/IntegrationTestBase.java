@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.support;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,9 +84,16 @@ public abstract class IntegrationTestBase {
 
     /** Sube el taller (dueño del token) a plan PRO, para probar funciones PRO. */
     protected void activarPro(String token) throws Exception {
+        configurarSuscripcion(token, PlanType.PRO, EstadoSuscripcion.ACTIVA);
+    }
+
+    /** Configura explícitamente plan y estado para probar la matriz de entitlement. */
+    protected void configurarSuscripcion(
+            String token, PlanType plan, EstadoSuscripcion estado) throws Exception {
         long tallerId = tallerIdFromToken(token);
         Suscripcion s = suscripcionRepository.findByTallerId(tallerId).orElseThrow();
-        s.setPlan(PlanType.PRO);
+        s.setPlan(plan);
+        s.setEstado(estado);
         suscripcionRepository.save(s);
     }
 

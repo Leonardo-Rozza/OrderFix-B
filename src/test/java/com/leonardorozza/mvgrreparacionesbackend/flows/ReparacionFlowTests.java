@@ -89,7 +89,6 @@ class ReparacionFlowTests extends IntegrationTestBase {
         Map<String, Object> put = Map.of(
                 "equipoId", equipoId,
                 "descripcionProblema", "no carga",
-                "patronDesbloqueo", "L invertida",
                 "accesorios", "cargador, SIM",
                 "observaciones", "interno",
                 "fotos", List.of(
@@ -97,7 +96,6 @@ class ReparacionFlowTests extends IntegrationTestBase {
                         Map.of("url", "https://cdn/2.jpg", "momento", "POST_REPARACION")));
 
         JsonNode upd = node(authPut("/api/reparaciones/" + repId, t, json(put)).andExpect(status().isOk()));
-        assertThat(upd.get("patronDesbloqueo").asText()).isEqualTo("L invertida");
         assertThat(upd.get("accesorios").asText()).isEqualTo("cargador, SIM");
         assertThat(upd.get("fotos")).hasSize(2);
         assertThat(upd.get("fotos").get(0).get("url").asText()).isEqualTo("https://cdn/1.jpg");

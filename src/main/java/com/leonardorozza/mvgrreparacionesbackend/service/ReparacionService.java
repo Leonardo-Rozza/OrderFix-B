@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.Estado
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionDetalleResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.WhatsappLinkDTO;
@@ -29,7 +30,7 @@ public interface ReparacionService {
 
         ReparacionResponseDTO cambiarEstado(Long id, EstadoReparacion nuevoEstado);
 
-        ReparacionResponseDTO obtenerPorId(Long id);
+        ReparacionDetalleResponseDTO obtenerPorId(Long id);
 
         Page<ReparacionResponseDTO> listar(String q, EstadoReparacion estado, Pageable pageable);
 

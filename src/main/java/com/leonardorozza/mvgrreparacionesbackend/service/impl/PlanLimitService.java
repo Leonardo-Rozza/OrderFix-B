@@ -3,7 +3,6 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PlanLimitException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,10 +10,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.YearMonth;
+import java.time.Clock;
 
 /**
  * Hace cumplir los límites del plan del taller (freemium).
- * FREE/TRIAL: tope mensual de reparaciones. PRO: ilimitado.
+ * FREE+ACTIVA: tope mensual de reparaciones. TRIAL y PRO+ACTIVA: ilimitado.
  * Suscripción VENCIDA/CANCELADA: bloquea la escritura.
  *
  * El consumo se lleva con un contador mensual en la suscripción ({@code consumoMes}/{@code reparacionesMes})
@@ -25,6 +25,8 @@ import java.time.YearMonth;
 public class PlanLimitService {
 
     private final SuscripcionRepository suscripcionRepository;
+    private final SubscriptionEntitlementPolicy entitlementPolicy;
+    private final Clock clock;
 
     @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
@@ -45,14 +47,14 @@ public class PlanLimitService {
         }
 
         // Reinicio del contador al cambiar de mes
-        String mesActual = YearMonth.now().toString(); // "2026-06"
+        String mesActual = YearMonth.now(clock).toString(); // "2026-06"
         if (!mesActual.equals(suscripcion.getConsumoMes())) {
             suscripcion.setConsumoMes(mesActual);
             suscripcion.setReparacionesMes(0);
         }
 
-        // FREE / TRIAL → tope mensual (PRO no tiene límite)
-        if (suscripcion.getPlan() != PlanType.PRO
+        // Solo FREE activo tiene tope: TRIAL y PRO+ACTIVA cuentan con entitlement PRO.
+        if (!entitlementPolicy.tieneAccesoPro(suscripcion.getPlan(), suscripcion.getEstado())
                 && suscripcion.getReparacionesMes() >= freeMaxReparacionesMes) {
             throw new PlanLimitException(
                     "Alcanzaste el límite de " + freeMaxReparacionesMes

@@ -26,9 +26,11 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.FotoDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionDetalleResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.WhatsappLinkDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.security.DeviceCredentialCipher;
 import com.leonardorozza.mvgrreparacionesbackend.utils.mapper.ReparacionMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -63,6 +65,7 @@ public class ReparacionServiceImpl implements ReparacionService {
     private final ReparacionMapper reparacionMapper;
     private final TenantService tenantService;
     private final PlanLimitService planLimitService;
+    private final DeviceCredentialCipher deviceCredentialCipher;
 
     @Value("${app.public-url:http://localhost:5173}")
     private String publicUrl;
@@ -104,7 +107,9 @@ public class ReparacionServiceImpl implements ReparacionService {
         reparacion.getFotos().addAll(mapFotos(request.getFotos()));
         reparacion.setCodigoSeguimiento(generarCodigoSeguimiento());
 
+        procesarEntrega(reparacion);
         Reparacion guardada = reparacionRepository.save(reparacion);
+        actualizarCredenciales(guardada, request, false);
 
         return toDtoConPago(guardada);
     }
@@ -209,8 +214,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         reparacion.setFechaEntrega(request.getFechaEntrega());
 
         // Orden de trabajo ampliada
-        reparacion.setPatronDesbloqueo(request.getPatronDesbloqueo());
-        reparacion.setPinDesbloqueo(request.getPinDesbloqueo());
+        actualizarCredenciales(reparacion, request, true);
         reparacion.setAccesorios(request.getAccesorios());
         reparacion.setCondicionesIngreso(request.getCondicionesIngreso());
         reparacion.setObservaciones(request.getObservaciones());
@@ -261,12 +265,12 @@ public class ReparacionServiceImpl implements ReparacionService {
 
     @Override
     @Transactional(readOnly = true)
-    public ReparacionResponseDTO obtenerPorId(Long id) {
+    public ReparacionDetalleResponseDTO obtenerPorId(Long id) {
         Reparacion reparacion = reparacionRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
-        return toDtoConPago(reparacion);
+        return toDetalleDtoConPago(reparacion);
     }
 
     @Override
@@ -312,6 +316,19 @@ public class ReparacionServiceImpl implements ReparacionService {
         return dto;
     }
 
+    /** Descifra exclusivamente para el detalle autenticado y tenant-safe. */
+    private ReparacionDetalleResponseDTO toDetalleDtoConPago(Reparacion entity) {
+        ReparacionDetalleResponseDTO dto = reparacionMapper.toDetalleDTO(entity);
+        aplicarPago(dto, cobroRepository.sumByReparacionId(entity.getId()));
+        if (entity.getEstado() != EstadoReparacion.ENTREGADO) {
+            dto.setPatronDesbloqueo(deviceCredentialCipher.decryptPattern(
+                    entity.getPatronDesbloqueoCifrado(), entity.getId()));
+            dto.setPinDesbloqueo(deviceCredentialCipher.decryptPin(
+                    entity.getPinDesbloqueoCifrado(), entity.getId()));
+        }
+        return dto;
+    }
+
     private void aplicarPago(ReparacionResponseDTO dto, BigDecimal cobrado) {
         BigDecimal total = dto.getTotal() != null ? dto.getTotal() : BigDecimal.ZERO;
         BigDecimal c = cobrado != null ? cobrado : BigDecimal.ZERO;
@@ -340,6 +357,38 @@ public class ReparacionServiceImpl implements ReparacionService {
             return BigDecimal.ZERO;
         }
         return value instanceof BigDecimal b ? b : new BigDecimal(value.toString());
+    }
+
+    /**
+     * En alta, null significa ausencia. En actualización, null conserva el valor
+     * actual para no obligar al cliente a reenviar secretos; cadena vacía lo borra.
+     */
+    private void actualizarCredenciales(
+            Reparacion reparacion, ReparacionRequestDTO request, boolean conservarSiOmitida) {
+        if (reparacion.getEstado() == EstadoReparacion.ENTREGADO) {
+            reparacion.setPatronDesbloqueoCifrado(null);
+            reparacion.setPinDesbloqueoCifrado(null);
+            reparacion.setCredencialesCifradoVersion((short) 1);
+            return;
+        }
+        if (!conservarSiOmitida || request.getPatronDesbloqueo() != null) {
+            String pattern = normalizarCredencial(request.getPatronDesbloqueo());
+            reparacion.setPatronDesbloqueoCifrado(
+                    deviceCredentialCipher.encryptPattern(pattern, reparacion.getId()));
+        }
+        if (!conservarSiOmitida || request.getPinDesbloqueo() != null) {
+            String pin = normalizarCredencial(request.getPinDesbloqueo());
+            reparacion.setPinDesbloqueoCifrado(
+                    deviceCredentialCipher.encryptPin(pin, reparacion.getId()));
+        }
+        reparacion.setCredencialesCifradoVersion((short) 1);
+    }
+
+    private static String normalizarCredencial(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     @Override
@@ -432,6 +481,9 @@ public class ReparacionServiceImpl implements ReparacionService {
         if (reparacion.getEstado() != EstadoReparacion.ENTREGADO) {
             return;
         }
+        reparacion.setPatronDesbloqueoCifrado(null);
+        reparacion.setPinDesbloqueoCifrado(null);
+        reparacion.setCredencialesCifradoVersion((short) 1);
         if (reparacion.getFechaConformidadEntrega() == null) {
             reparacion.setFechaConformidadEntrega(LocalDateTime.now());
         }

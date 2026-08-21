@@ -139,8 +139,10 @@ log/
 *.log.zip
 
 ### Environment Variables ###
+.env
 .env.properties
 application-secret.properties
+.env.*
 .env.local
 .env.*.local
 .env.development
@@ -155,6 +157,9 @@ application-local.properties
 application-dev.yml
 application-prod.yml
 application-local.yml
+application-dev.yaml
+application-prod.yaml
+application-local.yaml
 # Mantener solo application.properties base (sin credenciales)
 
 ### JWT & Security ###
@@ -225,11 +230,12 @@ generated-test-sources/
 *.zip
 
 ### Otros ###
+/.agents/
+/.claude/
+/.codex/
 *.pid
 *.seed
 *.pid.lock
 .sass-cache/
 connect.lock
 typings/
-FRONTEND_INTEGRATION.md
-DEPLOY.md

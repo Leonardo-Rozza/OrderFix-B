@@ -1,8 +1,11 @@
 package com.leonardorozza.mvgrreparacionesbackend.config.filter;
 
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
-import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.UserDetailsServiceImpl;
+import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,7 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -41,52 +44,51 @@ public class JwtFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
+        try {
+            authenticateRequest(request);
+            filterChain.doFilter(request, response);
+        } finally {
+            // Evita fugas de tenant entre requests que reutilizan el hilo.
+            TenantContext.clear();
+        }
+    }
 
-        String authHeader = request.getHeader("Authorization");
-
-        String token = null;
-        String username = null;
-
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-
-            try {
-                username = jwtUtils.extractUsername(token);
-            } catch (Exception ex) {
-                log.debug("Token inválido: {}", ex.getMessage());
-            }
+    private void authenticateRequest(HttpServletRequest request) {
+        if (SecurityContextHolder.getContext().getAuthentication() != null) {
+            return;
         }
 
-        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-
-            UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-
-            // isEnabled(): un usuario desactivado no puede seguir operando con un token viejo
-            if (jwtUtils.validateToken(token, userDetails) && userDetails.isEnabled()) {
-
-                UsernamePasswordAuthenticationToken authToken =
-                        new UsernamePasswordAuthenticationToken(
-                                userDetails,
-                                null,
-                                userDetails.getAuthorities()
-                        );
-
-                authToken.setDetails(
-                        new WebAuthenticationDetailsSource().buildDetails(request)
-                );
-
-                SecurityContextHolder.getContext().setAuthentication(authToken);
-
-                // Tenant del request: lo tomamos del claim del token
-                TenantContext.setTallerId(jwtUtils.extractTallerId(token));
-            }
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return;
         }
 
         try {
-            filterChain.doFilter(request, response);
-        } finally {
-            // Evita fugas de tenant entre requests que reutilizan el hilo
-            TenantContext.clear();
+            DecodedJWT decoded = jwtUtils.verifyToken(authHeader.substring(7));
+            AuthenticatedUserPrincipal principal =
+                    userDetailsService.loadUserByUsername(decoded.getSubject());
+
+            if (!jwtUtils.validateToken(decoded, principal)) {
+                log.debug("JWT rechazado por no coincidir con el estado actual de la cuenta.");
+                return;
+            }
+
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(
+                            principal,
+                            null,
+                            principal.getAuthorities()
+                    );
+            authentication.setDetails(
+                    new WebAuthenticationDetailsSource().buildDetails(request)
+            );
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
+            // El tenant se toma del usuario persistido, nunca del claim controlado por el token.
+            TenantContext.setTallerId(principal.getTallerId());
+        } catch (JWTVerificationException | UsernameNotFoundException | IllegalArgumentException ex) {
+            // Fallo esperado de autenticación: no se exponen ni registran detalles criptográficos.
+            log.debug("JWT rechazado.");
         }
     }
 }

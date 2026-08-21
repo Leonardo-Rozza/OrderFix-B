@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
@@ -111,8 +112,14 @@ public class EquipoServiceImpl implements EquipoService {
 
     @Override
     public void eliminar(Long id) {
-        Equipo equipo = equipoRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
+        Long tallerId = tenantService.currentTallerId();
+        Equipo equipo = equipoRepository.findByIdAndTallerId(id, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Equipo no encontrado con ID: " + id));
+
+        if (reparacionRepository.existsByEquipoIdAndTallerId(id, tallerId)) {
+            throw new ConflictException(
+                    "No se puede eliminar el equipo porque tiene reparaciones asociadas.");
+        }
 
         equipoRepository.delete(equipo);
     }

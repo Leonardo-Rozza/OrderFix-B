@@ -41,6 +41,18 @@ La búsqueda por `payment_id` evita usar `external_reference` como identificador
 producto sigue teniendo un único precio configurado; antes de soportar precios históricos o promociones
 se agregará un snapshot inmutable de importe/moneda al vínculo local.
 
+### Orden, ACK y recuperación
+
+- El webhook confirma después de persistir el claim y encolarlo; las consultas remotas no bloquean la
+  respuesta HTTP. Si el proceso cae entre ambos pasos, el recuperador de `PROCESSING` lo devuelve al
+  circuito de reintentos.
+- `debit_date` (con `date_created` como fallback) ordena ciclos distintos. `last_modified` o
+  `payment.date_last_updated` ordena únicamente revisiones de una misma factura.
+- La fila de una factura se toma con lock y una revisión anterior no puede sobrescribir el snapshot
+  más reciente. Ante timestamps iguales y estados contradictorios se conserva el estado más restrictivo.
+- Un refund positivo sintetiza `refunded`/`partially_refunded` solo si el estado remoto sigue
+  `approved`; nunca oculta un `charged_back` ni su resolución `reimbursed`.
+
 ## Fase 2 — Cancelación fail-closed
 
 En `MercadoPagoService.cancelarSuscripcion`:

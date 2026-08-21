@@ -74,7 +74,7 @@ public class CuentaService {
     public void resetPassword(String token, String nuevaPassword) {
         AuthToken authToken = tokenUsable(token, TipoAuthToken.RESET_PASSWORD);
         User user = authToken.getUser();
-        user.setPassword(passwordEncoder.encode(nuevaPassword));
+        user.cambiarPassword(passwordEncoder.encode(nuevaPassword));
         userRepository.save(user);
         authToken.setUsadoEn(LocalDateTime.now());
         authTokenRepository.save(authToken);

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.Clock;
 import java.util.List;
 
 /**
@@ -23,12 +24,13 @@ import java.util.List;
 public class SuscripcionScheduler {
 
     private final SuscripcionRepository suscripcionRepository;
+    private final Clock clock;
 
     /** Todos los días a las 03:00. */
     @Scheduled(cron = "0 0 3 * * *")
     @Transactional
     public void cerrarTrialsVencidos() {
-        LocalDate hoy = LocalDate.now();
+        LocalDate hoy = LocalDate.now(clock);
         List<Suscripcion> vencidos =
                 suscripcionRepository.findByEstadoAndFechaFinTrialBefore(EstadoSuscripcion.TRIAL, hoy);
 

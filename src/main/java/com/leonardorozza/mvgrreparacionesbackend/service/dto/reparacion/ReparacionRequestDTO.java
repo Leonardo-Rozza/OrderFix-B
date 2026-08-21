@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+import lombok.ToString;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -37,9 +38,11 @@ public class ReparacionRequestDTO {
 
     // ----- Orden de trabajo ampliada (todo opcional) -----
     @Size(max = 60)
+    @ToString.Exclude
     private String patronDesbloqueo;
 
     @Size(max = 20)
+    @ToString.Exclude
     private String pinDesbloqueo;
 
     @Size(max = 255)

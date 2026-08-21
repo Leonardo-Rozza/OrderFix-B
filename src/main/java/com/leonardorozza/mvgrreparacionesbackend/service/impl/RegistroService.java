@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.Clock;
 
 /**
  * Onboarding: crea un taller nuevo con su usuario admin y una suscripción en TRIAL,
@@ -37,6 +38,7 @@ public class RegistroService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final CuentaService cuentaService;
+    private final Clock clock;
 
     @Value("${plan.trial-dias:14}")
     private int trialDias;
@@ -59,7 +61,7 @@ public class RegistroService {
         );
 
         // 2) Suscripción FREE en TRIAL
-        LocalDate hoy = LocalDate.now();
+        LocalDate hoy = LocalDate.now(clock);
         suscripcionRepository.save(
                 Suscripcion.builder()
                         .taller(taller)

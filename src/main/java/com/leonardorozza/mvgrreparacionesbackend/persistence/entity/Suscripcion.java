@@ -10,6 +10,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Suscripción de un taller. Una por taller. Refleja el plan vigente y su estado de cobro.
@@ -62,6 +63,23 @@ public class Suscripcion {
 
     @Column(length = 255)
     private String mpPayerId;
+
+    @Column(length = 50)
+    private String mpStatus;
+
+    @Column(length = 255)
+    private String mpExternalReference;
+
+    @Column(length = 1000)
+    private String mpCheckoutInitPoint;
+
+    private Instant mpNextPaymentAt;
+
+    /** Marca de orden remoto para que un webhook atrasado no revierta el entitlement. */
+    private Instant mpLastPaymentAt;
+
+    @Column(length = 255)
+    private String mpLastAuthorizedPaymentId;
 
     @CreatedDate
     @Column(updatable = false)

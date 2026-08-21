@@ -26,6 +26,8 @@ public interface ReparacionRepository extends JpaRepository<Reparacion, Long> {
 
     boolean existsByIdAndTallerId(Long id, Long tallerId);
 
+    boolean existsByEquipoIdAndTallerId(Long equipoId, Long tallerId);
+
     List<Reparacion> findByEstadoAndTallerId(EstadoReparacion estado, Long tallerId);
 
     List<Reparacion> findByEquipoIdAndTallerId(Long equipoId, Long tallerId);

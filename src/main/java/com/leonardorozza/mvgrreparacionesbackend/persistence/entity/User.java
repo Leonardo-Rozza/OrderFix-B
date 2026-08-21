@@ -22,6 +22,7 @@ public class User {
     private String username;
 
     @Column(nullable = false)
+    @Setter(AccessLevel.NONE)
     private String password;  // Contraseña hasheada con BCrypt
 
     // Identificador de login: único global
@@ -41,8 +42,22 @@ public class User {
     @Builder.Default
     private Boolean emailVerificado = false;
 
+    /** Se incrementa al cambiar credenciales para revocar access tokens ya emitidos. */
+    @Column(name = "token_version", nullable = false)
+    @Builder.Default
+    private long tokenVersion = 0L;
+
     // Tenant al que pertenece el usuario
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "taller_id")
     private Taller taller;
+
+    /** Actualiza el hash y revoca atómicamente todos los access tokens anteriores. */
+    public void cambiarPassword(String nuevoPasswordHash) {
+        if (nuevoPasswordHash == null || nuevoPasswordHash.isBlank()) {
+            throw new IllegalArgumentException("El hash de contraseña es obligatorio");
+        }
+        this.password = nuevoPasswordHash;
+        this.tokenVersion = Math.addExact(this.tokenVersion, 1L);
+    }
 }

@@ -46,9 +46,8 @@ public class Equipo {
     @JsonIgnore
     private Taller taller;
 
-    @OneToMany(mappedBy = "equipo", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "equipo")
     @JsonIgnore
     @Builder.Default
     private List<Reparacion> reparaciones = new ArrayList<>();
 }
-

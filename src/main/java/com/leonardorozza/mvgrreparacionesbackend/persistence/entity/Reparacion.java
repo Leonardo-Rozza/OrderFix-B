@@ -73,7 +73,7 @@ public class Reparacion {
     @Builder.Default
     private boolean noTesteableAlIngreso = false;
 
-    /** Tiene PIN/patrón de pantalla (se guarda en pinDesbloqueo/patronDesbloqueo). */
+    /** Tiene PIN/patrón de pantalla (el valor se guarda cifrado, nunca en texto plano). */
     @Column(name = "tiene_bloqueo_pantalla", nullable = false)
     @Builder.Default
     private boolean tieneBloqueoPantalla = false;
@@ -90,11 +90,19 @@ public class Reparacion {
     private boolean clienteConoceCredenciales = false;
 
     // ----- Orden de trabajo ampliada (checklist de ingreso) -----
-    @Column(name = "patron_desbloqueo", length = 60)
-    private String patronDesbloqueo;
+    @JsonIgnore
+    @Column(name = "patron_desbloqueo_cifrado", columnDefinition = "TEXT")
+    private String patronDesbloqueoCifrado;
 
-    @Column(name = "pin_desbloqueo", length = 20)
-    private String pinDesbloqueo;
+    @JsonIgnore
+    @Column(name = "pin_desbloqueo_cifrado", columnDefinition = "TEXT")
+    private String pinDesbloqueoCifrado;
+
+    /** 0 = legacy plano pendiente de migrar; 1 = AES-256-GCM v1. */
+    @JsonIgnore
+    @Column(name = "credenciales_cifrado_version", nullable = false)
+    @Builder.Default
+    private short credencialesCifradoVersion = 1;
 
     @Column(length = 255)
     private String accesorios;
@@ -209,4 +217,3 @@ public class Reparacion {
         return manoDeObra.add(calcularTotalRepuestos());
     }
 }
-

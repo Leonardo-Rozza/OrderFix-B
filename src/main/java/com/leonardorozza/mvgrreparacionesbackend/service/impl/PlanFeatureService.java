@@ -3,7 +3,6 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PlanLimitException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -13,8 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Gating de funciones por plan: define qué funciones son exclusivas de PRO,
- * las hace cumplir (402 si el taller es FREE) y expone el mapa de capacidades al frontend.
+ * Gating por entitlement: las funciones PRO requieren un trial o una suscripción PRO activa.
+ * Hace cumplir la regla con 402 y expone el mismo resultado al frontend.
  */
 @Service
 @RequiredArgsConstructor
@@ -22,11 +21,13 @@ public class PlanFeatureService {
 
     private final SuscripcionRepository suscripcionRepository;
     private final TenantService tenantService;
+    private final SubscriptionEntitlementPolicy entitlementPolicy;
 
+    /** Devuelve true si el taller tiene entitlement PRO, incluido el período de trial. */
     @Transactional(readOnly = true)
     public boolean esPro(Long tallerId) {
         return suscripcionRepository.findByTallerId(tallerId)
-                .map(s -> s.getPlan() == PlanType.PRO)
+                .map(s -> entitlementPolicy.tieneAccesoPro(s.getPlan(), s.getEstado()))
                 .orElse(false);
     }
 
@@ -54,6 +55,6 @@ public class PlanFeatureService {
             case COBROS -> "Los cobros, la caja y el recibo";
             case EMPLEADOS_MULTIPLES -> "Agregar más empleados";
         };
-        return que + " es una función del plan PRO. Pasá a PRO para habilitarla.";
+        return que + " requiere una suscripción con acceso PRO vigente. Activá o reactivá PRO para habilitarla.";
     }
 }

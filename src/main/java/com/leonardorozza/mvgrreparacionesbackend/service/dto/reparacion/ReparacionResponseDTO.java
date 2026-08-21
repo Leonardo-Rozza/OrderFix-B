@@ -47,8 +47,6 @@ public class ReparacionResponseDTO {
     private boolean riesgoCuentaSinCredenciales;
 
     // ----- Orden de trabajo ampliada -----
-    private String patronDesbloqueo;
-    private String pinDesbloqueo;
     private String accesorios;
     private String condicionesIngreso;
     private String observaciones;

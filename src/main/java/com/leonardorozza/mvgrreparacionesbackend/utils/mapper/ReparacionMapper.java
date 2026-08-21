@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.utils.mapper;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionDetalleResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 import org.mapstruct.Mapper;
@@ -15,6 +16,9 @@ public interface ReparacionMapper {
     @Mapping(target = "tecnico", ignore = true) // se resuelve en el service (valida que sea del taller)
     @Mapping(target = "fotos", ignore = true)   // se setea en el service (evita lista null por @Builder)
     @Mapping(target = "tieneCuentaVinculada", ignore = true) // se setea en el service (default NINGUNA si null)
+    @Mapping(target = "patronDesbloqueoCifrado", ignore = true) // se cifra explícitamente en el service
+    @Mapping(target = "pinDesbloqueoCifrado", ignore = true) // se cifra explícitamente en el service
+    @Mapping(target = "credencialesCifradoVersion", ignore = true)
     Reparacion toEntity(ReparacionRequestDTO dto);
 
     @Mapping(target = "equipoId", source = "equipo.id")
@@ -29,4 +33,19 @@ public interface ReparacionMapper {
     @Mapping(target = "totalRepuestos", expression = "java(entity.calcularTotalRepuestos())")
     @Mapping(target = "total", expression = "java(entity.calcularTotal())")
     ReparacionResponseDTO toDTO(Reparacion entity);
+
+    @Mapping(target = "equipoId", source = "equipo.id")
+    @Mapping(target = "equipoMarca", source = "equipo.marca")
+    @Mapping(target = "equipoModelo", source = "equipo.modelo")
+    @Mapping(target = "clienteId", source = "equipo.cliente.id")
+    @Mapping(target = "clienteNombre", source = "equipo.cliente.nombre")
+    @Mapping(target = "clienteApellido", source = "equipo.cliente.apellido")
+    @Mapping(target = "clienteTelefono", source = "equipo.cliente.telefono")
+    @Mapping(target = "tecnicoId", source = "tecnico.id")
+    @Mapping(target = "tecnicoNombre", source = "tecnico.username")
+    @Mapping(target = "totalRepuestos", expression = "java(entity.calcularTotalRepuestos())")
+    @Mapping(target = "total", expression = "java(entity.calcularTotal())")
+    @Mapping(target = "patronDesbloqueo", ignore = true) // solo el service puede descifrar
+    @Mapping(target = "pinDesbloqueo", ignore = true) // solo el service puede descifrar
+    ReparacionDetalleResponseDTO toDetalleDTO(Reparacion entity);
 }

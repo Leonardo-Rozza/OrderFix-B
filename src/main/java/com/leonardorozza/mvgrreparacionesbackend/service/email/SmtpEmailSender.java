@@ -9,8 +9,8 @@ import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 /**
- * Envío por SMTP (Resend). Con {@code mail.enabled=false} no envía nada: loguea el
- * contenido (útil en dev para copiar el link del email). Un fallo de envío se loguea
+ * Envío por SMTP (Resend). Los logs nunca incluyen destinatario, asunto, cuerpo HTML,
+ * tokens ni mensajes del proveedor. Un fallo de envío se registra sin datos sensibles,
  * pero NUNCA rompe el flujo que lo disparó (registro, olvido de contraseña).
  */
 @Service
@@ -32,12 +32,12 @@ public class SmtpEmailSender implements EmailSender {
     @Override
     public void enviar(String para, String asunto, String cuerpoHtml) {
         if (!enabled) {
-            log.info("[mail desactivado] Para: {} | Asunto: {} | Cuerpo: {}", para, asunto, cuerpoHtml);
+            log.info("Email transaccional omitido: mail.enabled=false.");
             return;
         }
         JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
         if (mailSender == null) {
-            log.warn("mail.enabled=true pero no hay SMTP configurado (spring.mail.*). Email a {} no enviado.", para);
+            log.warn("Email transaccional omitido: SMTP no configurado.");
             return;
         }
         try {
@@ -48,9 +48,9 @@ public class SmtpEmailSender implements EmailSender {
             helper.setSubject(asunto);
             helper.setText(cuerpoHtml, true);
             mailSender.send(mensaje);
-            log.info("Email enviado a {}: {}", para, asunto);
+            log.info("Email transaccional enviado.");
         } catch (Exception e) {
-            log.error("No se pudo enviar el email a {} ({}): {}", para, asunto, e.getMessage());
+            log.error("No se pudo enviar el email transaccional ({}).", e.getClass().getSimpleName());
         }
     }
 }

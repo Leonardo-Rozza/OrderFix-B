@@ -3,7 +3,6 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.SuscripcionResponseDto;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.YearMonth;
+import java.time.Clock;
 
 @Service
 @RequiredArgsConstructor
@@ -20,6 +20,7 @@ public class SuscripcionService {
     private final SuscripcionRepository suscripcionRepository;
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
+    private final Clock clock;
 
     @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
@@ -32,10 +33,10 @@ public class SuscripcionService {
                 .orElseThrow(() -> new ResourceNotFoundException("El taller no tiene una suscripción asociada."));
 
         // Consumo del mes desde el contador (0 si cambió el mes y todavía no se cargó nada)
-        String mesActual = YearMonth.now().toString();
+        String mesActual = YearMonth.now(clock).toString();
         long usadasEsteMes = mesActual.equals(suscripcion.getConsumoMes()) ? suscripcion.getReparacionesMes() : 0;
 
-        Integer limite = (suscripcion.getPlan() == PlanType.PRO) ? null : freeMaxReparacionesMes;
+        Integer limite = planFeatureService.esPro(tallerId) ? null : freeMaxReparacionesMes;
 
         return new SuscripcionResponseDto(
                 suscripcion.getPlan(),

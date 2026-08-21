@@ -197,7 +197,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException ex,
                                                         HttpServletRequest request) {
 
-        log.warn("Violación de integridad de datos: {}", ex.getMostSpecificCause().getMessage());
+        // Los mensajes del driver pueden incluir valores del registro; no se vuelcan a logs.
+        log.warn("Violación de integridad de datos en {}.", request.getRequestURI());
 
         ApiError error = new ApiError(
                 LocalDateTime.now(),
@@ -287,4 +288,3 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
     }
 }
-

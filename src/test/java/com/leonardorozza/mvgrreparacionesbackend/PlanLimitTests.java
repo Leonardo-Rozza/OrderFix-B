@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.TestPropertySource;
@@ -24,14 +26,24 @@ class PlanLimitTests extends IntegrationTestBase {
     @Test
     void superarElTopeDevuelve402() throws Exception {
         String t = registrar("Taller Limite", "limit@test.com");
+        configurarSuscripcion(t, PlanType.FREE, EstadoSuscripcion.ACTIVA);
 
         authPost("/api/reparaciones/ingreso-rapido", t, ingresoRapido("7001")).andExpect(status().isCreated());
         authPost("/api/reparaciones/ingreso-rapido", t, ingresoRapido("7002")).andExpect(status().is(402));
     }
 
     @Test
+    void trialNoTieneTopeMensual() throws Exception {
+        String t = registrar("Taller Trial Sin Limite", "trial-limit@test.com");
+
+        authPost("/api/reparaciones/ingreso-rapido", t, ingresoRapido("7101")).andExpect(status().isCreated());
+        authPost("/api/reparaciones/ingreso-rapido", t, ingresoRapido("7102")).andExpect(status().isCreated());
+    }
+
+    @Test
     void reclamoEnGarantiaNoConsumeCupo() throws Exception {
         String t = registrar("Taller Gar Limite", "gar-limit@test.com");
+        configurarSuscripcion(t, PlanType.FREE, EstadoSuscripcion.ACTIVA);
 
         // Consume el único cupo del mes
         long repId = node(authPost("/api/reparaciones/ingreso-rapido", t, ingresoRapido("7201"))

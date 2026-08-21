@@ -57,8 +57,12 @@ public class PagoController {
 
         String resolvedType = type != null ? type : topic;
         String resolvedDataId = dataIdParam != null ? dataIdParam : idParam;
+        String providerEventId = null;
 
         if (body != null) {
+            if (body.get("id") != null) {
+                providerEventId = String.valueOf(body.get("id"));
+            }
             if (resolvedType == null && body.get("type") != null) {
                 resolvedType = String.valueOf(body.get("type"));
             }
@@ -71,13 +75,15 @@ public class PagoController {
         }
 
         // Seguridad: verificamos que la notificación venga realmente de MercadoPago.
-        if (!mercadoPagoService.firmaWebhookValida(resolvedDataId, xSignature, xRequestId)) {
+        // El manifiesto oficial firma data.id de la URL, no el valor homónimo del JSON.
+        if (!mercadoPagoService.firmaWebhookValida(dataIdParam, xSignature, xRequestId)) {
             log.warn("Webhook MercadoPago rechazado por firma inválida (data.id={})", resolvedDataId);
             return ResponseEntity.status(401).build();
         }
 
         log.info("Webhook MercadoPago recibido: type={}, data.id={}", resolvedType, resolvedDataId);
-        mercadoPagoService.procesarNotificacion(resolvedType, resolvedDataId);
+        mercadoPagoService.procesarNotificacion(
+                resolvedType, resolvedDataId, providerEventId, xRequestId);
         return ResponseEntity.ok().build();
     }
 }

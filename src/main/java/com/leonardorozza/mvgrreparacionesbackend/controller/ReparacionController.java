@@ -6,6 +6,7 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.CambiarE
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.GarantiaReclamoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.IngresoRapidoResponseDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionDetalleResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.WhatsappLinkDTO;
@@ -121,7 +122,7 @@ public class ReparacionController {
             @ApiResponse(responseCode = "404", description = "No encontrada")
     })
     @GetMapping("/{id}")
-    public ResponseEntity<ReparacionResponseDTO> obtenerPorId(@PathVariable Long id) {
+    public ResponseEntity<ReparacionDetalleResponseDTO> obtenerPorId(@PathVariable Long id) {
 
         return ResponseEntity.ok(reparacionService.obtenerPorId(id));
     }

@@ -3,301 +3,447 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 import com.leonardorozza.mvgrreparacionesbackend.config.mercadopago.MercadoPagoProperties;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PagoException;
-import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.CheckoutResponseDto;
-import lombok.RequiredArgsConstructor;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.MercadoPagoAuthorizedPaymentResponse;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.MercadoPagoAuthorizedPaymentsSearchResponse;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.MercadoPagoPreapprovalRequest;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.MercadoPagoPreapprovalResponse;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.MercadoPagoPaymentResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.time.LocalDate;
-import java.util.HashMap;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.Locale;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Integración con MercadoPago para la suscripción PRO (cobro recurrente vía preapproval).
+ * Adaptador de Mercado Pago para suscripciones recurrentes.
  *
- * Flujo:
- *  1) El taller (autenticado) pide iniciar el checkout -> creamos un preapproval y
- *     devolvemos el init_point al que el frontend redirige.
- *  2) Cuando MercadoPago confirma/cambia el estado, llama al webhook -> consultamos
- *     el preapproval y actualizamos plan/estado de la suscripción.
+ * El checkout se prepara y persiste antes de llamar al proveedor, por lo que un timeout
+ * puede reintentarse con la misma clave de idempotencia. Los webhooks se registran en una
+ * inbox durable y las mutaciones de estado se aplican en transacciones separadas.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class MercadoPagoService {
 
+    private static final String TOPIC_PREAPPROVAL = "subscription_preapproval";
+    private static final String TOPIC_AUTHORIZED_PAYMENT = "subscription_authorized_payment";
+    private static final String TOPIC_PAYMENT = "payment";
+
     private final MercadoPagoProperties props;
     private final RestClient mercadoPagoRestClient;
-    private final SuscripcionRepository suscripcionRepository;
     private final TenantService tenantService;
+    private final MercadoPagoCheckoutStateService checkoutStateService;
+    private final MercadoPagoSubscriptionStateService subscriptionStateService;
+    private final PaymentEventInboxService eventInboxService;
+    private final MercadoPagoResponseValidator responseValidator;
+    private final MercadoPagoWebhookSignatureValidator signatureValidator;
+    private final TaskExecutor eventTaskExecutor;
 
-    @Transactional
+    public MercadoPagoService(
+            MercadoPagoProperties props,
+            RestClient mercadoPagoRestClient,
+            TenantService tenantService,
+            MercadoPagoCheckoutStateService checkoutStateService,
+            MercadoPagoSubscriptionStateService subscriptionStateService,
+            PaymentEventInboxService eventInboxService,
+            MercadoPagoResponseValidator responseValidator,
+            MercadoPagoWebhookSignatureValidator signatureValidator,
+            @Qualifier("applicationTaskExecutor") TaskExecutor eventTaskExecutor) {
+        this.props = props;
+        this.mercadoPagoRestClient = mercadoPagoRestClient;
+        this.tenantService = tenantService;
+        this.checkoutStateService = checkoutStateService;
+        this.subscriptionStateService = subscriptionStateService;
+        this.eventInboxService = eventInboxService;
+        this.responseValidator = responseValidator;
+        this.signatureValidator = signatureValidator;
+        this.eventTaskExecutor = eventTaskExecutor;
+    }
+
     public CheckoutResponseDto crearCheckoutSuscripcion() {
-        if (!props.isEnabled()) {
-            throw new PagoException(
-                    "La integración con MercadoPago no está habilitada (falta configurar el Access Token).");
-        }
+        requireCheckoutEnabled();
 
         Long tallerId = tenantService.currentTallerId();
-        Suscripcion suscripcion = suscripcionRepository.findByTallerId(tallerId)
-                .orElseThrow(() -> new ResourceNotFoundException("El taller no tiene una suscripción asociada."));
+        MercadoPagoCheckoutStateService.CheckoutPreparation preparation =
+                checkoutStateService.prepare(tallerId);
+        if (preparation.existing()) {
+            return preparation.existingResponse();
+        }
 
-        String payerEmail = suscripcion.getTaller().getEmailContacto();
+        MercadoPagoPreapprovalRequest request = new MercadoPagoPreapprovalRequest(
+                props.getReason(),
+                new MercadoPagoPreapprovalRequest.AutoRecurring(
+                        1, "months", props.getAmount(), props.getCurrency()),
+                props.getBackUrl(),
+                preparation.payerEmail(),
+                "pending",
+                preparation.externalReference());
 
-        Map<String, Object> autoRecurring = new HashMap<>();
-        autoRecurring.put("frequency", 1);
-        autoRecurring.put("frequency_type", "months");
-        autoRecurring.put("transaction_amount", props.getAmount());
-        autoRecurring.put("currency_id", props.getCurrency());
-
-        Map<String, Object> body = new HashMap<>();
-        body.put("reason", props.getReason());
-        body.put("auto_recurring", autoRecurring);
-        body.put("back_url", props.getBackUrl());
-        body.put("payer_email", payerEmail);
-        body.put("status", "pending");
-        body.put("external_reference", "taller-" + tallerId);
-
-        Map<?, ?> resp;
+        MercadoPagoPreapprovalResponse response;
         try {
-            resp = mercadoPagoRestClient.post()
+            response = mercadoPagoRestClient.post()
                     .uri("/preapproval")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getAccessToken())
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                    .header("X-Idempotency-Key", preparation.idempotencyKey())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
+                    .body(request)
                     .retrieve()
-                    .body(Map.class);
-        } catch (RestClientResponseException ex) {
-            log.error("Error creando preapproval en MercadoPago: {} - {}",
-                    ex.getStatusCode(), ex.getResponseBodyAsString());
-            throw new PagoException("No se pudo iniciar el checkout de MercadoPago.", ex);
+                    .body(MercadoPagoPreapprovalResponse.class);
+        } catch (RestClientException ex) {
+            checkoutStateService.markAttemptFailed(preparation.linkId());
+            logProviderFailure("crear preapproval", null, ex);
+            throw new PagoException(
+                    "No se pudo iniciar el checkout de Mercado Pago. Podés reintentarlo sin generar un duplicado.", ex);
         }
 
-        if (resp == null || resp.get("id") == null || resp.get("init_point") == null) {
-            throw new PagoException("Respuesta inválida de MercadoPago al crear la suscripción.");
-        }
-
-        String preapprovalId = String.valueOf(resp.get("id"));
-        String initPoint = String.valueOf(resp.get("init_point"));
-
-        suscripcion.setMpPreapprovalId(preapprovalId);
-        suscripcionRepository.save(suscripcion);
-
-        log.info("Checkout de suscripción creado para taller {} (preapproval {})", tallerId, preapprovalId);
-        return new CheckoutResponseDto(preapprovalId, initPoint);
-    }
-
-    /**
-     * Procesa una notificación (webhook) de MercadoPago sobre un preapproval.
-     * Es idempotente y nunca lanza: ante cualquier problema loguea y retorna,
-     * así MercadoPago recibe 200 y no reintenta indefinidamente.
-     */
-    @Transactional
-    public void procesarNotificacion(String type, String dataId) {
-        if (!props.isEnabled()) {
-            log.warn("Webhook de MercadoPago recibido pero la integración está deshabilitada. Ignorando.");
-            return;
-        }
-        if (dataId == null || dataId.isBlank()) {
-            log.warn("Webhook de MercadoPago sin data.id (type={}). Ignorando.", type);
-            return;
-        }
-        // Solo nos interesan notificaciones de preapproval (suscripción).
-        if (type != null && !type.contains("preapproval") && !type.contains("subscription")) {
-            log.debug("Webhook de MercadoPago ignorado (type={}).", type);
-            return;
-        }
-
-        Map<?, ?> pre;
         try {
-            pre = mercadoPagoRestClient.get()
-                    .uri("/preapproval/{id}", dataId)
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getAccessToken())
-                    .retrieve()
-                    .body(Map.class);
-        } catch (RestClientResponseException ex) {
-            log.error("Error consultando preapproval {} en MercadoPago: {} - {}",
-                    dataId, ex.getStatusCode(), ex.getResponseBodyAsString());
+            responseValidator.validateCreatedPreapproval(response, preparation.externalReference());
+        } catch (PagoException ex) {
+            checkoutStateService.markAttemptFailed(preparation.linkId());
+            throw ex;
+        }
+        CheckoutResponseDto result = checkoutStateService.complete(preparation.linkId(), response);
+        log.info("Checkout de suscripción creado para taller {}.", tallerId);
+        return result;
+    }
+
+    public void procesarNotificacion(String type, String dataId) {
+        procesarNotificacion(type, dataId, null, null);
+    }
+
+    public void procesarNotificacion(
+            String type,
+            String dataId,
+            String providerEventId,
+            String requestId) {
+        if (!props.isEnabled()) {
+            log.debug("Webhook MP ignorado porque la integración está deshabilitada.");
             return;
         }
-        if (pre == null) {
-            log.warn("Preapproval {} sin cuerpo de respuesta.", dataId);
+        String topic = normalizeTopic(type);
+        if (dataId == null || dataId.isBlank()) {
+            log.warn("Webhook MP firmado sin identificador de recurso; se ignora.");
             return;
         }
 
-        String status = String.valueOf(pre.get("status"));
-        String externalReference = pre.get("external_reference") != null
-                ? String.valueOf(pre.get("external_reference")) : null;
-        String payerId = pre.get("payer_id") != null ? String.valueOf(pre.get("payer_id")) : null;
-
-        Suscripcion suscripcion = suscripcionRepository.findByMpPreapprovalId(dataId)
-                .or(() -> tallerIdFromRef(externalReference).flatMap(suscripcionRepository::findByTallerId))
-                .orElse(null);
-
-        if (suscripcion == null) {
-            log.warn("Webhook de MercadoPago: no se encontró suscripción para preapproval {} (ref {}).",
-                    dataId, externalReference);
+        PaymentEventInboxService.EventClaim claim = eventInboxService.register(
+                topic, dataId.trim(), providerEventId, requestId, props.getWebhookMaxAttempts());
+        if (!claim.shouldProcess()) {
+            log.debug("Webhook MP duplicado o ya procesado (eventId={}).", claim.eventId());
             return;
         }
+        dispatchClaim(claim);
+    }
 
-        suscripcion.setMpPreapprovalId(dataId);
-        if (payerId != null) {
-            suscripcion.setMpPayerId(payerId);
+    public void retryPersistedEvent(Long eventId) {
+        PaymentEventInboxService.EventClaim claim = eventInboxService.claimRetry(
+                eventId, props.getWebhookMaxAttempts());
+        if (claim.shouldProcess()) {
+            processClaim(claim);
         }
-
-        switch (status) {
-            case "authorized" -> {
-                suscripcion.setPlan(PlanType.PRO);
-                suscripcion.setEstado(EstadoSuscripcion.ACTIVA);
-                if (suscripcion.getFechaInicio() == null) {
-                    suscripcion.setFechaInicio(LocalDate.now());
-                }
-                suscripcion.setProximoCobro(LocalDate.now().plusMonths(1));
-            }
-            case "paused" -> suscripcion.setEstado(EstadoSuscripcion.VENCIDA);
-            case "cancelled" -> {
-                // Cancelación → vuelve al plan FREE (sigue operando con el tope gratuito)
-                suscripcion.setPlan(PlanType.FREE);
-                suscripcion.setEstado(EstadoSuscripcion.ACTIVA);
-                suscripcion.setProximoCobro(null);
-            }
-            default -> log.info("Preapproval {} en estado '{}', sin cambios de plan.", dataId, status);
-        }
-
-        suscripcionRepository.save(suscripcion);
-        log.info("Suscripción del taller {} actualizada por webhook MercadoPago: status={}",
-                suscripcion.getTaller().getId(), status);
     }
 
     /**
-     * Cancela la suscripción PRO del taller actual: cancela el preapproval en MercadoPago
-     * (si corresponde) y baja el plan a FREE (sigue operando con el tope gratuito).
+     * Corrige eventos perdidos consultando tanto el estado del preapproval como sus facturas.
+     * Cada vínculo registra el último resultado para que el lote avance aun ante fallas parciales.
      */
-    @Transactional
+    public void reconcileCurrentSubscriptions() {
+        if (!props.isEnabled()) {
+            return;
+        }
+        List<String> subscriptions = subscriptionStateService.reconciliationCandidates(
+                props.getReconciliationBatchSize());
+        if (!subscriptions.isEmpty()) {
+            log.info("Conciliando {} suscripciones de Mercado Pago.", subscriptions.size());
+        }
+        for (String preapprovalId : subscriptions) {
+            try {
+                subscriptionStateService.markReconciliationStarted(preapprovalId);
+                processPreapproval(preapprovalId);
+                processAuthorizedPaymentsForSubscription(preapprovalId);
+                subscriptionStateService.markReconciliationSucceeded(preapprovalId);
+            } catch (RuntimeException ex) {
+                try {
+                    subscriptionStateService.markReconciliationFailed(preapprovalId, ex);
+                } catch (RuntimeException stateFailure) {
+                    log.warn("No se pudo registrar el fallo de conciliación de una suscripción MP.");
+                }
+                log.warn("Conciliación MP incompleta para una suscripción; se reintentará.");
+            }
+        }
+    }
+
     public void cancelarSuscripcion() {
         Long tallerId = tenantService.currentTallerId();
-        Suscripcion suscripcion = suscripcionRepository.findByTallerId(tallerId)
-                .orElseThrow(() -> new ResourceNotFoundException("El taller no tiene una suscripción asociada."));
+        MercadoPagoSubscriptionStateService.CancellationState state =
+                subscriptionStateService.cancellationState(tallerId);
 
-        String preapprovalId = suscripcion.getMpPreapprovalId();
-        if (props.isEnabled() && preapprovalId != null && !preapprovalId.isBlank()) {
+        if (state.alreadyCanceled()) {
+            return;
+        }
+
+        boolean hasRemotePreapproval = state.preapprovalId() != null
+                && !state.preapprovalId().isBlank();
+        if (hasRemotePreapproval && !props.isEnabled()) {
+            throw new PagoException(
+                    "No se puede cancelar la suscripción porque Mercado Pago está deshabilitado. "
+                            + "El plan local no fue modificado.");
+        }
+
+        if (hasRemotePreapproval) {
             try {
                 mercadoPagoRestClient.put()
-                        .uri("/preapproval/{id}", preapprovalId)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getAccessToken())
+                        .uri("/preapproval/{id}", state.preapprovalId())
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of("status", "cancelled"))
+                        .body(Map.of("status", "canceled"))
                         .retrieve()
                         .toBodilessEntity();
-            } catch (RestClientResponseException ex) {
-                log.error("Error cancelando preapproval {} en MercadoPago: {} - {}",
-                        preapprovalId, ex.getStatusCode(), ex.getResponseBodyAsString());
-                throw new PagoException("No se pudo cancelar la suscripción en MercadoPago.", ex);
+            } catch (RestClientException ex) {
+                logProviderFailure("cancelar preapproval", state.preapprovalId(), ex);
+                throw new PagoException("No se pudo cancelar la suscripción en Mercado Pago.", ex);
             }
         }
 
-        suscripcion.setPlan(PlanType.FREE);
-        suscripcion.setEstado(EstadoSuscripcion.ACTIVA);
-        suscripcion.setProximoCobro(null);
-        suscripcion.setMpPreapprovalId(null);
-        suscripcion.setMpPayerId(null);
-        suscripcionRepository.save(suscripcion);
-
-        log.info("Suscripción del taller {} cancelada (downgrade a FREE).", tallerId);
+        subscriptionStateService.applyLocalCancellation(tallerId);
+        log.info("Suscripción del taller {} cancelada y convertida a FREE.", tallerId);
     }
 
-    /**
-     * Valida la firma del webhook de MercadoPago (header x-signature) usando HMAC-SHA256.
-     * Devuelve true si la firma es válida. Sin webhookSecret configurado: si MercadoPago
-     * está deshabilitado el webhook es un no-op y se tolera; si está habilitado se rechaza
-     * (fail-closed) — con la integración activa el secreto es obligatorio.
-     */
     public boolean firmaWebhookValida(String dataId, String xSignature, String xRequestId) {
-        String secret = props.getWebhookSecret();
-        if (secret == null || secret.isBlank()) {
-            if (!props.isEnabled()) {
-                return true;
-            }
-            log.warn("Webhook MP rechazado: mercadopago.enabled=true sin webhook-secret. Seteá MP_WEBHOOK_SECRET.");
-            return false;
-        }
-        if (xSignature == null || xSignature.isBlank()) {
-            log.warn("Webhook MP rechazado: falta el header x-signature.");
-            return false;
-        }
+        return signatureValidator.isValid(dataId, xSignature, xRequestId);
+    }
 
-        // x-signature viene como: "ts=1700000000,v1=abcdef..."
-        String ts = null;
-        String v1 = null;
-        for (String part : xSignature.split(",")) {
-            String[] kv = part.split("=", 2);
-            if (kv.length == 2) {
-                String k = kv[0].trim();
-                String val = kv[1].trim();
-                if (k.equals("ts")) ts = val;
-                else if (k.equals("v1")) v1 = val;
-            }
-        }
-        if (ts == null || v1 == null) {
-            log.warn("Webhook MP rechazado: x-signature mal formado.");
-            return false;
-        }
-
-        // Manifest segun MP: id:<data.id>;request-id:<x-request-id>;ts:<ts>;
-        StringBuilder manifest = new StringBuilder();
-        if (dataId != null && !dataId.isBlank()) {
-            manifest.append("id:").append(dataId.toLowerCase()).append(";");
-        }
-        if (xRequestId != null && !xRequestId.isBlank()) {
-            manifest.append("request-id:").append(xRequestId).append(";");
-        }
-        manifest.append("ts:").append(ts).append(";");
-
+    private void processClaim(PaymentEventInboxService.EventClaim claim) {
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            byte[] hash = mac.doFinal(manifest.toString().getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder(hash.length * 2);
-            for (byte b : hash) {
-                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
-                hex.append(Character.forDigit(b & 0xF, 16));
+            switch (claim.eventType()) {
+                case TOPIC_PREAPPROVAL -> processPreapproval(claim.dataId());
+                case TOPIC_AUTHORIZED_PAYMENT -> processAuthorizedPayment(claim.dataId());
+                case TOPIC_PAYMENT -> {
+                    if (!processPayment(claim.dataId())) {
+                        eventInboxService.markIgnored(
+                                claim.eventId(), "Pago ajeno a la cuenta configurada");
+                        return;
+                    }
+                }
+                default -> {
+                    eventInboxService.markIgnored(claim.eventId(), "Tópico no soportado");
+                    return;
+                }
             }
-            boolean ok = MessageDigest.isEqual(
-                    hex.toString().getBytes(StandardCharsets.UTF_8),
-                    v1.getBytes(StandardCharsets.UTF_8));
-            if (!ok) {
-                log.warn("Webhook MP rechazado: firma inválida.");
-            }
-            return ok;
-        } catch (Exception e) {
-            log.error("Error validando la firma del webhook MP", e);
-            return false;
+            eventInboxService.markProcessed(claim.eventId());
+        } catch (RuntimeException ex) {
+            eventInboxService.markFailed(claim.eventId(), ex);
+            log.warn("Evento MP {} quedó pendiente de reintento (tipo={}).",
+                    claim.eventId(), claim.eventType());
         }
     }
 
-    private Optional<Long> tallerIdFromRef(String ref) {
-        if (ref == null || !ref.startsWith("taller-")) {
-            return Optional.empty();
-        }
+    private void dispatchClaim(PaymentEventInboxService.EventClaim claim) {
         try {
-            return Optional.of(Long.parseLong(ref.substring("taller-".length())));
-        } catch (NumberFormatException e) {
-            return Optional.empty();
+            eventTaskExecutor.execute(() -> processClaim(claim));
+        } catch (RuntimeException ex) {
+            eventInboxService.markFailed(claim.eventId(), ex);
+            log.warn("No se pudo encolar el evento MP {}; quedó pendiente de reintento.",
+                    claim.eventId());
+        }
+    }
+
+    private void processPreapproval(String dataId) {
+        MercadoPagoPreapprovalResponse response;
+        try {
+            response = mercadoPagoRestClient.get()
+                    .uri("/preapproval/{id}", dataId)
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                    .retrieve()
+                    .body(MercadoPagoPreapprovalResponse.class);
+        } catch (RestClientException ex) {
+            logProviderFailure("consultar preapproval", dataId, ex);
+            throw new PagoException("No se pudo consultar la suscripción en Mercado Pago.", ex);
+        }
+        subscriptionStateService.applyPreapproval(dataId, response);
+    }
+
+    private void processAuthorizedPayment(String dataId) {
+        MercadoPagoAuthorizedPaymentResponse response;
+        try {
+            response = mercadoPagoRestClient.get()
+                    .uri("/authorized_payments/{id}", dataId)
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                    .retrieve()
+                    .body(MercadoPagoAuthorizedPaymentResponse.class);
+        } catch (RestClientException ex) {
+            logProviderFailure("consultar factura recurrente", dataId, ex);
+            throw new PagoException("No se pudo consultar el cobro recurrente en Mercado Pago.", ex);
+        }
+        subscriptionStateService.applyAuthorizedPayment(dataId, response);
+    }
+
+    private boolean processPayment(String dataId) {
+        MercadoPagoPaymentResponse payment;
+        try {
+            payment = mercadoPagoRestClient.get()
+                    .uri("/v1/payments/{id}", dataId)
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                    .retrieve()
+                    .body(MercadoPagoPaymentResponse.class);
+        } catch (RestClientException ex) {
+            logProviderFailure("consultar payment", dataId, ex);
+            throw new PagoException("No se pudo consultar el pago en Mercado Pago.", ex);
+        }
+        if (!responseValidator.validatePayment(payment, dataId)) {
+            return false;
+        }
+
+        MercadoPagoAuthorizedPaymentsSearchResponse search;
+        try {
+            search = mercadoPagoRestClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/authorized_payments/search")
+                            .queryParam("payment_id", dataId)
+                            .build())
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                    .retrieve()
+                    .body(MercadoPagoAuthorizedPaymentsSearchResponse.class);
+        } catch (RestClientException ex) {
+            logProviderFailure("buscar factura por payment", dataId, ex);
+            throw new PagoException(
+                    "No se pudo vincular el pago con su factura recurrente en Mercado Pago.", ex);
+        }
+        if (search == null || search.results() == null || search.results().size() != 1) {
+            throw new PagoException(
+                    "Mercado Pago todavía no informó una factura recurrente única para el pago.");
+        }
+
+        MercadoPagoAuthorizedPaymentResponse invoice = search.results().getFirst();
+        responseValidator.validatePaymentInvoice(payment, invoice);
+        MercadoPagoAuthorizedPaymentResponse currentInvoice =
+                mergeCurrentPaymentState(invoice, payment);
+        subscriptionStateService.applyAuthorizedPayment(currentInvoice.id(), currentInvoice);
+        return true;
+    }
+
+    private MercadoPagoAuthorizedPaymentResponse mergeCurrentPaymentState(
+            MercadoPagoAuthorizedPaymentResponse invoice,
+            MercadoPagoPaymentResponse payment) {
+        String effectiveStatus = payment.status();
+        BigDecimal refunded = payment.transactionAmountRefunded();
+        if ("approved".equalsIgnoreCase(effectiveStatus)
+                && refunded != null && refunded.signum() > 0) {
+            effectiveStatus = refunded.compareTo(payment.transactionAmount()) >= 0
+                    ? "refunded"
+                    : "partially_refunded";
+        }
+        OffsetDateTime lastModified = latest(invoice.lastModified(), payment.dateLastUpdated());
+        return new MercadoPagoAuthorizedPaymentResponse(
+                invoice.id(),
+                invoice.preapprovalId(),
+                invoice.externalReference(),
+                invoice.currencyId(),
+                invoice.transactionAmount(),
+                invoice.status(),
+                invoice.summarized(),
+                invoice.retryAttempt(),
+                invoice.debitDate(),
+                invoice.dateCreated(),
+                lastModified,
+                new MercadoPagoAuthorizedPaymentResponse.Payment(
+                        payment.id(), effectiveStatus, payment.statusDetail()));
+    }
+
+    private OffsetDateTime latest(OffsetDateTime first, OffsetDateTime second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return first.isAfter(second) ? first : second;
+    }
+
+    private void processAuthorizedPaymentsForSubscription(String preapprovalId) {
+        final int pageSize = 50;
+        int offset = 0;
+        for (int page = 0; page < props.getReconciliationMaxPaymentPages(); page++) {
+            MercadoPagoAuthorizedPaymentsSearchResponse response;
+            try {
+                int pageOffset = offset;
+                response = mercadoPagoRestClient.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/authorized_payments/search")
+                                .queryParam("preapproval_id", preapprovalId)
+                                .queryParam("sort", "date_created")
+                                .queryParam("criteria", "desc")
+                                .queryParam("offset", pageOffset)
+                                .queryParam("limit", pageSize)
+                                .build())
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                        .retrieve()
+                        .body(MercadoPagoAuthorizedPaymentsSearchResponse.class);
+            } catch (RestClientException ex) {
+                logProviderFailure("buscar facturas autorizadas", preapprovalId, ex);
+                throw new PagoException("No se pudieron conciliar las facturas de Mercado Pago.", ex);
+            }
+            if (response == null || response.results() == null) {
+                throw new PagoException("Respuesta inválida de Mercado Pago al conciliar facturas.");
+            }
+            response.results().forEach(payment ->
+                    subscriptionStateService.applyAuthorizedPayment(payment.id(), payment));
+
+            offset += response.results().size();
+            Integer total = response.paging() == null ? null : response.paging().total();
+            if (response.results().isEmpty() || total == null || offset >= total) {
+                return;
+            }
+        }
+    }
+
+    private String normalizeTopic(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.contains(TOPIC_AUTHORIZED_PAYMENT)) {
+            return TOPIC_AUTHORIZED_PAYMENT;
+        }
+        if (normalized.contains(TOPIC_PREAPPROVAL)
+                || (normalized.contains("preapproval") && !normalized.contains("plan"))) {
+            return TOPIC_PREAPPROVAL;
+        }
+        if (TOPIC_PAYMENT.equals(normalized) || "payments".equals(normalized)
+                || normalized.startsWith("payment.")) {
+            return TOPIC_PAYMENT;
+        }
+        return normalized.isBlank() ? "unknown" : normalized;
+    }
+
+    private void requireCheckoutEnabled() {
+        if (!props.isEnabled()) {
+            throw new PagoException("La integración con Mercado Pago no está habilitada.");
+        }
+        if (!props.isCheckoutEnabled()) {
+            throw new PagoException("Los nuevos checkouts están temporalmente deshabilitados.");
+        }
+    }
+
+    private String bearerToken() {
+        return "Bearer " + props.getAccessToken();
+    }
+
+    private void logProviderFailure(String operation, String resourceId, RestClientException ex) {
+        if (ex instanceof RestClientResponseException responseException) {
+            log.error("Fallo MP al {} (resourceId={}, status={}).",
+                    operation, resourceId, responseException.getStatusCode().value());
+        } else {
+            log.error("Fallo de red MP al {} (resourceId={}, tipo={}).",
+                    operation, resourceId, ex.getClass().getSimpleName());
         }
     }
 }

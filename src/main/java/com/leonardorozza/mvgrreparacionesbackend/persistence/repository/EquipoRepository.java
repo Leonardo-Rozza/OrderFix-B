@@ -20,6 +20,8 @@ public interface EquipoRepository extends JpaRepository<Equipo, Long> {
 
     boolean existsByIdAndTallerId(Long id, Long tallerId);
 
+    boolean existsByClienteIdAndTallerId(Long clienteId, Long tallerId);
+
     List<Equipo> findByClienteIdAndTallerId(Long clienteId, Long tallerId);
 
     @Query(value = """

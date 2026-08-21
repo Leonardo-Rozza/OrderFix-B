@@ -43,7 +43,7 @@ public class Cliente {
     @JsonIgnore
     private Taller taller;
 
-    @OneToMany(mappedBy = "cliente", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "cliente")
     @JsonIgnore
     @Builder.Default
     private List<Equipo> equipos = new ArrayList<>();

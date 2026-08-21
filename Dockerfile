@@ -1,7 +1,7 @@
 # ============================
 #       BUILD STAGE
 # ============================
-FROM maven:3.9.9-eclipse-temurin-21 AS build
+FROM maven:3.9.11-eclipse-temurin-21 AS build
 
 WORKDIR /app
 
@@ -14,8 +14,15 @@ RUN mvn -q -DskipTests dependency:go-offline
 # Copiar el código fuente
 COPY src ./src
 
-# Compilar (los tests corren en CI/local, no en el build de la imagen)
+# Compilar (los tests corren en CI/local, no se duplican dentro del build de la imagen)
 RUN mvn -q -DskipTests -Dmaven.test.skip=true package
+
+# El Dockerfile genera su propio JAR: verificar ese artefacto, además del gate Maven de CI.
+RUN if jar tf target/*.jar \
+      | grep -Eq '(^|/)(application-secret\.properties|application-(local|dev|prod)\.(properties|ya?ml))$'; then \
+      echo "El artefacto contiene configuracion local o secretos; se cancela el build." >&2; \
+      exit 1; \
+    fi
 
 # ============================
 #        RUN STAGE
