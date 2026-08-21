@@ -55,12 +55,16 @@ outbox general de comandos a proveedores y coordinación multi-réplica.
 
 1. El webhook valida HMAC y registra el evento en el inbox durable existente.
 2. El worker consulta `GET /v1/payments/{paymentId}` con timeouts actuales.
-3. Una respuesta tipada se valida antes de usarla: ID, collector, moneda, importe positivo y referencia
-   local. Nunca se confía en el cuerpo recibido por webhook.
-4. La referencia resuelve un `SubscriptionProviderLink` vigente. Si todavía no está completo, el evento
-   queda fallido y usa el mecanismo de reintentos existente.
-5. Con el preapproval del vínculo se ejecuta la conciliación de preapproval y authorized payments.
-6. Refund, cancelación o chargeback modifican entitlement únicamente a través de
+3. Una respuesta tipada se valida antes de usarla: ID, collector, moneda e importe. No se exige
+   `application_id` porque el contrato publicado de Payment no garantiza ese campo. Nunca se confía
+   en el estado recibido por webhook.
+4. Se consulta `GET /authorized_payments/search?payment_id={paymentId}` para resolver la factura y su
+   `preapproval_id`; `external_reference` es una comprobación secundaria, no el vínculo primario.
+5. La factura debe apuntar al mismo Payment y a un `SubscriptionProviderLink` local. Una búsqueda
+   vacía, ambigua o todavía inconsistente queda fallida y usa el mecanismo de reintentos existente.
+6. La factura validada entra una sola vez por `applyAuthorizedPayment`, el mismo upsert cronológico
+   usado por webhooks de facturas y por la conciliación periódica.
+7. Refund, cancelación o chargeback modifican entitlement únicamente a través de
    `MercadoPagoSubscriptionStateService`, conservando cronología e idempotencia.
 
 El evento genérico queda auditado en `payment_events`. No se persiste el payload completo ni se registran
