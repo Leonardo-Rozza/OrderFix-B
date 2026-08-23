@@ -1,10 +1,12 @@
 package com.leonardorozza.mvgrreparacionesbackend.flows;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class RolTests extends IntegrationTestBase {
@@ -99,5 +101,33 @@ class RolTests extends IntegrationTestBase {
         authPost("/api/reparaciones/" + reparacionId + "/cobros/" + cobroId + "/anulacion",
                 admin, json(Map.of("motivo", "Autorizado por admin")))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void userConsultaDatosDeCobroPeroSoloAdminLosModifica() throws Exception {
+        String admin = registrar("Taller Rol Datos", "rol-datos-admin@test.com");
+        activarPro(admin);
+        String user = empleadoUser(admin, "rol-datos-user@test.com");
+
+        authPut("/api/taller/datos-cobro", admin, json(Map.of(
+                "alias", "taller-rol.mp",
+                "titular", "Titular Admin",
+                "mostrarEnResumen", true)))
+                .andExpect(status().isOk());
+
+        JsonNode visibles = node(authGet("/api/taller/datos-cobro", user)
+                .andExpect(status().isOk()));
+        assertThat(visibles.get("alias").asText()).isEqualTo("taller-rol.mp");
+        assertThat(visibles.get("titular").asText()).isEqualTo("Titular Admin");
+
+        authPut("/api/taller/datos-cobro", user, json(Map.of(
+                "alias", "intento-user.mp",
+                "mostrarEnResumen", false)))
+                .andExpect(status().isForbidden());
+
+        JsonNode sinCambios = node(authGet("/api/taller/datos-cobro", admin)
+                .andExpect(status().isOk()));
+        assertThat(sinCambios.get("alias").asText()).isEqualTo("taller-rol.mp");
+        assertThat(sinCambios.get("mostrarEnResumen").asBoolean()).isTrue();
     }
 }

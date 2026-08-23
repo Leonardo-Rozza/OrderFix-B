@@ -34,6 +34,19 @@ public class Taller {
     @Column(length = 20)
     private String telefono;
 
+    @Column(name = "alias_cobro", length = 120)
+    private String aliasCobro;
+
+    @Column(name = "titular_cobro", length = 160)
+    private String titularCobro;
+
+    @Column(name = "entidad_cobro", length = 120)
+    private String entidadCobro;
+
+    @Column(name = "mostrar_en_resumen", nullable = false)
+    @Builder.Default
+    private boolean mostrarEnResumen = true;
+
     @Column(nullable = false)
     @Builder.Default
     private Boolean activo = true;

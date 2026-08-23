@@ -56,7 +56,56 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24");
+
+        Integer largoAliasCobro = jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'talleres'
+                  AND column_name = 'alias_cobro'
+                """, Integer.class);
+        Integer largoTitularCobro = jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'talleres'
+                  AND column_name = 'titular_cobro'
+                """, Integer.class);
+        Integer largoEntidadCobro = jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'talleres'
+                  AND column_name = 'entidad_cobro'
+                """, Integer.class);
+        assertThat(largoAliasCobro).isEqualTo(120);
+        assertThat(largoTitularCobro).isEqualTo(160);
+        assertThat(largoEntidadCobro).isEqualTo(120);
+
+        String mostrarEnResumenNullable = jdbcTemplate.queryForObject("""
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'talleres'
+                  AND column_name = 'mostrar_en_resumen'
+                """, String.class);
+        String mostrarEnResumenDefault = jdbcTemplate.queryForObject("""
+                SELECT column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'talleres'
+                  AND column_name = 'mostrar_en_resumen'
+                """, String.class);
+        assertThat(mostrarEnResumenNullable).isEqualTo("NO");
+        assertThat(mostrarEnResumenDefault).isEqualTo("true");
+
+        Boolean mostrarEnResumenNuevoTaller = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller migración V24')
+                RETURNING mostrar_en_resumen
+                """, Boolean.class);
+        assertThat(mostrarEnResumenNuevoTaller).isTrue();
 
         Integer largoReferencia = jdbcTemplate.queryForObject("""
                 SELECT character_maximum_length

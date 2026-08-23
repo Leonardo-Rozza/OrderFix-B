@@ -89,4 +89,38 @@ class TenantIsolationTests extends IntegrationTestBase {
         assertThat(estadoA.get("cobrado").asInt()).isEqualTo(10000);
         assertThat(estadoA.at("/cobros/0/estado").asText()).isEqualTo("ACTIVO");
     }
+
+    @Test
+    void datosDeCobroSeResuelvenSiempreDesdeElTenantAutenticado() throws Exception {
+        String a = registrar("Taller Datos A", "iso-datos-a@test.com");
+        String b = registrar("Taller Datos B", "iso-datos-b@test.com");
+        activarPro(a);
+        activarPro(b);
+
+        authPut("/api/taller/datos-cobro", a, json(Map.of(
+                "alias", "taller-a.mp",
+                "titular", "Titular A",
+                "mostrarEnResumen", true)))
+                .andExpect(status().isOk());
+        authPut("/api/taller/datos-cobro", b, json(Map.of(
+                "alias", "taller-b.mp",
+                "entidad", "Billetera B",
+                "mostrarEnResumen", false)))
+                .andExpect(status().isOk());
+
+        JsonNode datosA = node(authGet("/api/taller/datos-cobro", a)
+                .andExpect(status().isOk()));
+        JsonNode datosB = node(authGet("/api/taller/datos-cobro", b)
+                .andExpect(status().isOk()));
+
+        assertThat(datosA.get("alias").asText()).isEqualTo("taller-a.mp");
+        assertThat(datosA.get("titular").asText()).isEqualTo("Titular A");
+        assertThat(datosA.get("entidad").isNull()).isTrue();
+        assertThat(datosA.get("mostrarEnResumen").asBoolean()).isTrue();
+
+        assertThat(datosB.get("alias").asText()).isEqualTo("taller-b.mp");
+        assertThat(datosB.get("titular").isNull()).isTrue();
+        assertThat(datosB.get("entidad").asText()).isEqualTo("Billetera B");
+        assertThat(datosB.get("mostrarEnResumen").asBoolean()).isFalse();
+    }
 }
