@@ -2,13 +2,16 @@ package com.leonardorozza.mvgrreparacionesbackend;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ApiError;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.ArchivoDemasiadoGrandeException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.GlobalExceptionHandler;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -85,6 +88,40 @@ class ApiErrorContractTests {
         assertThat(response.getBody().getCode()).isEqualTo("QR_COBRO_INVALIDO");
         assertThat(response.getBody().getDetails())
                 .containsExactlyEntriesOf(Map.of("formatosPermitidos", "PNG,JPEG"));
+    }
+
+    @Test
+    void qrNoConfiguradoExponeCodigoEstableEn404() {
+        ResponseEntity<ApiError> response = handler.handleNotFound(
+                new ResourceNotFoundException(
+                        "QR_COBRO_NO_CONFIGURADO",
+                        "El taller no tiene un QR de cobro configurado."),
+                request("/api/taller/datos-cobro/qr"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("QR_COBRO_NO_CONFIGURADO");
+    }
+
+    @Test
+    void rechazosDeTamanoDeServicioYMultipartCompartenElMismo413() {
+        MockHttpServletRequest request = request("/api/taller/datos-cobro/qr");
+
+        ResponseEntity<ApiError> normalizado = handler.handleArchivoDemasiadoGrande(
+                new ArchivoDemasiadoGrandeException(
+                        "La imagen QR normalizada supera el máximo permitido de 1 MiB."),
+                request);
+        ResponseEntity<ApiError> multipart = handler.handleMaxUploadSize(
+                new MaxUploadSizeExceededException(1_048_576L), request);
+
+        assertArchivoDemasiadoGrande(normalizado);
+        assertArchivoDemasiadoGrande(multipart);
+    }
+
+    private void assertArchivoDemasiadoGrande(ResponseEntity<ApiError> response) {
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("ARCHIVO_DEMASIADO_GRAN");
     }
 
     private MockHttpServletRequest request(String path) {

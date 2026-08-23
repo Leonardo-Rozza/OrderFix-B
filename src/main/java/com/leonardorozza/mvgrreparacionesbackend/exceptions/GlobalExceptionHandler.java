@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -14,6 +15,9 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -36,10 +40,59 @@ public class GlobalExceptionHandler {
                 HttpStatus.NOT_FOUND.value(),
                 "Recurso no encontrado",
                 ex.getMessage(),
-                request.getRequestURI()
+                request.getRequestURI(),
+                ex.getCode(),
+                null
         );
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    // ================================
+    // 413 - Archivo por encima del límite permitido
+    // ================================
+    @ExceptionHandler(ArchivoDemasiadoGrandeException.class)
+    public ResponseEntity<ApiError> handleArchivoDemasiadoGrande(
+            ArchivoDemasiadoGrandeException ex,
+            HttpServletRequest request) {
+        return archivoDemasiadoGrande(ex.getMessage(), request);
+    }
+
+    /** También cubre el rechazo temprano del multipart resolver. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleMaxUploadSize(
+            MaxUploadSizeExceededException ex,
+            HttpServletRequest request) {
+        return archivoDemasiadoGrande(
+                "El archivo supera el máximo permitido de 1 MiB.", request);
+    }
+
+    @ExceptionHandler({MissingServletRequestPartException.class, MultipartException.class})
+    public ResponseEntity<ApiError> handleMultipartInvalido(
+            Exception ex, HttpServletRequest request) {
+        ApiError error = new ApiError(
+                LocalDateTime.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Solicitud inválida",
+                "La parte multipart 'file' es obligatoria y debe contener una imagen válida.",
+                request.getRequestURI(),
+                "QR_COBRO_INVALIDO",
+                Map.of("parteRequerida", "file")
+        );
+        return ResponseEntity.badRequest().body(error);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> handleMediaTypeNotSupported(
+            HttpMediaTypeNotSupportedException ex, HttpServletRequest request) {
+        ApiError error = new ApiError(
+                LocalDateTime.now(),
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(),
+                "Tipo de contenido no soportado",
+                "El tipo de contenido de la solicitud no está soportado.",
+                request.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(error);
     }
 
     // ================================
@@ -295,5 +348,19 @@ public class GlobalExceptionHandler {
 
     private Map<String, Object> optionalDetails(Map<String, Object> details) {
         return details == null || details.isEmpty() ? null : details;
+    }
+
+    private ResponseEntity<ApiError> archivoDemasiadoGrande(
+            String message, HttpServletRequest request) {
+        ApiError error = new ApiError(
+                LocalDateTime.now(),
+                HttpStatus.PAYLOAD_TOO_LARGE.value(),
+                "Archivo demasiado grande",
+                message,
+                request.getRequestURI(),
+                ArchivoDemasiadoGrandeException.CODE,
+                null
+        );
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(error);
     }
 }

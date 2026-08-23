@@ -56,7 +56,68 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25");
+
+        String tipoPngQr = jdbcTemplate.queryForObject("""
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'taller_qr_cobro'
+                  AND column_name = 'png'
+                """, String.class);
+        Integer largoShaQr = jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'taller_qr_cobro'
+                  AND column_name = 'sha256'
+                """, Integer.class);
+        Integer columnasQrNoNulas = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'taller_qr_cobro'
+                  AND column_name IN ('taller_id', 'png', 'sha256')
+                  AND is_nullable = 'NO'
+                """, Integer.class);
+        assertThat(tipoPngQr).isEqualTo("bytea");
+        assertThat(largoShaQr).isEqualTo(64);
+        assertThat(columnasQrNoNulas).isEqualTo(3);
+
+        String accionBorradoTallerQr = jdbcTemplate.queryForObject("""
+                SELECT confdeltype::text
+                FROM pg_constraint
+                WHERE conname = 'fk_taller_qr_cobro_taller'
+                """, String.class);
+        assertThat(accionBorradoTallerQr).isEqualTo("c");
+
+        Integer primaryKeyQr = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_constraint
+                WHERE conrelid = 'taller_qr_cobro'::regclass
+                  AND contype = 'p'
+                """, Integer.class);
+        assertThat(primaryKeyQr).isEqualTo(1);
+
+        Integer checksQrValidados = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_constraint
+                WHERE conname IN ('ck_taller_qr_cobro_png', 'ck_taller_qr_cobro_sha256')
+                  AND convalidated = TRUE
+                """, Integer.class);
+        String definicionCheckPngQr = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'ck_taller_qr_cobro_png'
+                """, String.class);
+        String definicionCheckShaQr = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'ck_taller_qr_cobro_sha256'
+                """, String.class);
+        assertThat(checksQrValidados).isEqualTo(2);
+        assertThat(definicionCheckPngQr).contains("octet_length", "1048576");
+        assertThat(definicionCheckShaQr).contains("sha256", "64", "0-9a-f");
 
         Integer largoAliasCobro = jdbcTemplate.queryForObject("""
                 SELECT character_maximum_length
@@ -202,5 +263,52 @@ class PostgresMigrationIT {
                 WHERE taller_id = ? AND nombre = 'Artículo inválido'
                 """, Integer.class, tallerId);
         assertThat(insertados).isZero();
+    }
+
+    @Test
+    void v25ImponeRelacionUnoAUnoShaHexadecimalYLimiteBytea() {
+        Long tallerId = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller QR válido')
+                RETURNING id
+                """, Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO taller_qr_cobro (taller_id, png, sha256)
+                VALUES (?, ?, ?)
+                """, tallerId, new byte[]{1, 2, 3}, "a".repeat(64));
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO taller_qr_cobro (taller_id, png, sha256)
+                VALUES (?, ?, ?)
+                """, tallerId, new byte[]{4}, "b".repeat(64)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("taller_qr_cobro_pkey");
+
+        Long tallerShaInvalido = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller QR sha inválido')
+                RETURNING id
+                """, Long.class);
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO taller_qr_cobro (taller_id, png, sha256)
+                VALUES (?, ?, ?)
+                """, tallerShaInvalido, new byte[]{1}, "Z".repeat(64)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("ck_taller_qr_cobro_sha256");
+
+        Long tallerPngInvalido = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller QR png inválido')
+                RETURNING id
+                """, Long.class);
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO taller_qr_cobro (taller_id, png, sha256)
+                VALUES (?, ?, ?)
+                """, tallerPngInvalido, new byte[1_048_577], "c".repeat(64)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("ck_taller_qr_cobro_png");
     }
 }
