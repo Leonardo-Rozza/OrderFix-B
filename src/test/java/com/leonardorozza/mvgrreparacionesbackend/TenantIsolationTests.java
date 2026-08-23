@@ -61,4 +61,32 @@ class TenantIsolationTests extends IntegrationTestBase {
         authDelete("/api/clientes/" + cliA, b).andExpect(status().isNotFound());
         authGet("/api/clientes/" + cliA, a).andExpect(status().isOk());
     }
+
+    @Test
+    void unTallerNoAnulaCobrosDeOtroNiPorEndpointCanonicoNiLegado() throws Exception {
+        String a = registrar("Taller Cobro A", "iso-cobro-a@test.com");
+        String b = registrar("Taller Cobro B", "iso-cobro-b@test.com");
+        activarPro(a);
+        activarPro(b);
+
+        long reparacionA = node(authPost("/api/reparaciones/ingreso-rapido", a, json(Map.of(
+                "clienteNombre", "Cliente A", "clienteTelefono", "9004",
+                "equipoMarca", "Samsung", "equipoModelo", "A54",
+                "descripcionProblema", "Pantalla", "precioEstimado", 30000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+        long cobroA = idOf(authPost("/api/reparaciones/" + reparacionA + "/cobros", a,
+                json(Map.of("monto", 10000, "metodo", "TRANSFERENCIA")))
+                .andExpect(status().isCreated()));
+
+        authPost("/api/reparaciones/" + reparacionA + "/cobros/" + cobroA + "/anulacion",
+                b, json(Map.of("motivo", "Intento ajeno")))
+                .andExpect(status().isNotFound());
+        authDelete("/api/reparaciones/" + reparacionA + "/cobros/" + cobroA, b)
+                .andExpect(status().isNotFound());
+
+        JsonNode estadoA = node(authGet("/api/reparaciones/" + reparacionA + "/cobros", a)
+                .andExpect(status().isOk()));
+        assertThat(estadoA.get("cobrado").asInt()).isEqualTo(10000);
+        assertThat(estadoA.at("/cobros/0/estado").asText()).isEqualTo("ACTIVO");
+    }
 }

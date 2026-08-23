@@ -56,7 +56,7 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22");
+                .contains("17", "18", "19", "20", "21", "22", "23");
 
         Integer largoReferencia = jdbcTemplate.queryForObject("""
                 SELECT character_maximum_length
@@ -66,6 +66,49 @@ class PostgresMigrationIT {
                   AND column_name = 'referencia'
                 """, Integer.class);
         assertThat(largoReferencia).isEqualTo(120);
+
+        Integer columnasAnulacion = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'cobros'
+                  AND column_name IN ('anulado_at', 'anulado_por_id', 'motivo_anulacion')
+                  AND is_nullable = 'YES'
+                """, Integer.class);
+        assertThat(columnasAnulacion).isEqualTo(3);
+
+        String accionBorradoFk = jdbcTemplate.queryForObject("""
+                SELECT confdeltype::text
+                FROM pg_constraint
+                WHERE conname = 'fk_cobros_anulado_por'
+                """, String.class);
+        assertThat(accionBorradoFk).isEqualTo("a");
+
+        Boolean checkAnulacionValidado = jdbcTemplate.queryForObject("""
+                SELECT convalidated
+                FROM pg_constraint
+                WHERE conname = 'ck_cobros_anulacion_completa'
+                """, Boolean.class);
+        assertThat(checkAnulacionValidado).isTrue();
+
+        String definicionCheckAnulacion = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'ck_cobros_anulacion_completa'
+                """, String.class);
+        assertThat(definicionCheckAnulacion)
+                .contains("anulado_at", "anulado_por_id", "motivo_anulacion", "btrim");
+
+        Integer indicesActivos = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname IN (
+                    'idx_cobros_reparacion_activo',
+                    'idx_cobros_taller_fecha_activo'
+                  )
+                """, Integer.class);
+        assertThat(indicesActivos).isEqualTo(2);
 
         Integer checksNoValidados = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)

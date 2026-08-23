@@ -72,4 +72,32 @@ class RolTests extends IntegrationTestBase {
                 .andExpect(status().isOk());
         authGet("/api/clientes", emp).andExpect(status().isForbidden());
     }
+
+    @Test
+    void userConsultaLaHistoriaPeroNoPuedeAnularCobros() throws Exception {
+        String admin = registrar("Taller Rol Cobro", "rol-cobro-admin@test.com");
+        activarPro(admin);
+        String user = empleadoUser(admin, "rol-cobro-user@test.com");
+
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", admin, json(Map.of(
+                "clienteNombre", "Cliente", "clienteTelefono", "9101",
+                "equipoMarca", "Samsung", "equipoModelo", "A54",
+                "descripcionProblema", "Pantalla", "precioEstimado", 20000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+        long cobroId = idOf(authPost("/api/reparaciones/" + reparacionId + "/cobros", admin,
+                json(Map.of("monto", 10000, "metodo", "EFECTIVO")))
+                .andExpect(status().isCreated()));
+
+        authGet("/api/reparaciones/" + reparacionId + "/cobros", user)
+                .andExpect(status().isOk());
+        authPost("/api/reparaciones/" + reparacionId + "/cobros/" + cobroId + "/anulacion",
+                user, json(Map.of("motivo", "No autorizado")))
+                .andExpect(status().isForbidden());
+        authDelete("/api/reparaciones/" + reparacionId + "/cobros/" + cobroId, user)
+                .andExpect(status().isForbidden());
+
+        authPost("/api/reparaciones/" + reparacionId + "/cobros/" + cobroId + "/anulacion",
+                admin, json(Map.of("motivo", "Autorizado por admin")))
+                .andExpect(status().isOk());
+    }
 }

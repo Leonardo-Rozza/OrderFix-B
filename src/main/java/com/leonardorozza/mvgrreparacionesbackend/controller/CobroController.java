@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.controller;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobrosReparacionDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroAnulacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.ReciboDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.CobroService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,11 +36,23 @@ public class CobroController {
         return ResponseEntity.ok(cobroService.listarPorReparacion(reparacionId));
     }
 
-    @Operation(summary = "Anular un cobro (solo ADMIN)")
+    @Operation(summary = "Anular un cobro con motivo y auditoría (solo ADMIN)")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/cobros/{cobroId}/anulacion")
+    public ResponseEntity<CobroResponseDTO> anular(
+            @PathVariable Long reparacionId,
+            @PathVariable Long cobroId,
+            @Valid @RequestBody CobroAnulacionRequestDTO request) {
+        return ResponseEntity.ok(cobroService.anular(reparacionId, cobroId, request));
+    }
+
+    @Deprecated
+    @Operation(summary = "Alias legado para anular un cobro", deprecated = true)
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/cobros/{cobroId}")
-    public ResponseEntity<Void> eliminar(@PathVariable Long reparacionId, @PathVariable Long cobroId) {
-        cobroService.eliminar(cobroId);
+    public ResponseEntity<Void> anularLegado(
+            @PathVariable Long reparacionId, @PathVariable Long cobroId) {
+        cobroService.anularLegado(reparacionId, cobroId);
         return ResponseEntity.noContent().build();
     }
 

@@ -8,6 +8,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Objects;
 
 /**
  * Cobro (pago) registrado sobre una reparación. Una reparación puede tener varios
@@ -48,7 +49,30 @@ public class Cobro {
     @Column(length = 120)
     private String referencia;
 
+    @Setter(AccessLevel.NONE)
+    @Column(name = "anulado_at")
+    private LocalDateTime anuladoAt;
+
+    @Setter(AccessLevel.NONE)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "anulado_por_id")
+    private User anuladoPor;
+
+    @Setter(AccessLevel.NONE)
+    @Column(name = "motivo_anulacion", length = 255)
+    private String motivoAnulacion;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
+
+    public boolean estaAnulado() {
+        return anuladoAt != null;
+    }
+
+    public void anular(LocalDateTime fecha, User usuario, String motivo) {
+        this.anuladoAt = Objects.requireNonNull(fecha, "La fecha de anulación es obligatoria");
+        this.anuladoPor = Objects.requireNonNull(usuario, "El usuario que anula es obligatorio");
+        this.motivoAnulacion = Objects.requireNonNull(motivo, "El motivo de anulación es obligatorio");
+    }
 }

@@ -185,6 +185,141 @@ class CobroConcurrencyIT extends IntegrationTestBase {
         assertThat(estado.get("cobros").size()).isEqualTo(cobrado == 0 ? 0 : 1);
     }
 
+    @Test
+    void dosAnulacionesCanonicasConcurrentesAuditanUnaSolaTransicion() throws Exception {
+        String token = registrar("Taller Anulación Concurrente", "anulacion-concurrente@test.com");
+        activarPro(token);
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", token, json(Map.of(
+                "clienteNombre", "Ana", "clienteTelefono", "8803",
+                "equipoMarca", "Samsung", "equipoModelo", "S24",
+                "descripcionProblema", "Pantalla", "precioEstimado", 40000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+        long cobroId = idOf(authPost("/api/reparaciones/" + reparacionId + "/cobros", token,
+                json(Map.of("monto", 20000, "metodo", "TRANSFERENCIA")))
+                .andExpect(status().isCreated()));
+
+        CountDownLatch listos = new CountDownLatch(2);
+        CountDownLatch inicio = new CountDownLatch(1);
+        Callable<Resultado> anular = () -> {
+            listos.countDown();
+            if (!inicio.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Las anulaciones no iniciaron juntas");
+            }
+            ResultActions result = authPost(
+                    "/api/reparaciones/" + reparacionId + "/cobros/" + cobroId + "/anulacion",
+                    token,
+                    json(Map.of("motivo", "Carrera controlada")));
+            var response = result.andReturn().getResponse();
+            return new Resultado(response.getStatus(), response.getContentAsString());
+        };
+
+        Connection gate = dataSource.getConnection();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            gate.setAutoCommit(false);
+            try (PreparedStatement lock = gate.prepareStatement(
+                    "SELECT id FROM reparaciones WHERE id = ? FOR NO KEY UPDATE")) {
+                lock.setLong(1, reparacionId);
+                try (var fila = lock.executeQuery()) {
+                    assertThat(fila.next()).isTrue();
+                }
+            }
+
+            Future<Resultado> primera = executor.submit(anular);
+            Future<Resultado> segunda = executor.submit(anular);
+            assertThat(listos.await(10, TimeUnit.SECONDS)).isTrue();
+            inicio.countDown();
+
+            assertSigueBloqueado(primera);
+            assertSigueBloqueado(segunda);
+            gate.commit();
+
+            Resultado resultadoA = primera.get(15, TimeUnit.SECONDS);
+            Resultado resultadoB = segunda.get(15, TimeUnit.SECONDS);
+            assertThat(new int[]{resultadoA.status(), resultadoB.status()})
+                    .containsExactlyInAnyOrder(200, 409);
+            Resultado conflicto = resultadoA.status() == 409 ? resultadoA : resultadoB;
+            assertThat(om.readTree(conflicto.body()).get("code").asText())
+                    .isEqualTo("COBRO_YA_ANULADO");
+        } finally {
+            inicio.countDown();
+            liberarGate(gate, executor);
+        }
+
+        JsonNode estado = node(authGet("/api/reparaciones/" + reparacionId + "/cobros", token)
+                .andExpect(status().isOk()));
+        assertThat(estado.get("cobrado").asInt()).isZero();
+        assertThat(estado.get("cobros")).hasSize(1);
+        assertThat(estado.at("/cobros/0/estado").asText()).isEqualTo("ANULADO");
+        assertThat(estado.at("/cobros/0/motivoAnulacion").asText()).isEqualTo("Carrera controlada");
+        assertThat(estado.at("/cobros/0/anuladoPorNombre").asText()).isEqualTo("Admin");
+    }
+
+    @Test
+    void dosAliasLegadosConcurrentesSonIdempotentesYNoSobrescribenAuditoria() throws Exception {
+        String token = registrar("Taller Alias Concurrente", "alias-concurrente@test.com");
+        activarPro(token);
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", token, json(Map.of(
+                "clienteNombre", "Leo", "clienteTelefono", "8804",
+                "equipoMarca", "Motorola", "equipoModelo", "G84",
+                "descripcionProblema", "Conector", "precioEstimado", 30000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+        long cobroId = idOf(authPost("/api/reparaciones/" + reparacionId + "/cobros", token,
+                json(Map.of("monto", 10000, "metodo", "EFECTIVO")))
+                .andExpect(status().isCreated()));
+
+        CountDownLatch listos = new CountDownLatch(2);
+        CountDownLatch inicio = new CountDownLatch(1);
+        Callable<Resultado> anularLegado = () -> {
+            listos.countDown();
+            if (!inicio.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Los aliases no iniciaron juntos");
+            }
+            ResultActions result = authDelete(
+                    "/api/reparaciones/" + reparacionId + "/cobros/" + cobroId,
+                    token);
+            var response = result.andReturn().getResponse();
+            return new Resultado(response.getStatus(), response.getContentAsString());
+        };
+
+        Connection gate = dataSource.getConnection();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            gate.setAutoCommit(false);
+            try (PreparedStatement lock = gate.prepareStatement(
+                    "SELECT id FROM reparaciones WHERE id = ? FOR NO KEY UPDATE")) {
+                lock.setLong(1, reparacionId);
+                try (var fila = lock.executeQuery()) {
+                    assertThat(fila.next()).isTrue();
+                }
+            }
+
+            Future<Resultado> primero = executor.submit(anularLegado);
+            Future<Resultado> segundo = executor.submit(anularLegado);
+            assertThat(listos.await(10, TimeUnit.SECONDS)).isTrue();
+            inicio.countDown();
+
+            assertSigueBloqueado(primero);
+            assertSigueBloqueado(segundo);
+            gate.commit();
+
+            assertThat(primero.get(15, TimeUnit.SECONDS).status()).isEqualTo(204);
+            assertThat(segundo.get(15, TimeUnit.SECONDS).status()).isEqualTo(204);
+        } finally {
+            inicio.countDown();
+            liberarGate(gate, executor);
+        }
+
+        JsonNode estado = node(authGet("/api/reparaciones/" + reparacionId + "/cobros", token)
+                .andExpect(status().isOk()));
+        assertThat(estado.get("cobrado").asInt()).isZero();
+        assertThat(estado.get("cobros")).hasSize(1);
+        assertThat(estado.at("/cobros/0/estado").asText()).isEqualTo("ANULADO");
+        assertThat(estado.at("/cobros/0/motivoAnulacion").asText())
+                .isEqualTo("Anulación mediante endpoint legado");
+        assertThat(estado.at("/cobros/0/anuladoAt").asText()).isNotBlank();
+    }
+
     private static void assertSigueBloqueado(Future<?> future) {
         assertThatThrownBy(() -> future.get(400, TimeUnit.MILLISECONDS))
                 .isInstanceOf(TimeoutException.class);

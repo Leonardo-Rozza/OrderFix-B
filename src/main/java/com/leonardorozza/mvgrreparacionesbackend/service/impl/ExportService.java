@@ -122,7 +122,8 @@ public class ExportService {
 
     private void hojaCobros(Workbook wb, CellStyle encabezado, List<Cobro> cobros) {
         Sheet hoja = nuevaHoja(wb, "Cobros", encabezado,
-                "Fecha", "N° orden", "Monto", "Método", "Referencia", "Observaciones");
+                "Fecha", "N° orden", "Monto", "Método", "Referencia", "Estado",
+                "Anulado el", "Anulado por", "Motivo de anulación", "Observaciones");
         int fila = 1;
         for (Cobro c : cobros) {
             Row r = hoja.createRow(fila++);
@@ -131,9 +132,13 @@ public class ExportService {
             numero(r, 2, c.getMonto());
             texto(r, 3, c.getMetodo().name());
             texto(r, 4, c.getReferencia());
-            texto(r, 5, c.getObservaciones());
+            texto(r, 5, c.estaAnulado() ? "ANULADO" : "ACTIVO");
+            texto(r, 6, fechaHora(c.getAnuladoAt()));
+            texto(r, 7, c.getAnuladoPor() != null ? c.getAnuladoPor().getUsername() : null);
+            texto(r, 8, c.getMotivoAnulacion());
+            texto(r, 9, c.getObservaciones());
         }
-        autoajustar(hoja, 6);
+        autoajustar(hoja, 10);
     }
 
     private void hojaPresupuestos(Workbook wb, CellStyle encabezado, List<Presupuesto> presupuestos) {

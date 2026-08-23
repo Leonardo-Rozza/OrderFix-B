@@ -414,11 +414,11 @@ public class ReparacionServiceImpl implements ReparacionService {
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
-        // Protege el historial/caja: una reparación con cobros no se borra (anular cobros primero)
+        // La anulación conserva el movimiento: cualquier historial impide la baja física.
         if (cobroRepository.existsByReparacionId(id)) {
             throw new BadRequestException(
-                    "No podés borrar una reparación con cobros registrados (afectaría la caja). "
-                            + "Anulá los cobros primero.");
+                    "No podés borrar una reparación con historial de cobros. "
+                            + "Los movimientos, incluso anulados, deben conservarse para auditoría.");
         }
 
         List<Repuesto> repuestos = repuestoRepository

@@ -52,10 +52,16 @@ class ReparacionDeleteTests extends IntegrationTestBase {
                 "equipoMarca", "M", "equipoModelo", "X", "descripcionProblema", "z", "precioEstimado", 5000)))
                 .andExpect(status().isCreated())).get("reparacion").get("id").asLong();
 
-        authPost("/api/reparaciones/" + repId + "/cobros", t,
-                json(Map.of("monto", 5000, "metodo", "EFECTIVO"))).andExpect(status().isCreated());
+        long cobroId = idOf(authPost("/api/reparaciones/" + repId + "/cobros", t,
+                json(Map.of("monto", 5000, "metodo", "EFECTIVO")))
+                .andExpect(status().isCreated()));
 
         // borrar bloqueado → 400, y la reparación sigue existiendo
+        authDelete("/api/reparaciones/" + repId, t).andExpect(status().isBadRequest());
+        authPost("/api/reparaciones/" + repId + "/cobros/" + cobroId + "/anulacion", t,
+                json(Map.of("motivo", "Cobro cargado por error")))
+                .andExpect(status().isOk());
+        // La anulación conserva el movimiento histórico: la baja continúa bloqueada.
         authDelete("/api/reparaciones/" + repId, t).andExpect(status().isBadRequest());
         authGet("/api/reparaciones/" + repId, t).andExpect(status().isOk());
     }

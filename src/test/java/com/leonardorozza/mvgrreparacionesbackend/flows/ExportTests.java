@@ -64,6 +64,26 @@ class ExportTests extends IntegrationTestBase {
                 .andExpect(status().isCreated());
         jdbcTemplate.update("UPDATE reparaciones SET precio_estimado = 10000 WHERE id = ?", repLegacyId);
 
+        // Tercera orden: el movimiento anulado permanece en Cobros pero deja de
+        // participar en las sumas de la hoja Órdenes.
+        JsonNode ingresoAnulado = node(authPost("/api/reparaciones/ingreso-rapido", a, json(Map.of(
+                "clienteNombre", "ClienteAnulado", "clienteTelefono", "7304",
+                "equipoMarca", "Motorola", "equipoModelo", "G84",
+                "descripcionProblema", "conector", "precioEstimado", 15000)))
+                .andExpect(status().isCreated()));
+        long repAnuladoId = ingresoAnulado.at("/reparacion/id").asLong();
+        String numeroOrdenAnulada = ingresoAnulado.at("/reparacion/numeroOrden").asText();
+        long cobroAnuladoId = idOf(authPost("/api/reparaciones/" + repAnuladoId + "/cobros", a,
+                json(Map.of(
+                        "monto", 5000,
+                        "metodo", "TARJETA",
+                        "referencia", "EXP-ANULADO",
+                        "observaciones", "Nota anulada")))
+                .andExpect(status().isCreated()));
+        authPost("/api/reparaciones/" + repAnuladoId + "/cobros/" + cobroAnuladoId + "/anulacion",
+                a, json(Map.of("motivo", "Error de caja")))
+                .andExpect(status().isOk());
+
         // Datos del taller B: NO deben aparecer en el export de A
         authPost("/api/reparaciones/ingreso-rapido", b, json(Map.of(
                 "clienteNombre", "ClienteAjeno", "clienteTelefono", "7302",
@@ -105,10 +125,33 @@ class ExportTests extends IntegrationTestBase {
             assertThat(valor(ordenLegacy, 13)).isEqualTo("Sí");
             assertThat(valor(ordenLegacy, 14)).isEqualTo("PAGADO");
 
-            String cobros = textoDe(wb.getSheet("Cobros"));
+            Row ordenAnulada = filaPorValor(hojaOrdenes, 0, numeroOrdenAnulada);
+            assertThat(valor(ordenAnulada, 10)).isEqualTo("0");
+            assertThat(valor(ordenAnulada, 11)).isEqualTo("15000");
+            assertThat(valor(ordenAnulada, 14)).isEqualTo("SIN_COBRAR");
+
+            Sheet hojaCobros = wb.getSheet("Cobros");
+            String cobros = textoDe(hojaCobros);
             assertThat(cobros)
-                    .contains("Referencia", "EXP-30000", "EXP-LEGACY", "EFECTIVO", "TRANSFERENCIA")
+                    .contains(
+                            "Referencia", "Estado", "Anulado el", "Anulado por", "Motivo de anulación",
+                            "EXP-30000", "EXP-LEGACY", "EXP-ANULADO",
+                            "EFECTIVO", "TRANSFERENCIA", "TARJETA")
                     .doesNotContain("ClienteAjeno");
+
+            Row cobroActivo = filaPorValor(hojaCobros, 1, numeroOrden);
+            assertThat(valor(cobroActivo, 5)).isEqualTo("ACTIVO");
+            assertThat(valor(cobroActivo, 6)).isEmpty();
+            assertThat(valor(cobroActivo, 7)).isEmpty();
+            assertThat(valor(cobroActivo, 8)).isEmpty();
+
+            Row cobroAnulado = filaPorValor(hojaCobros, 1, numeroOrdenAnulada);
+            assertThat(valor(cobroAnulado, 4)).isEqualTo("EXP-ANULADO");
+            assertThat(valor(cobroAnulado, 5)).isEqualTo("ANULADO");
+            assertThat(valor(cobroAnulado, 6)).isNotBlank();
+            assertThat(valor(cobroAnulado, 7)).isEqualTo("Admin");
+            assertThat(valor(cobroAnulado, 8)).isEqualTo("Error de caja");
+            assertThat(valor(cobroAnulado, 9)).isEqualTo("Nota anulada");
         }
     }
 
