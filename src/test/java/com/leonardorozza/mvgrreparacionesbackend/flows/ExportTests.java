@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.flows;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -7,6 +8,8 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.io.ByteArrayInputStream;
 import java.util.Map;
@@ -19,6 +22,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class ExportTests extends IntegrationTestBase {
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @Test
     void adminExportaExcelConSusDatosYSoloLosSuyos() throws Exception {
         String a = registrar("Taller Export A", "exp-a@test.com");
@@ -26,13 +32,37 @@ class ExportTests extends IntegrationTestBase {
         String b = registrar("Taller Export B", "exp-b@test.com");
 
         // Datos del taller A: orden con cobro parcial
-        long repId = node(authPost("/api/reparaciones/ingreso-rapido", a, json(Map.of(
+        JsonNode ingreso = node(authPost("/api/reparaciones/ingreso-rapido", a, json(Map.of(
                 "clienteNombre", "ClienteExport", "clienteTelefono", "7301",
                 "equipoMarca", "Samsung", "equipoModelo", "A54",
                 "descripcionProblema", "pantalla rota", "precioEstimado", 80000)))
-                .andExpect(status().isCreated())).get("reparacion").get("id").asLong();
+                .andExpect(status().isCreated()));
+        long repId = ingreso.at("/reparacion/id").asLong();
+        String numeroOrden = ingreso.at("/reparacion/numeroOrden").asText();
         authPost("/api/reparaciones/" + repId + "/cobros", a,
-                json(Map.of("monto", 30000, "metodo", "EFECTIVO"))).andExpect(status().isCreated());
+                json(Map.of(
+                        "monto", 30000,
+                        "metodo", "EFECTIVO",
+                        "referencia", "EXP-30000",
+                        "observaciones", "Nota interna")))
+                .andExpect(status().isCreated());
+
+        // Segunda orden del mismo taller con un sobrepago histórico para verificar
+        // que el export lo marca sin convertir EstadoPago en un enum incompatible.
+        JsonNode ingresoLegacy = node(authPost("/api/reparaciones/ingreso-rapido", a, json(Map.of(
+                "clienteNombre", "ClienteLegacy", "clienteTelefono", "7303",
+                "equipoMarca", "Nokia", "equipoModelo", "G50",
+                "descripcionProblema", "batería", "precioEstimado", 20000)))
+                .andExpect(status().isCreated()));
+        long repLegacyId = ingresoLegacy.at("/reparacion/id").asLong();
+        String numeroOrdenLegacy = ingresoLegacy.at("/reparacion/numeroOrden").asText();
+        authPost("/api/reparaciones/" + repLegacyId + "/cobros", a,
+                json(Map.of(
+                        "monto", 20000,
+                        "metodo", "TRANSFERENCIA",
+                        "referencia", "EXP-LEGACY")))
+                .andExpect(status().isCreated());
+        jdbcTemplate.update("UPDATE reparaciones SET precio_estimado = 10000 WHERE id = ?", repLegacyId);
 
         // Datos del taller B: NO deben aparecer en el export de A
         authPost("/api/reparaciones/ingreso-rapido", b, json(Map.of(
@@ -59,7 +89,26 @@ class ExportTests extends IntegrationTestBase {
             assertThat(ordenes).contains("pantalla rota", "Samsung A54", "PARCIAL");
             assertThat(ordenes).doesNotContain("no enciende");
 
-            assertThat(textoDe(wb.getSheet("Cobros"))).contains("30000", "EFECTIVO");
+            Sheet hojaOrdenes = wb.getSheet("Órdenes");
+            assertThat(textoDe(hojaOrdenes))
+                    .contains("Pendiente de cobro", "Excedente", "Requiere revisión");
+
+            Row ordenParcial = filaPorValor(hojaOrdenes, 0, numeroOrden);
+            assertThat(valor(ordenParcial, 11)).isEqualTo("50000");
+            assertThat(valor(ordenParcial, 12)).isEqualTo("0");
+            assertThat(valor(ordenParcial, 13)).isEqualTo("No");
+            assertThat(valor(ordenParcial, 14)).isEqualTo("PARCIAL");
+
+            Row ordenLegacy = filaPorValor(hojaOrdenes, 0, numeroOrdenLegacy);
+            assertThat(valor(ordenLegacy, 11)).isEqualTo("0");
+            assertThat(valor(ordenLegacy, 12)).isEqualTo("10000");
+            assertThat(valor(ordenLegacy, 13)).isEqualTo("Sí");
+            assertThat(valor(ordenLegacy, 14)).isEqualTo("PAGADO");
+
+            String cobros = textoDe(wb.getSheet("Cobros"));
+            assertThat(cobros)
+                    .contains("Referencia", "EXP-30000", "EXP-LEGACY", "EFECTIVO", "TRANSFERENCIA")
+                    .doesNotContain("ClienteAjeno");
         }
     }
 
@@ -85,5 +134,19 @@ class ExportTests extends IntegrationTestBase {
             }
         }
         return sj.toString();
+    }
+
+    private Row filaPorValor(Sheet hoja, int columna, String esperado) {
+        for (Row fila : hoja) {
+            if (esperado.equals(valor(fila, columna))) {
+                return fila;
+            }
+        }
+        throw new AssertionError("No se encontró la fila con valor " + esperado);
+    }
+
+    private String valor(Row fila, int columna) {
+        Cell celda = fila.getCell(columna);
+        return celda == null ? "" : new DataFormatter().formatCellValue(celda);
     }
 }

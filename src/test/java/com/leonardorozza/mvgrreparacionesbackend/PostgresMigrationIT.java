@@ -56,7 +56,16 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21");
+                .contains("17", "18", "19", "20", "21", "22");
+
+        Integer largoReferencia = jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'cobros'
+                  AND column_name = 'referencia'
+                """, Integer.class);
+        assertThat(largoReferencia).isEqualTo(120);
 
         Integer checksNoValidados = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)

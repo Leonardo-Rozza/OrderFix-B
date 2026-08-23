@@ -29,18 +29,30 @@ class CobroCajaReciboTests extends IntegrationTestBase {
                 .andExpect(status().isCreated());
 
         // Seña 20000
-        authPost("/api/reparaciones/" + repId + "/cobros", t,
-                json(Map.of("monto", 20000, "metodo", "EFECTIVO"))).andExpect(status().isCreated());
+        JsonNode cobroCreado = node(authPost("/api/reparaciones/" + repId + "/cobros", t,
+                json(Map.of(
+                        "monto", 20000,
+                        "metodo", "EFECTIVO",
+                        "referencia", "  CAJA-001  ",
+                        "observaciones", "Seña interna")))
+                .andExpect(status().isCreated()));
+        assertThat(cobroCreado.get("referencia").asText()).isEqualTo("CAJA-001");
+        assertThat(cobroCreado.get("observaciones").asText()).isEqualTo("Seña interna");
 
         JsonNode resumen = node(authGet("/api/reparaciones/" + repId + "/cobros", t).andExpect(status().isOk()));
         assertThat(resumen.get("total").asInt()).isEqualTo(50000);
         assertThat(resumen.get("cobrado").asInt()).isEqualTo(20000);
         assertThat(resumen.get("saldo").asInt()).isEqualTo(30000);
+        assertThat(resumen.get("excedente").asInt()).isZero();
+        assertThat(resumen.get("requiereRevision").asBoolean()).isFalse();
         assertThat(resumen.get("pagado").asBoolean()).isFalse();
+        assertThat(resumen.at("/cobros/0/referencia").asText()).isEqualTo("CAJA-001");
 
         // Saldo 30000
-        authPost("/api/reparaciones/" + repId + "/cobros", t,
-                json(Map.of("monto", 30000, "metodo", "TRANSFERENCIA"))).andExpect(status().isCreated());
+        JsonNode saldoCreado = node(authPost("/api/reparaciones/" + repId + "/cobros", t,
+                json(Map.of("monto", 30000, "metodo", "TRANSFERENCIA", "referencia", "   ")))
+                .andExpect(status().isCreated()));
+        assertThat(saldoCreado.get("referencia").isNull()).isTrue();
 
         JsonNode recibo = node(authGet("/api/reparaciones/" + repId + "/recibo", t).andExpect(status().isOk()));
         assertThat(recibo.get("total").asInt()).isEqualTo(50000);
@@ -85,6 +97,51 @@ class CobroCajaReciboTests extends IntegrationTestBase {
                 .andExpect(status().isOk()));
         assertThat(resumen.get("cobrado").asInt()).isEqualTo(20000);
         assertThat(resumen.get("saldo").asInt()).isEqualTo(30000);
+        assertThat(resumen.get("excedente").asInt()).isZero();
+        assertThat(resumen.get("requiereRevision").asBoolean()).isFalse();
         assertThat(resumen.get("cobros")).hasSize(1);
+    }
+
+    @Test
+    void referenciaSeValidaPersisteYNoSeExponeEntreTalleres() throws Exception {
+        String tokenA = registrar("Taller Referencia A", "referencia-a@test.com");
+        String tokenB = registrar("Taller Referencia B", "referencia-b@test.com");
+        activarPro(tokenA);
+        activarPro(tokenB);
+
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", tokenA, json(Map.of(
+                "clienteNombre", "Rita", "clienteTelefono", "8003",
+                "equipoMarca", "Samsung", "equipoModelo", "S23",
+                "descripcionProblema", "No enciende", "precioEstimado", 40000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+
+        JsonNode creado = node(authPost("/api/reparaciones/" + reparacionId + "/cobros", tokenA,
+                json(Map.of(
+                        "monto", 10000,
+                        "metodo", "TRANSFERENCIA",
+                        "referencia", "  OP-123  ",
+                        "observaciones", "Dato sólo interno")))
+                .andExpect(status().isCreated()));
+        assertThat(creado.get("referencia").asText()).isEqualTo("OP-123");
+
+        JsonNode listado = node(authGet("/api/reparaciones/" + reparacionId + "/cobros", tokenA)
+                .andExpect(status().isOk()));
+        assertThat(listado.at("/cobros/0/referencia").asText()).isEqualTo("OP-123");
+        assertThat(listado.at("/cobros/0/observaciones").asText()).isEqualTo("Dato sólo interno");
+
+        authGet("/api/reparaciones/" + reparacionId + "/cobros", tokenB)
+                .andExpect(status().isNotFound());
+
+        authPost("/api/reparaciones/" + reparacionId + "/cobros", tokenA,
+                json(Map.of(
+                        "monto", 1,
+                        "metodo", "EFECTIVO",
+                        "referencia", "R".repeat(121))))
+                .andExpect(status().isBadRequest());
+
+        JsonNode sinCobroInvalido = node(authGet("/api/reparaciones/" + reparacionId + "/cobros", tokenA)
+                .andExpect(status().isOk()));
+        assertThat(sinCobroInvalido.get("cobros")).hasSize(1);
+        assertThat(sinCobroInvalido.get("cobrado").asInt()).isEqualTo(10000);
     }
 }

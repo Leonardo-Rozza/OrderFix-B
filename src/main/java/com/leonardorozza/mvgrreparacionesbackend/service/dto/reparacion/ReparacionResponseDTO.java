@@ -79,6 +79,10 @@ public class ReparacionResponseDTO {
     private BigDecimal cobrado;
     /** Saldo pendiente = max(0, total - cobrado). */
     private BigDecimal saldo;
+    /** Importe cobrado por encima del total. Sólo puede existir en datos históricos. */
+    private BigDecimal excedente;
+    /** Señal prioritaria: si es true, debe mostrarse antes que el estado PAGADO compatible. */
+    private boolean requiereRevision;
     /** Derivado de total vs cobrado: SIN_COBRAR | PARCIAL | PAGADO. */
     private EstadoPago estadoPago;
 }

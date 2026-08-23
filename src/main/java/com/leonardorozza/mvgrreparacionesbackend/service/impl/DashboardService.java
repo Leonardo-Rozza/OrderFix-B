@@ -12,6 +12,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.Reparaci
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.DashboardResponseDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.EstadoCuentaOrden;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -63,11 +64,12 @@ public class DashboardService {
                 .stream().map(r -> {
                     ReparacionResponseDTO dto = reparacionMapper.toDTO(r);
                     BigDecimal cobrado = cobroRepository.sumByReparacionId(r.getId());
-                    BigDecimal totalRep = dto.getTotal() != null ? dto.getTotal() : BigDecimal.ZERO;
-                    BigDecimal saldo = totalRep.subtract(cobrado);
-                    dto.setCobrado(cobrado);
-                    dto.setSaldo(saldo.signum() > 0 ? saldo : BigDecimal.ZERO);
-                    dto.setEstadoPago(EstadoPago.de(totalRep, cobrado));
+                    EstadoCuentaOrden cuenta = EstadoCuentaOrden.de(dto.getTotal(), cobrado);
+                    dto.setCobrado(cuenta.cobrado());
+                    dto.setSaldo(cuenta.saldo());
+                    dto.setExcedente(cuenta.excedente());
+                    dto.setRequiereRevision(cuenta.requiereRevision());
+                    dto.setEstadoPago(EstadoPago.de(cuenta.total(), cuenta.cobrado()));
                     return dto;
                 }).toList();
 

@@ -20,6 +20,9 @@ public class CobroRequestDTO {
     @NotNull
     private MetodoPago metodo;
 
+    @Size(max = 120)
+    private String referencia;
+
     @Size(max = 255)
     private String observaciones;
 }

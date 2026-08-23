@@ -45,6 +45,9 @@ public class Cobro {
     @Column(length = 255)
     private String observaciones;
 
+    @Column(length = 120)
+    private String referencia;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

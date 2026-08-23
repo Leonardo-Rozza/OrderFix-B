@@ -10,6 +10,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteR
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.PresupuestoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.EstadoCuentaOrden;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -84,17 +85,17 @@ public class ExportService {
     private void hojaOrdenes(Workbook wb, CellStyle encabezado, List<Reparacion> reparaciones) {
         Sheet hoja = nuevaHoja(wb, "Órdenes", encabezado,
                 "N° orden", "Fecha ingreso", "Cliente", "Teléfono", "Equipo", "IMEI",
-                "Problema", "Estado", "Técnico", "Total", "Cobrado", "Saldo",
-                "Estado de pago", "Fecha entrega", "Garantía hasta", "Código seguimiento");
+                "Problema", "Estado", "Técnico", "Total", "Cobrado", "Pendiente de cobro",
+                "Excedente", "Requiere revisión", "Estado de pago", "Fecha entrega",
+                "Garantía hasta", "Código seguimiento");
 
         Map<Long, BigDecimal> cobradoPorOrden = cobradoPorOrden(reparaciones);
 
         int fila = 1;
         for (Reparacion rep : reparaciones) {
             Cliente cliente = rep.getEquipo().getCliente();
-            BigDecimal total = rep.calcularTotal();
             BigDecimal cobrado = cobradoPorOrden.getOrDefault(rep.getId(), BigDecimal.ZERO);
-            BigDecimal saldo = total.subtract(cobrado).max(BigDecimal.ZERO);
+            EstadoCuentaOrden cuenta = EstadoCuentaOrden.de(rep.calcularTotal(), cobrado);
 
             Row r = hoja.createRow(fila++);
             texto(r, 0, rep.getNumeroOrden() != null ? rep.getNumeroOrden() : "#" + rep.getId());
@@ -106,20 +107,22 @@ public class ExportService {
             texto(r, 6, rep.getDescripcionProblema());
             texto(r, 7, rep.getEstado().name());
             texto(r, 8, rep.getTecnico() != null ? rep.getTecnico().getUsername() : null);
-            numero(r, 9, total);
-            numero(r, 10, cobrado);
-            numero(r, 11, saldo);
-            texto(r, 12, EstadoPago.de(total, cobrado).name());
-            texto(r, 13, fecha(rep.getFechaEntrega()));
-            texto(r, 14, fecha(rep.getGarantiaFin()));
-            texto(r, 15, rep.getCodigoSeguimiento());
+            numero(r, 9, cuenta.total());
+            numero(r, 10, cuenta.cobrado());
+            numero(r, 11, cuenta.saldo());
+            numero(r, 12, cuenta.excedente());
+            texto(r, 13, cuenta.requiereRevision() ? "Sí" : "No");
+            texto(r, 14, EstadoPago.de(cuenta.total(), cuenta.cobrado()).name());
+            texto(r, 15, fecha(rep.getFechaEntrega()));
+            texto(r, 16, fecha(rep.getGarantiaFin()));
+            texto(r, 17, rep.getCodigoSeguimiento());
         }
-        autoajustar(hoja, 16);
+        autoajustar(hoja, 18);
     }
 
     private void hojaCobros(Workbook wb, CellStyle encabezado, List<Cobro> cobros) {
         Sheet hoja = nuevaHoja(wb, "Cobros", encabezado,
-                "Fecha", "N° orden", "Monto", "Método", "Observaciones");
+                "Fecha", "N° orden", "Monto", "Método", "Referencia", "Observaciones");
         int fila = 1;
         for (Cobro c : cobros) {
             Row r = hoja.createRow(fila++);
@@ -127,9 +130,10 @@ public class ExportService {
             texto(r, 1, numeroOrden(c.getReparacion()));
             numero(r, 2, c.getMonto());
             texto(r, 3, c.getMetodo().name());
-            texto(r, 4, c.getObservaciones());
+            texto(r, 4, c.getReferencia());
+            texto(r, 5, c.getObservaciones());
         }
-        autoajustar(hoja, 5);
+        autoajustar(hoja, 6);
     }
 
     private void hojaPresupuestos(Workbook wb, CellStyle encabezado, List<Presupuesto> presupuestos) {

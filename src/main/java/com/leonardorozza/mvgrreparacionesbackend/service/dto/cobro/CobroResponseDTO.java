@@ -10,6 +10,7 @@ public record CobroResponseDTO(
         Long reparacionId,
         BigDecimal monto,
         MetodoPago metodo,
+        String referencia,
         String observaciones,
         LocalDateTime fecha
 ) {

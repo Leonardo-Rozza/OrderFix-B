@@ -10,6 +10,8 @@ public record CobrosReparacionDTO(
         BigDecimal total,
         BigDecimal cobrado,
         BigDecimal saldo,
+        BigDecimal excedente,
+        boolean requiereRevision,
         boolean pagado,
         List<CobroResponseDTO> cobros
 ) {

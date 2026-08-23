@@ -349,6 +349,8 @@ public class ReparacionServiceImpl implements ReparacionService {
         EstadoCuentaOrden estado = EstadoCuentaOrden.de(dto.getTotal(), cobrado);
         dto.setCobrado(estado.cobrado());
         dto.setSaldo(estado.saldo());
+        dto.setExcedente(estado.excedente());
+        dto.setRequiereRevision(estado.requiereRevision());
         dto.setEstadoPago(EstadoPago.de(estado.total(), estado.cobrado()));
     }
 

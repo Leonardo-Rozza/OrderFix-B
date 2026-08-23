@@ -32,6 +32,11 @@ public interface ReparacionMapper {
     @Mapping(target = "tecnicoNombre", source = "tecnico.username")
     @Mapping(target = "totalRepuestos", expression = "java(entity.calcularTotalRepuestos())")
     @Mapping(target = "total", expression = "java(entity.calcularTotal())")
+    @Mapping(target = "cobrado", ignore = true)
+    @Mapping(target = "saldo", ignore = true)
+    @Mapping(target = "excedente", ignore = true)
+    @Mapping(target = "requiereRevision", ignore = true)
+    @Mapping(target = "estadoPago", ignore = true)
     ReparacionResponseDTO toDTO(Reparacion entity);
 
     @Mapping(target = "equipoId", source = "equipo.id")
@@ -47,5 +52,10 @@ public interface ReparacionMapper {
     @Mapping(target = "total", expression = "java(entity.calcularTotal())")
     @Mapping(target = "patronDesbloqueo", ignore = true) // solo el service puede descifrar
     @Mapping(target = "pinDesbloqueo", ignore = true) // solo el service puede descifrar
+    @Mapping(target = "cobrado", ignore = true)
+    @Mapping(target = "saldo", ignore = true)
+    @Mapping(target = "excedente", ignore = true)
+    @Mapping(target = "requiereRevision", ignore = true)
+    @Mapping(target = "estadoPago", ignore = true)
     ReparacionDetalleResponseDTO toDetalleDTO(Reparacion entity);
 }

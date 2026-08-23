@@ -47,6 +47,7 @@ public class CobroService {
                 .taller(tenantService.currentTallerRef())
                 .monto(request.getMonto())
                 .metodo(request.getMetodo())
+                .referencia(normalizarReferencia(request.getReferencia()))
                 .observaciones(request.getObservaciones())
                 .build();
 
@@ -67,7 +68,8 @@ public class CobroService {
         EstadoCuentaOrden estado = estadoCuenta(reparacion);
 
         return new CobrosReparacionDTO(
-                estado.total(), estado.cobrado(), estado.saldo(), estado.pagado(), cobros);
+                estado.total(), estado.cobrado(), estado.saldo(), estado.excedente(),
+                estado.requiereRevision(), estado.pagado(), cobros);
     }
 
     public void eliminar(Long cobroId) {
@@ -156,6 +158,14 @@ public class CobroService {
     private CobroResponseDTO toDTO(Cobro c) {
         return new CobroResponseDTO(
                 c.getId(), c.getReparacion().getId(), c.getMonto(),
-                c.getMetodo(), c.getObservaciones(), c.getCreatedAt());
+                c.getMetodo(), c.getReferencia(), c.getObservaciones(), c.getCreatedAt());
+    }
+
+    private static String normalizarReferencia(String referencia) {
+        if (referencia == null) {
+            return null;
+        }
+        String normalizada = referencia.trim();
+        return normalizada.isEmpty() ? null : normalizada;
     }
 }

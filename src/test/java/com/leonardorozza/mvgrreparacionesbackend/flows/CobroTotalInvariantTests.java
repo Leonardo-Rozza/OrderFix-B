@@ -126,6 +126,9 @@ class CobroTotalInvariantTests extends IntegrationTestBase {
         assertThat(estadoLegacy.get("total").asInt()).isEqualTo(50000);
         assertThat(estadoLegacy.get("cobrado").asInt()).isEqualTo(100000);
         assertThat(estadoLegacy.get("saldo").asInt()).isZero();
+        assertThat(estadoLegacy.get("excedente").asInt()).isEqualTo(50000);
+        assertThat(estadoLegacy.get("requiereRevision").asBoolean()).isTrue();
+        assertThat(estadoLegacy.get("pagado").asBoolean()).isTrue();
 
         JsonNode cobroRechazado = node(authPost(
                 "/api/reparaciones/" + orden.id() + "/cobros",
@@ -142,6 +145,8 @@ class CobroTotalInvariantTests extends IntegrationTestBase {
                 .andExpect(status().isOk()));
         assertThat(mejora.get("total").asInt()).isEqualTo(75000);
         assertThat(mejora.get("saldo").asInt()).isZero();
+        assertThat(mejora.get("excedente").asInt()).isEqualTo(25000);
+        assertThat(mejora.get("requiereRevision").asBoolean()).isTrue();
 
         JsonNode empeora = node(authPut("/api/reparaciones/" + orden.id(), token,
                 json(Map.of(
