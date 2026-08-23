@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -43,5 +45,7 @@ public class IngresoRapidoRequestDTO {
     private String descripcionProblema;
 
     /** Opcional. */
+    @PositiveOrZero
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal precioEstimado;
 }

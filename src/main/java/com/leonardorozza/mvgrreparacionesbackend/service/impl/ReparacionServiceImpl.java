@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.FotoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Repuesto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
@@ -19,6 +20,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteR
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.RepuestoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.ReparacionService;
@@ -30,6 +32,8 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.Reparaci
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.ReparacionResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion.WhatsappLinkDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.CobroInvariantPolicy;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.EstadoCuentaOrden;
 import com.leonardorozza.mvgrreparacionesbackend.service.security.DeviceCredentialCipher;
 import com.leonardorozza.mvgrreparacionesbackend.utils.mapper.ReparacionMapper;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +53,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 @Service
 @RequiredArgsConstructor
@@ -60,12 +65,14 @@ public class ReparacionServiceImpl implements ReparacionService {
     private final ClienteRepository clienteRepository;
     private final UserRepository userRepository;
     private final CobroRepository cobroRepository;
+    private final RepuestoRepository repuestoRepository;
     private final ArticuloRepository articuloRepository;
     private final TallerRepository tallerRepository;
     private final ReparacionMapper reparacionMapper;
     private final TenantService tenantService;
     private final PlanLimitService planLimitService;
     private final DeviceCredentialCipher deviceCredentialCipher;
+    private final CobroInvariantPolicy cobroInvariantPolicy;
 
     @Value("${app.public-url:http://localhost:5173}")
     private String publicUrl;
@@ -191,13 +198,22 @@ public class ReparacionServiceImpl implements ReparacionService {
     public ReparacionResponseDTO actualizar(Long id, ReparacionRequestDTO request) {
         Long tallerId = tenantService.currentTallerId();
 
-        Reparacion reparacion = reparacionRepository.findByIdAndTallerId(id, tallerId)
+        Reparacion reparacion = reparacionRepository.findByIdAndTallerIdForUpdate(id, tallerId)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
         Equipo equipo = equipoRepository.findByIdAndTallerId(request.getEquipoId(), tallerId)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Equipo no encontrado con ID: " + request.getEquipoId()));
+
+        BigDecimal manoDeObraPropuesta = request.getPrecioFinal() != null
+                ? request.getPrecioFinal()
+                : (request.getPrecioEstimado() != null ? request.getPrecioEstimado() : BigDecimal.ZERO);
+        BigDecimal totalPropuesto = manoDeObraPropuesta.add(reparacion.calcularTotalRepuestos());
+        EstadoCuentaOrden estadoActual = EstadoCuentaOrden.de(
+                reparacion.calcularTotal(),
+                cobroRepository.sumByReparacionId(reparacion.getId()));
+        cobroInvariantPolicy.validarTotalProyectado(reparacion.getId(), estadoActual, totalPropuesto);
 
         reparacion.setEquipo(equipo);
         reparacion.setDescripcionProblema(request.getDescripcionProblema());
@@ -330,12 +346,10 @@ public class ReparacionServiceImpl implements ReparacionService {
     }
 
     private void aplicarPago(ReparacionResponseDTO dto, BigDecimal cobrado) {
-        BigDecimal total = dto.getTotal() != null ? dto.getTotal() : BigDecimal.ZERO;
-        BigDecimal c = cobrado != null ? cobrado : BigDecimal.ZERO;
-        BigDecimal saldo = total.subtract(c);
-        dto.setCobrado(c);
-        dto.setSaldo(saldo.signum() > 0 ? saldo : BigDecimal.ZERO);
-        dto.setEstadoPago(EstadoPago.de(total, c));
+        EstadoCuentaOrden estado = EstadoCuentaOrden.de(dto.getTotal(), cobrado);
+        dto.setCobrado(estado.cobrado());
+        dto.setSaldo(estado.saldo());
+        dto.setEstadoPago(EstadoPago.de(estado.total(), estado.cobrado()));
     }
 
     /** Enriquece una lista de DTOs con una sola query de cobros (sin N+1). */
@@ -393,7 +407,8 @@ public class ReparacionServiceImpl implements ReparacionService {
 
     @Override
     public void eliminar(Long id) {
-        Reparacion reparacion = reparacionRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
+        Long tallerId = tenantService.currentTallerId();
+        Reparacion reparacion = reparacionRepository.findByIdAndTallerIdForUpdate(id, tallerId)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
 
@@ -404,13 +419,36 @@ public class ReparacionServiceImpl implements ReparacionService {
                             + "Anulá los cobros primero.");
         }
 
-        // Devuelve al inventario el stock de los repuestos enlazados a un artículo
-        for (var repuesto : reparacion.getRepuestos()) {
-            if (repuesto.getArticulo() != null) {
-                var articulo = repuesto.getArticulo();
-                articulo.setStock(articulo.getStock() + repuesto.getCantidad());
-                articuloRepository.save(articulo);
+        List<Repuesto> repuestos = repuestoRepository
+                .findByReparacionIdAndTallerIdForUpdateOrderByIdAsc(id, tallerId);
+        Map<Long, Long> cantidadesPorArticulo = new HashMap<>();
+        for (Repuesto repuesto : repuestos) {
+            if (repuesto.getArticulo() == null) {
+                continue;
             }
+            cantidadesPorArticulo.merge(
+                    repuesto.getArticulo().getId(),
+                    (long) Math.max(1, repuesto.getCantidad()),
+                    (acumulado, cantidad) -> {
+                        if (acumulado > Integer.MAX_VALUE - cantidad) {
+                            throw new BadRequestException(
+                                    "La cantidad de stock a reponer excede el máximo permitido.");
+                        }
+                        return acumulado + cantidad;
+                    });
+        }
+
+        // Bloquea artículos por ID y repone cada stock una sola vez.
+        for (Long articuloId : new TreeSet<>(cantidadesPorArticulo.keySet())) {
+            var articulo = articuloRepository.findByIdAndTallerIdForUpdate(articuloId, tallerId)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Artículo no encontrado con ID: " + articuloId));
+            long stockProyectado = (long) articulo.getStock() + cantidadesPorArticulo.get(articuloId);
+            if (stockProyectado > Integer.MAX_VALUE) {
+                throw new BadRequestException("El stock resultante excede el máximo permitido.");
+            }
+            articulo.setStock((int) stockProyectado);
+            articuloRepository.save(articulo);
         }
 
         // Cascade JPA: repuestos, presupuestos y fotos se borran junto con la reparación

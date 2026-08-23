@@ -3,9 +3,11 @@ package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.ToString;
@@ -26,8 +28,12 @@ public class ReparacionRequestDTO {
 
     private EstadoReparacion estado;
 
+    @PositiveOrZero
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal precioEstimado;
 
+    @PositiveOrZero
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal precioFinal;
 
     private LocalDate fechaIngreso;

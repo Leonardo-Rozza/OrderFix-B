@@ -2,10 +2,12 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
+import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Articulo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ArticuloRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.RepuestoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario.AjusteStockRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario.ArticuloRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario.ArticuloResponseDTO;
@@ -26,6 +28,7 @@ import java.util.List;
 public class ArticuloService {
 
     private final ArticuloRepository articuloRepository;
+    private final RepuestoRepository repuestoRepository;
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
 
@@ -47,7 +50,7 @@ public class ArticuloService {
 
     public ArticuloResponseDTO actualizar(Long id, ArticuloRequestDTO request) {
         planFeatureService.requerir(PlanFeature.INVENTARIO);
-        Articulo a = obtenerEntidad(id);
+        Articulo a = obtenerEntidadForUpdate(id);
         a.setNombre(request.getNombre());
         a.setDescripcion(request.getDescripcion());
         a.setSku(request.getSku());
@@ -81,24 +84,38 @@ public class ArticuloService {
 
     public ArticuloResponseDTO ajustarStock(Long id, AjusteStockRequestDTO request) {
         planFeatureService.requerir(PlanFeature.INVENTARIO);
-        Articulo a = obtenerEntidad(id);
-        int nuevo = a.getStock() + request.getDelta();
+        Articulo a = obtenerEntidadForUpdate(id);
+        long nuevo = (long) a.getStock() + request.getDelta();
         if (nuevo < 0) {
             throw new BadRequestException("El ajuste deja el stock en negativo (stock actual: " + a.getStock() + ").");
         }
-        a.setStock(nuevo);
+        if (nuevo > Integer.MAX_VALUE) {
+            throw new BadRequestException("El ajuste excede el stock máximo permitido.");
+        }
+        a.setStock((int) nuevo);
         log.info("Ajuste de stock articulo {}: delta={} -> {} ({})", id, request.getDelta(), nuevo, request.getMotivo());
         return toDTO(articuloRepository.save(a));
     }
 
     public void eliminar(Long id) {
         planFeatureService.requerir(PlanFeature.INVENTARIO);
-        Articulo a = obtenerEntidad(id);
+        Long tallerId = tenantService.currentTallerId();
+        Articulo a = obtenerEntidadForUpdate(id);
+        if (repuestoRepository.existsByArticuloIdAndTallerId(id, tallerId)) {
+            throw new ConflictException(
+                    "ARTICULO_EN_USO",
+                    "No podés borrar un artículo usado por repuestos registrados.");
+        }
         articuloRepository.delete(a);
     }
 
     private Articulo obtenerEntidad(Long id) {
         return articuloRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
+                .orElseThrow(() -> new ResourceNotFoundException("Artículo no encontrado con ID: " + id));
+    }
+
+    private Articulo obtenerEntidadForUpdate(Long id) {
+        return articuloRepository.findByIdAndTallerIdForUpdate(id, tenantService.currentTallerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Artículo no encontrado con ID: " + id));
     }
 

@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.inventario;
 
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -23,9 +24,11 @@ public class ArticuloRequestDTO {
 
     @NotNull
     @PositiveOrZero
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal precio;
 
     @PositiveOrZero
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal costo;
 
     /** Stock inicial (solo al crear; luego se ajusta con /ajuste). */

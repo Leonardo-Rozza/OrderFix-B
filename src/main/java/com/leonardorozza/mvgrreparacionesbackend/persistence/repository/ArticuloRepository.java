@@ -1,9 +1,11 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.repository;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Articulo;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -15,6 +17,11 @@ import java.util.Optional;
 public interface ArticuloRepository extends JpaRepository<Articulo, Long> {
 
     Optional<Articulo> findByIdAndTallerId(Long id, Long tallerId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM Articulo a WHERE a.id = :id AND a.taller.id = :tallerId")
+    Optional<Articulo> findByIdAndTallerIdForUpdate(
+            @Param("id") Long id, @Param("tallerId") Long tallerId);
 
     @Query("""
             SELECT a FROM Articulo a
