@@ -26,6 +26,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -100,6 +101,7 @@ class CobroServiceResumenDigitalTests {
         assertThat(resumen.datosCobro().qrDisponible()).isTrue();
         assertThat(resumen.datosCobro().qrVersion()).isEqualTo("a".repeat(64));
         verify(tallerQrCobroRepository).findSha256ByTallerId(TALLER_ID);
+        verifyNoMoreInteractions(tallerQrCobroRepository);
     }
 
     private void preparar(Reparacion reparacion, List<Cobro> cobros) {
