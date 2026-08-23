@@ -9,6 +9,7 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.UnauthorizedExceptio
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cobro;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Repuesto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoCobro;
@@ -16,6 +17,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.Metodo
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFeature;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerQrCobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.*;
 import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.CobroInvariantPolicy;
@@ -28,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,9 +42,12 @@ import java.util.Objects;
 public class CobroService {
 
     private static final String MOTIVO_ANULACION_LEGADA = "Anulación mediante endpoint legado";
+    private static final String LEYENDA_RESUMEN_DIGITAL =
+            "Documento informativo. No es factura ni comprobante fiscal y no reemplaza los emitidos por ARCA.";
 
     private final CobroRepository cobroRepository;
     private final ReparacionRepository reparacionRepository;
+    private final TallerQrCobroRepository tallerQrCobroRepository;
     private final UserRepository userRepository;
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
@@ -149,7 +155,7 @@ public class CobroService {
     }
 
     @Transactional(readOnly = true)
-    public ReciboDTO recibo(Long reparacionId) {
+    public ResumenDigitalOrdenDTO resumenDigital(Long reparacionId) {
         planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
         Reparacion r = reparacionRepository.findByIdAndTallerId(reparacionId, tallerId)
@@ -158,40 +164,82 @@ public class CobroService {
         Taller taller = r.getTaller();
         Cliente cliente = r.getEquipo().getCliente();
 
-        List<ReciboDTO.ItemReciboDTO> items = r.getRepuestos().stream()
+        List<ResumenDigitalOrdenDTO.RepuestoDTO> items = r.getRepuestos().stream()
+                .sorted(Comparator.comparing(
+                        Repuesto::getId, Comparator.nullsLast(Long::compareTo)))
                 .map(rep -> {
                     BigDecimal precio = rep.getPrecio() == null ? BigDecimal.ZERO : rep.getPrecio();
                     int cant = Math.max(1, rep.getCantidad());
-                    return new ReciboDTO.ItemReciboDTO(rep.getNombre(), cant, precio,
+                    return new ResumenDigitalOrdenDTO.RepuestoDTO(rep.getNombre(), cant, precio,
                             precio.multiply(BigDecimal.valueOf(cant)));
                 })
                 .toList();
 
         BigDecimal manoDeObra = r.getPrecioFinal() != null ? r.getPrecioFinal()
                 : (r.getPrecioEstimado() != null ? r.getPrecioEstimado() : BigDecimal.ZERO);
-        EstadoCuentaOrden estadoCuenta = estadoCuenta(r);
+        List<Cobro> cobrosActivos = cobroRepository
+                .findByReparacionIdAndTallerIdAndAnuladoAtIsNullOrderByCreatedAtAscIdAsc(
+                        reparacionId, tallerId);
+        BigDecimal cobrado = cobrosActivos.stream()
+                .map(Cobro::getMonto)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        EstadoCuentaOrden estadoCuenta = EstadoCuentaOrden.de(r.calcularTotal(), cobrado);
 
-        return new ReciboDTO(
-                r.getId(),
+        List<ResumenDigitalOrdenDTO.PagoDTO> pagos = cobrosActivos.stream()
+                .map(cobro -> new ResumenDigitalOrdenDTO.PagoDTO(
+                        cobro.getCreatedAt(), cobro.getMonto(), cobro.getMetodo(), cobro.getReferencia()))
+                .toList();
+
+        var resumenTaller = new ResumenDigitalOrdenDTO.TallerDTO(
+                taller.getNombre(), taller.getTelefono());
+        var resumenCliente = new ResumenDigitalOrdenDTO.ClienteDTO(
+                cliente.getNombre(), cliente.getApellido(), cliente.getTelefono());
+        var resumenEquipo = new ResumenDigitalOrdenDTO.EquipoDTO(
+                r.getEquipo().getMarca(), r.getEquipo().getModelo(), r.getDescripcionProblema());
+        var detalle = new ResumenDigitalOrdenDTO.DetalleDTO(
+                items, manoDeObra, r.calcularTotalRepuestos());
+        var importes = new ResumenDigitalOrdenDTO.ImportesDTO(
+                estadoCuenta.total(), estadoCuenta.cobrado(), estadoCuenta.saldo(),
+                estadoCuenta.excedente(), estadoCuenta.requiereRevision(), estadoCuenta.pagado());
+
+        return new ResumenDigitalOrdenDTO(
+                r.getNumeroOrden(),
                 r.getCodigoSeguimiento(),
+                r.getCreatedAt(),
                 r.getEstado(),
-                taller.getNombre(),
-                taller.getTelefono(),
-                cliente.getNombre(),
-                cliente.getApellido(),
-                cliente.getTelefono(),
-                r.getEquipo().getMarca(),
-                r.getEquipo().getModelo(),
-                r.getDescripcionProblema(),
-                items,
-                manoDeObra,
-                r.calcularTotalRepuestos(),
-                estadoCuenta.total(),
-                estadoCuenta.cobrado(),
-                estadoCuenta.saldo(),
-                estadoCuenta.pagado(),
-                r.getCreatedAt()
+                resumenTaller,
+                resumenCliente,
+                resumenEquipo,
+                detalle,
+                importes,
+                pagos,
+                datosCobroPublicos(estadoCuenta, taller, tallerId),
+                false,
+                LEYENDA_RESUMEN_DIGITAL,
+                r.getId()
         );
+    }
+
+    private ResumenDigitalOrdenDTO.DatosCobroPublicosDTO datosCobroPublicos(
+            EstadoCuentaOrden estadoCuenta, Taller taller, Long tallerId) {
+        if (estadoCuenta.saldo().signum() <= 0 || !taller.isMostrarEnResumen()) {
+            return null;
+        }
+
+        String qrVersion = tallerQrCobroRepository.findSha256ByTallerId(tallerId).orElse(null);
+        boolean tieneDatoPublico = tieneTexto(taller.getAliasCobro())
+                || tieneTexto(taller.getTitularCobro())
+                || tieneTexto(taller.getEntidadCobro());
+        if (!tieneDatoPublico && qrVersion == null) {
+            return null;
+        }
+
+        return new ResumenDigitalOrdenDTO.DatosCobroPublicosDTO(
+                taller.getAliasCobro(),
+                taller.getTitularCobro(),
+                taller.getEntidadCobro(),
+                qrVersion != null,
+                qrVersion);
     }
 
     private EstadoCuentaOrden estadoCuenta(Reparacion reparacion) {
@@ -226,6 +274,10 @@ public class CobroService {
             throw new BadRequestException("El motivo de anulación no puede superar los 255 caracteres.");
         }
         return normalizado;
+    }
+
+    private static boolean tieneTexto(String valor) {
+        return valor != null && !valor.isBlank();
     }
 
     private User usuarioActual(Long tallerId) {

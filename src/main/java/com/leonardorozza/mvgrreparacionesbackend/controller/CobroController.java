@@ -4,7 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroRequestD
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroResponseDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobrosReparacionDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.CobroAnulacionRequestDTO;
-import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.ReciboDTO;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.ResumenDigitalOrdenDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.CobroService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/reparaciones/{reparacionId}")
 @RequiredArgsConstructor
-@Tag(name = "Cobros", description = "Cobros y recibo de una reparación")
+@Tag(name = "Cobros", description = "Cobros y resumen digital de una reparación")
 public class CobroController {
 
     private final CobroService cobroService;
@@ -56,9 +56,16 @@ public class CobroController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "Datos del recibo de la reparación (para imprimir/compartir)")
+    @Operation(summary = "Resumen digital de la orden")
+    @GetMapping("/resumen-digital")
+    public ResponseEntity<ResumenDigitalOrdenDTO> resumenDigital(@PathVariable Long reparacionId) {
+        return ResponseEntity.ok(cobroService.resumenDigital(reparacionId));
+    }
+
+    @Deprecated(since = "2026-08-23", forRemoval = false)
+    @Operation(summary = "Alias legado del resumen digital de la orden", deprecated = true)
     @GetMapping("/recibo")
-    public ResponseEntity<ReciboDTO> recibo(@PathVariable Long reparacionId) {
-        return ResponseEntity.ok(cobroService.recibo(reparacionId));
+    public ResponseEntity<ResumenDigitalOrdenDTO> recibo(@PathVariable Long reparacionId) {
+        return ResponseEntity.ok(cobroService.resumenDigital(reparacionId));
     }
 }

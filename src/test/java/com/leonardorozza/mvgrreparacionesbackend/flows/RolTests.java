@@ -92,6 +92,14 @@ class RolTests extends IntegrationTestBase {
 
         authGet("/api/reparaciones/" + reparacionId + "/cobros", user)
                 .andExpect(status().isOk());
+        JsonNode resumenUser = node(authGet(
+                "/api/reparaciones/" + reparacionId + "/resumen-digital", user)
+                .andExpect(status().isOk()));
+        JsonNode aliasUser = node(authGet(
+                "/api/reparaciones/" + reparacionId + "/recibo", user)
+                .andExpect(status().isOk()));
+        assertThat(aliasUser).isEqualTo(resumenUser);
+        assertThat(resumenUser.at("/pagos/0/monto").asInt()).isEqualTo(10000);
         authPost("/api/reparaciones/" + reparacionId + "/cobros/" + cobroId + "/anulacion",
                 user, json(Map.of("motivo", "No autorizado")))
                 .andExpect(status().isForbidden());

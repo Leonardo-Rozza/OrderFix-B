@@ -52,7 +52,7 @@ public class PlanFeatureService {
     private String mensaje(PlanFeature feature) {
         String que = switch (feature) {
             case INVENTARIO -> "El inventario";
-            case COBROS -> "Los cobros, la caja y el recibo";
+            case COBROS -> "La función de cobros manuales y resumen digital";
             case EMPLEADOS_MULTIPLES -> "Agregar más empleados";
         };
         return que + " requiere una suscripción con acceso PRO vigente. Activá o reactivá PRO para habilitarla.";

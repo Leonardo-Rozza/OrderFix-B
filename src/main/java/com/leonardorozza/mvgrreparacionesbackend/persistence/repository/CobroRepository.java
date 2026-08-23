@@ -20,6 +20,9 @@ public interface CobroRepository extends JpaRepository<Cobro, Long> {
     @EntityGraph(attributePaths = "anuladoPor")
     List<Cobro> findByReparacionIdAndTallerIdOrderByCreatedAtDesc(Long reparacionId, Long tallerId);
 
+    List<Cobro> findByReparacionIdAndTallerIdAndAnuladoAtIsNullOrderByCreatedAtAscIdAsc(
+            Long reparacionId, Long tallerId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             SELECT c FROM Cobro c

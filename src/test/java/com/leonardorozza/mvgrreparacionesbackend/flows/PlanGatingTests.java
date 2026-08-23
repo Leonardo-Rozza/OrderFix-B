@@ -16,10 +16,27 @@ class PlanGatingTests extends IntegrationTestBase {
     @Test
     void freeActivoNoAccedeAFuncionesProYExponeCapacidades() throws Exception {
         String t = registrar("Taller Free", "gating-free@test.com");
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", t, json(Map.of(
+                "clienteNombre", "Cliente",
+                "clienteTelefono", "8201",
+                "equipoMarca", "Samsung",
+                "equipoModelo", "A54",
+                "descripcionProblema", "Pantalla")))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
         configurarSuscripcion(t, PlanType.FREE, EstadoSuscripcion.ACTIVA);
 
         authGet("/api/inventario", t).andExpect(status().is(402));
         authGet("/api/caja", t).andExpect(status().is(402));
+        JsonNode resumenError = node(authGet(
+                "/api/reparaciones/" + reparacionId + "/resumen-digital", t)
+                .andExpect(status().is(402)));
+        JsonNode aliasError = node(authGet(
+                "/api/reparaciones/" + reparacionId + "/recibo", t)
+                .andExpect(status().is(402)));
+        assertThat(resumenError.get("message").asText())
+                .contains("cobros manuales", "resumen digital")
+                .doesNotContain("caja", "recibo");
+        assertThat(aliasError.get("message").asText()).isEqualTo(resumenError.get("message").asText());
 
         // El dashboard es FREE
         authGet("/api/dashboard", t).andExpect(status().isOk());
@@ -33,9 +50,20 @@ class PlanGatingTests extends IntegrationTestBase {
     @Test
     void trialAccedeAFuncionesProAunqueElPlanComercialSeaFree() throws Exception {
         String t = registrar("Taller Trial", "gating-trial@test.com");
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", t, json(Map.of(
+                "clienteNombre", "Cliente",
+                "clienteTelefono", "8202",
+                "equipoMarca", "Apple",
+                "equipoModelo", "iPhone",
+                "descripcionProblema", "Carga")))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
 
         authGet("/api/inventario", t).andExpect(status().isOk());
         authGet("/api/caja", t).andExpect(status().isOk());
+        authGet("/api/reparaciones/" + reparacionId + "/resumen-digital", t)
+                .andExpect(status().isOk());
+        authGet("/api/reparaciones/" + reparacionId + "/recibo", t)
+                .andExpect(status().isOk());
 
         JsonNode funciones = node(authGet("/api/suscripcion", t).andExpect(status().isOk())).get("funciones");
         assertThat(funciones.get("inventario").asBoolean()).isTrue();

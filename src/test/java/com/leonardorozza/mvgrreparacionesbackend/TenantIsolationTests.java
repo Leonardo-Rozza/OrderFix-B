@@ -83,11 +83,19 @@ class TenantIsolationTests extends IntegrationTestBase {
                 .andExpect(status().isNotFound());
         authDelete("/api/reparaciones/" + reparacionA + "/cobros/" + cobroA, b)
                 .andExpect(status().isNotFound());
+        authGet("/api/reparaciones/" + reparacionA + "/resumen-digital", b)
+                .andExpect(status().isNotFound());
+        authGet("/api/reparaciones/" + reparacionA + "/recibo", b)
+                .andExpect(status().isNotFound());
 
         JsonNode estadoA = node(authGet("/api/reparaciones/" + reparacionA + "/cobros", a)
                 .andExpect(status().isOk()));
         assertThat(estadoA.get("cobrado").asInt()).isEqualTo(10000);
         assertThat(estadoA.at("/cobros/0/estado").asText()).isEqualTo("ACTIVO");
+        authGet("/api/reparaciones/" + reparacionA + "/resumen-digital", a)
+                .andExpect(status().isOk());
+        authGet("/api/reparaciones/" + reparacionA + "/recibo", a)
+                .andExpect(status().isOk());
     }
 
     @Test
