@@ -1,12 +1,14 @@
 package com.leonardorozza.mvgrreparacionesbackend;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.MigrationInfo;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -14,6 +16,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
+
+import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -56,7 +61,7 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26");
 
         String tipoPngQr = jdbcTemplate.queryForObject("""
                 SELECT data_type
@@ -310,5 +315,159 @@ class PostgresMigrationIT {
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .rootCause()
                 .hasMessageContaining("ck_taller_qr_cobro_png");
+    }
+
+    @Test
+    void v26ImpideMasDeUnAdminTitularPorTaller() {
+        String definicionIndice = jdbcTemplate.queryForObject("""
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'uk_users_admin_titular_por_taller'
+                """, String.class);
+        assertThat(definicionIndice).contains("UNIQUE", "taller_id", "role", "ADMIN");
+
+        Boolean indiceValido = jdbcTemplate.queryForObject("""
+                SELECT i.indisvalid
+                FROM pg_index i
+                JOIN pg_class c ON c.oid = i.indexrelid
+                WHERE c.relname = 'uk_users_admin_titular_por_taller'
+                """, Boolean.class);
+        String tallerIdNullable = jdbcTemplate.queryForObject("""
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'users'
+                  AND column_name = 'taller_id'
+                """, String.class);
+        Boolean checkRolValidado = jdbcTemplate.queryForObject("""
+                SELECT convalidated
+                FROM pg_constraint
+                WHERE conname = 'ck_users_role'
+                """, Boolean.class);
+        assertThat(indiceValido).isTrue();
+        assertThat(tallerIdNullable).isEqualTo("NO");
+        assertThat(checkRolValidado).isTrue();
+
+        Long tallerA = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller titular único A')
+                RETURNING id
+                """, Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Titular A', 'hash', 'titular-a@test.com', 'ADMIN', TRUE, ?)
+                """, tallerA);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Segundo titular A', 'hash', 'titular-a-2@test.com', 'ADMIN', TRUE, ?)
+                """, tallerA))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("uk_users_admin_titular_por_taller");
+
+        jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Empleado A', 'hash', 'empleado-a@test.com', 'USER', TRUE, ?)
+                """, tallerA);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Sin taller', 'hash', 'sin-taller@test.com', 'USER', TRUE, NULL)
+                """))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("taller_id");
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Rol desconocido', 'hash', 'rol-desconocido@test.com', 'SUPERVISOR', TRUE, ?)
+                """, tallerA))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause()
+                .hasMessageContaining("ck_users_role");
+
+        Long tallerB = jdbcTemplate.queryForObject("""
+                INSERT INTO talleres (nombre)
+                VALUES ('Taller titular único B')
+                RETURNING id
+                """, Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Titular B', 'hash', 'titular-b@test.com', 'ADMIN', TRUE, ?)
+                """, tallerB);
+
+        Integer adminsTallerA = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM users
+                WHERE taller_id = ? AND role = 'ADMIN'
+                """, Integer.class, tallerA);
+        assertThat(adminsTallerA).isOne();
+    }
+
+    @Test
+    void v26RechazaDatosHistoricosIncompatiblesSinElegirUnTitular() {
+        assertV26Rechaza("v26_usuario_sin_taller", "existen usuarios sin taller", fixture ->
+                fixture.jdbc().update("""
+                        INSERT INTO %s.users (username, password, email, role, active)
+                        VALUES ('Sin taller', 'hash', 'legacy-sin-taller@test.com', 'USER', TRUE)
+                        """.formatted(fixture.schema())));
+
+        assertV26Rechaza("v26_rol_desconocido", "existen roles de usuario desconocidos", fixture -> {
+            Long tallerId = fixture.jdbc().queryForObject("""
+                    INSERT INTO %s.talleres (nombre)
+                    VALUES ('Taller rol legacy')
+                    RETURNING id
+                    """.formatted(fixture.schema()), Long.class);
+            fixture.jdbc().update("""
+                    INSERT INTO %s.users (username, password, email, role, active, taller_id)
+                    VALUES ('Legacy', 'hash', 'legacy-rol@test.com', 'SUPERVISOR', TRUE, ?)
+                    """.formatted(fixture.schema()), tallerId);
+        });
+
+        assertV26Rechaza("v26_admins_duplicados", "existen talleres con múltiples ADMIN", fixture -> {
+            Long tallerId = fixture.jdbc().queryForObject("""
+                    INSERT INTO %s.talleres (nombre)
+                    VALUES ('Taller admins legacy')
+                    RETURNING id
+                    """.formatted(fixture.schema()), Long.class);
+            fixture.jdbc().update("""
+                    INSERT INTO %s.users (username, password, email, role, active, taller_id)
+                    VALUES
+                      ('Admin uno', 'hash', 'legacy-admin-1@test.com', 'ADMIN', TRUE, ?),
+                      ('Admin dos', 'hash', 'legacy-admin-2@test.com', 'ADMIN', TRUE, ?)
+                    """.formatted(fixture.schema()), tallerId, tallerId);
+        });
+    }
+
+    private void assertV26Rechaza(
+            String schema, String mensajeEsperado, Consumer<SchemaFixture> prepararDatos) {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+
+        flywayDeSchema(dataSource, schema, "25").migrate();
+        JdbcTemplate schemaJdbc = new JdbcTemplate(dataSource);
+        prepararDatos.accept(new SchemaFixture(schema, schemaJdbc));
+
+        assertThatThrownBy(() -> flywayDeSchema(dataSource, schema, null).migrate())
+                .isInstanceOf(FlywayException.class)
+                .hasStackTraceContaining(mensajeEsperado);
+    }
+
+    private Flyway flywayDeSchema(DataSource dataSource, String schema, String target) {
+        var configuration = Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration")
+                .schemas(schema)
+                .defaultSchema(schema)
+                .createSchemas(true);
+        if (target != null) {
+            configuration.target(target);
+        }
+        return configuration.load();
+    }
+
+    private record SchemaFixture(String schema, JdbcTemplate jdbc) {
     }
 }

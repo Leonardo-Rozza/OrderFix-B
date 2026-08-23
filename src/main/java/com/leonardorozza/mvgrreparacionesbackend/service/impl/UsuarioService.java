@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
+import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PlanLimitException;
@@ -17,10 +18,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * Gestión de empleados (usuarios) del taller. Solo accesible por ADMIN.
- * Incluye guardas para que un ADMIN no se bloquee a sí mismo.
+ * Gestión de empleados (usuarios) del taller. Solo accesible por el ADMIN
+ * titular. Los empleados siempre son USER y su rol no se puede promover.
  */
 @Service
 @RequiredArgsConstructor
@@ -33,6 +35,7 @@ public class UsuarioService {
     private final PlanFeatureService planFeatureService;
 
     public UsuarioResponseDTO crear(CrearUsuarioRequestDTO request) {
+        validarRolDeEmpleado(request.getRole());
         Long tallerId = tenantService.currentTallerId();
         // FREE permite 1 usuario (el dueño). Para sumar empleados hay que ser PRO.
         if (!planFeatureService.esPro(tallerId) && userRepository.countByTallerId(tallerId) >= 1) {
@@ -47,7 +50,7 @@ public class UsuarioService {
                 .username(request.getUsername())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
-                .role(request.getRole() != null ? request.getRole() : UserRole.USER)
+                .role(UserRole.USER)
                 .active(true)
                 // Lo da de alta el ADMIN del taller: el email viene "avalado", no se verifica
                 .emailVerificado(true)
@@ -76,20 +79,22 @@ public class UsuarioService {
         User user = userRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + id));
 
-        // Evita que un ADMIN se bloquee a sí mismo
-        boolean esMiPropiaCuenta = user.getEmail().equals(emailActual());
-        if (esMiPropiaCuenta) {
-            if (Boolean.FALSE.equals(request.getActive())) {
-                throw new BadRequestException("No podés desactivar tu propia cuenta.");
-            }
-            if (request.getRole() != null && request.getRole() != UserRole.ADMIN) {
-                throw new BadRequestException("No podés quitarte el rol de ADMIN a vos mismo.");
-            }
+        // El rol refleja titular vs empleado y no es una preferencia editable.
+        if (request.getRole() != null && request.getRole() != user.getRole()) {
+            throw new BadRequestException(
+                    "ROL_USUARIO_INMUTABLE",
+                    "El rol de un usuario no se puede cambiar desde la gestión de empleados.",
+                    Map.of(
+                            "rolActual", user.getRole().name(),
+                            "rolSolicitado", request.getRole().name()));
         }
 
-        if (request.getRole() != null) {
-            user.setRole(request.getRole());
+        // Evita que el titular se bloquee a sí mismo.
+        boolean esMiPropiaCuenta = user.getId().equals(usuarioIdActual());
+        if (esMiPropiaCuenta && Boolean.FALSE.equals(request.getActive())) {
+            throw new BadRequestException("No podés desactivar tu propia cuenta.");
         }
+
         if (request.getActive() != null) {
             user.setActive(request.getActive());
         }
@@ -97,9 +102,24 @@ public class UsuarioService {
         return toDTO(userRepository.save(user));
     }
 
-    private String emailActual() {
+    private void validarRolDeEmpleado(UserRole roleSolicitado) {
+        if (roleSolicitado == null || roleSolicitado == UserRole.USER) {
+            return;
+        }
+        throw new BadRequestException(
+                "EMPLEADO_DEBE_SER_USER",
+                "Los empleados se crean con rol USER; el ADMIN titular es único por taller.",
+                Map.of(
+                        "rolPermitido", UserRole.USER.name(),
+                        "rolSolicitado", roleSolicitado.name()));
+    }
+
+    private Long usuarioIdActual() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth != null ? auth.getName() : null;
+        if (auth != null && auth.getPrincipal() instanceof AuthenticatedUserPrincipal principal) {
+            return principal.getUserId();
+        }
+        return null;
     }
 
     private UsuarioResponseDTO toDTO(User u) {

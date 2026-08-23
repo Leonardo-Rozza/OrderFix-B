@@ -42,8 +42,9 @@ datos de otro (hay tests que lo garantizan). El frontend nunca manda `tallerId`.
   cliente debe respetar `exp`. `role` usa exactamente `ROLE_ADMIN` o `ROLE_USER`; tenant y versión
   se contrastan contra DB.
 - Header en cada request: `Authorization: Bearer <token>`.
-- Roles: **ADMIN** (dueño) y **USER** (empleado). Operaciones sensibles (borrados, suscripción,
-  gestión de usuarios) son solo ADMIN vía `@PreAuthorize`.
+- Roles: **ADMIN** (titular único del taller) y **USER** (empleado). Un empleado nunca puede crear o
+  recibir otro ADMIN desde `/api/usuarios`; operaciones sensibles (borrados, suscripción, gestión de
+  usuarios) son solo ADMIN vía `@PreAuthorize`.
 
 ### Freemium (FREE vs PRO)
 - **FREE**: hasta **25 reparaciones/mes** (configurable por `FREE_MAX_REPARACIONES`).
@@ -181,6 +182,7 @@ El `429` protege login, registro, recuperación/verificación, seguimiento públ
 | V23 | Anulación auditable de cobros, sin borrado del movimiento original |
 | V24 | Alias, titular, entidad y visibilidad de datos de cobro por taller |
 | V25 | QR raster normalizado, aislado 1:1 por taller |
+| V26 | Tenant/roles válidos y un único ADMIN titular por taller |
 
 ---
 
@@ -241,7 +243,7 @@ integridad de bajas y PostgreSQL/Testcontainers. Los flujos extienden `support/I
 - **DatosCobroTests / QrCobroTests** — permisos ADMIN/USER, aislamiento por tenant,
   reemplazo completo, normalización raster y contrato binario del QR.
 - **PlanGatingTests** (3) — FREE → 402 en funciones PRO, mapa `funciones`, multi-empleado.
-- **RolTests** (2) — USER vs ADMIN; empleado desactivado no loguea.
+- **RolTests** — titular único, roles inmutables, permisos USER/ADMIN y revocación al desactivar.
 - **PlanLimitTests** (2) — superar el tope FREE devuelve 402; el reclamo en garantía no consume cupo.
 - **MercadoPagoSignature/Contract/PersistenceTests** — firma, replay, contrato HTTP, idempotencia,
   inbox, reintento, estados, facturas, eventos fuera de orden y conciliación.
@@ -263,5 +265,5 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/
 ├── persistence/       # entity/ (+ enums) y repository/
 ├── exceptions/        # GlobalExceptionHandler + excepciones de dominio
 └── utils/             # mappers (MapStruct) + jwt
-src/main/resources/db/migration/   # Flyway V1..V25
+src/main/resources/db/migration/   # Flyway V1..V26
 ```

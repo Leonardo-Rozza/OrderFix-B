@@ -20,6 +20,67 @@ class RolTests extends IntegrationTestBase {
     }
 
     @Test
+    void noPermiteCrearOtroAdminDesdeElAltaDeEmpleados() throws Exception {
+        String admin = registrar("Taller Titular Único", "titular-unico-admin@test.com");
+        activarPro(admin);
+
+        var rechazo = authPost("/api/usuarios", admin, json(Map.of(
+                        "username", "Segundo Admin",
+                        "email", "segundo-admin@test.com",
+                        "password", "secret123",
+                        "role", "ADMIN")))
+                .andExpect(status().isBadRequest());
+
+        JsonNode error = node(rechazo);
+        assertThat(error.get("code").asText()).isEqualTo("EMPLEADO_DEBE_SER_USER");
+        assertThat(error.at("/details/rolPermitido").asText()).isEqualTo("USER");
+
+        JsonNode usuarios = node(authGet("/api/usuarios", admin).andExpect(status().isOk()));
+        assertThat(usuarios).hasSize(1);
+        assertThat(usuarios.get(0).get("role").asText()).isEqualTo("ADMIN");
+    }
+
+    @Test
+    void noPermitePromoverUnEmpleadoNiDegradarAlTitular() throws Exception {
+        String admin = registrar("Taller Roles Inmutables", "roles-inmutables-admin@test.com");
+        activarPro(admin);
+        JsonNode iniciales = node(authGet("/api/usuarios", admin).andExpect(status().isOk()));
+        long adminId = iniciales.get(0).get("id").asLong();
+
+        authPatch("/api/usuarios/" + adminId, admin, json(Map.of("active", false)))
+                .andExpect(status().isBadRequest());
+        JsonNode titular = node(authGet("/api/usuarios/" + adminId, admin)
+                .andExpect(status().isOk()));
+        assertThat(titular.get("active").asBoolean()).isTrue();
+        assertThat(titular.get("role").asText()).isEqualTo("ADMIN");
+
+        long empleadoId = idOf(authPost("/api/usuarios", admin, json(Map.of(
+                        "username", "Empleado",
+                        "email", "roles-inmutables-user@test.com",
+                        "password", "secret123",
+                        "role", "USER")))
+                .andExpect(status().isCreated()));
+
+        var promocion = authPatch("/api/usuarios/" + empleadoId, admin,
+                        json(Map.of("role", "ADMIN")))
+                .andExpect(status().isBadRequest());
+        assertThat(node(promocion).get("code").asText()).isEqualTo("ROL_USUARIO_INMUTABLE");
+
+        var degradacion = authPatch("/api/usuarios/" + adminId, admin,
+                        json(Map.of("role", "USER")))
+                .andExpect(status().isBadRequest());
+        assertThat(node(degradacion).get("code").asText()).isEqualTo("ROL_USUARIO_INMUTABLE");
+
+        JsonNode empleado = node(authGet("/api/usuarios/" + empleadoId, admin)
+                .andExpect(status().isOk()));
+        assertThat(empleado.get("role").asText()).isEqualTo("USER");
+
+        // Compatibilidad temporal: repetir el rol actual sigue siendo un no-op.
+        authPatch("/api/usuarios/" + empleadoId, admin, json(Map.of("role", "USER")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void userPuedeCrearPeroNoBorrarNiGestionarUsuarios() throws Exception {
         String admin = registrar("Taller Rol", "rol-admin@test.com");
         activarPro(admin); // para poder crear empleados

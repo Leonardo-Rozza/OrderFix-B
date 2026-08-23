@@ -638,21 +638,27 @@ Pensado para que el cliente del taller siga su equipo. Datos mínimos, sin info 
 ### 4.10 Usuarios / Empleados — solo ADMIN  (`/api/usuarios`)
 
 Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un USER recibe `403`).
+`ADMIN` representa al **titular único** del taller; no es un nivel asignable desde esta API.
 
 | Método | Ruta | Body | Resp |
 |--------|------|------|------|
 | POST   | `/api/usuarios` | CrearUsuario | `201` UsuarioResponse |
 | GET    | `/api/usuarios` | — | `200` UsuarioResponse[] |
 | GET    | `/api/usuarios/{id}` | — | `200` UsuarioResponse |
-| PATCH  | `/api/usuarios/{id}` | `{ "role"?, "active"? }` | `200` UsuarioResponse |
+| PATCH  | `/api/usuarios/{id}` | `{ "active"? }` | `200` UsuarioResponse |
 
-CrearUsuario: `{ "username", "email", "password", "role"? }` (sin `role` → se crea `USER`).
+CrearUsuario: `{ "username", "email", "password", "role"? }`. Todo empleado se persiste como
+`USER`. El campo `role` es transitorio por compatibilidad: puede omitirse o ser `USER`; enviar
+`ADMIN` devuelve `400 EMPLEADO_DEBE_SER_USER` y no crea el usuario.
 > **PRO**: el plan FREE permite **1 usuario** (el dueño). Agregar empleados requiere PRO → si no, `402`. Ver `funciones.empleadosMultiples` en §4.2.
 UsuarioResponse: `{ id, username, email, role, active }`.
 
+- El rol no se edita. Un cliente legacy puede repetir el rol actual como no-op; intentar promover un
+  empleado o degradar al titular devuelve `400 ROL_USUARIO_INMUTABLE`.
+- La base impide más de un `ADMIN` por taller. Todavía no existe transferencia de titularidad.
 - Un usuario **desactivado** (`active:false`) no puede loguear (`401`) y sus tokens ya emitidos
   **dejan de funcionar al instante** (las requests pasan a dar `403`).
-- Guardas: un ADMIN **no puede desactivarse ni quitarse el rol a sí mismo** (`400`).
+- Guarda: un ADMIN **no puede desactivarse a sí mismo** (`400`).
 - `400` si el email ya está en uso.
 
 ---

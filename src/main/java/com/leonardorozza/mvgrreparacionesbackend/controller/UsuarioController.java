@@ -24,7 +24,7 @@ public class UsuarioController {
 
     private final UsuarioService usuarioService;
 
-    @Operation(summary = "Crear un empleado (rol USER por defecto)")
+    @Operation(summary = "Crear un empleado (siempre con rol USER)")
     @PostMapping
     public ResponseEntity<UsuarioResponseDTO> crear(@Valid @RequestBody CrearUsuarioRequestDTO request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(usuarioService.crear(request));
@@ -42,7 +42,7 @@ public class UsuarioController {
         return ResponseEntity.ok(usuarioService.obtener(id));
     }
 
-    @Operation(summary = "Actualizar rol y/o estado (activar/desactivar) de un usuario")
+    @Operation(summary = "Activar o desactivar un empleado; el rol es inmutable")
     @PatchMapping("/{id}")
     public ResponseEntity<UsuarioResponseDTO> actualizar(
             @PathVariable Long id,

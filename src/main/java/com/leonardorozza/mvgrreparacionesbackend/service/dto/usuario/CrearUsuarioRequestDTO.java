@@ -1,13 +1,14 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.usuario;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.UserRole;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
- * Alta de un empleado del taller. Si no se envía rol, se crea como USER.
+ * Alta de un empleado del taller. Los empleados siempre se crean como USER.
  */
 @Data
 public class CrearUsuarioRequestDTO {
@@ -25,6 +26,13 @@ public class CrearUsuarioRequestDTO {
     @Size(min = 6, max = 100)
     private String password;
 
-    /** Opcional: ADMIN o USER. Default USER. */
+    /**
+     * Compatibilidad temporal con clientes anteriores. Puede omitirse o enviarse
+     * como USER; ADMIN se rechaza porque el titular del taller es único.
+     */
+    @Schema(
+            description = "Campo legacy: puede omitirse o enviarse como USER; ADMIN se rechaza.",
+            allowableValues = "USER",
+            deprecated = true)
     private UserRole role;
 }
