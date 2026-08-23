@@ -19,5 +19,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByIdAndTallerId(Long id, Long tallerId);
 
+    @EntityGraph(attributePaths = "taller")
+    Optional<User> findPerfilByIdAndTallerId(Long id, Long tallerId);
+
     long countByTallerId(Long tallerId);
 }
