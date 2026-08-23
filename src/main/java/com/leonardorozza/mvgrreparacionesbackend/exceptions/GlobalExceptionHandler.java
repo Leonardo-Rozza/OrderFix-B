@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -53,7 +54,9 @@ public class GlobalExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 "Solicitud inválida",
                 ex.getMessage(),
-                request.getRequestURI()
+                request.getRequestURI(),
+                ex.getCode(),
+                optionalDetails(ex.getDetails())
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
@@ -184,7 +187,9 @@ public class GlobalExceptionHandler {
                 HttpStatus.CONFLICT.value(),
                 "Conflicto de estado",
                 ex.getMessage(),
-                request.getRequestURI()
+                request.getRequestURI(),
+                ex.getCode(),
+                optionalDetails(ex.getDetails())
         );
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
@@ -286,5 +291,9 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    private Map<String, Object> optionalDetails(Map<String, Object> details) {
+        return details == null || details.isEmpty() ? null : details;
     }
 }
