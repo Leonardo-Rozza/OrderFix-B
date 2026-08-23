@@ -11,6 +11,8 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanFe
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro.*;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.CobroInvariantPolicy;
+import com.leonardorozza.mvgrreparacionesbackend.service.finanzas.EstadoCuentaOrden;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,12 +32,15 @@ public class CobroService {
     private final ReparacionRepository reparacionRepository;
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
+    private final CobroInvariantPolicy cobroInvariantPolicy;
 
     public CobroResponseDTO registrar(Long reparacionId, CobroRequestDTO request) {
         planFeatureService.requerir(PlanFeature.COBROS);
         Long tallerId = tenantService.currentTallerId();
-        Reparacion reparacion = reparacionRepository.findByIdAndTallerId(reparacionId, tallerId)
+        Reparacion reparacion = reparacionRepository.findByIdAndTallerIdForUpdate(reparacionId, tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reparación no encontrada con ID: " + reparacionId));
+        EstadoCuentaOrden estado = estadoCuenta(reparacion);
+        cobroInvariantPolicy.validarNuevoCobro(reparacionId, estado, request.getMonto());
 
         Cobro cobro = Cobro.builder()
                 .reparacion(reparacion)
@@ -59,11 +64,10 @@ public class CobroService {
                 .findByReparacionIdAndTallerIdOrderByCreatedAtDesc(reparacionId, tallerId)
                 .stream().map(this::toDTO).toList();
 
-        BigDecimal total = reparacion.calcularTotal();
-        BigDecimal cobrado = cobroRepository.sumByReparacionId(reparacionId);
-        BigDecimal saldo = total.subtract(cobrado);
+        EstadoCuentaOrden estado = estadoCuenta(reparacion);
 
-        return new CobrosReparacionDTO(total, cobrado, saldo, saldo.signum() <= 0, cobros);
+        return new CobrosReparacionDTO(
+                estado.total(), estado.cobrado(), estado.saldo(), estado.pagado(), cobros);
     }
 
     public void eliminar(Long cobroId) {
@@ -118,9 +122,7 @@ public class CobroService {
 
         BigDecimal manoDeObra = r.getPrecioFinal() != null ? r.getPrecioFinal()
                 : (r.getPrecioEstimado() != null ? r.getPrecioEstimado() : BigDecimal.ZERO);
-        BigDecimal total = r.calcularTotal();
-        BigDecimal cobrado = cobroRepository.sumByReparacionId(reparacionId);
-        BigDecimal saldo = total.subtract(cobrado);
+        EstadoCuentaOrden estadoCuenta = estadoCuenta(r);
 
         return new ReciboDTO(
                 r.getId(),
@@ -137,12 +139,18 @@ public class CobroService {
                 items,
                 manoDeObra,
                 r.calcularTotalRepuestos(),
-                total,
-                cobrado,
-                saldo,
-                saldo.signum() <= 0,
+                estadoCuenta.total(),
+                estadoCuenta.cobrado(),
+                estadoCuenta.saldo(),
+                estadoCuenta.pagado(),
                 r.getCreatedAt()
         );
+    }
+
+    private EstadoCuentaOrden estadoCuenta(Reparacion reparacion) {
+        return EstadoCuentaOrden.de(
+                reparacion.calcularTotal(),
+                cobroRepository.sumByReparacionId(reparacion.getId()));
     }
 
     private CobroResponseDTO toDTO(Cobro c) {

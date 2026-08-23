@@ -54,4 +54,37 @@ class CobroCajaReciboTests extends IntegrationTestBase {
         assertThat(caja.get("porMetodo").get("EFECTIVO").asInt()).isEqualTo(20000);
         assertThat(caja.get("porMetodo").get("TRANSFERENCIA").asInt()).isEqualTo(30000);
     }
+
+    @Test
+    void rechazaUnCobroQueSuperaElPendienteYConservaElEstado() throws Exception {
+        String token = registrar("Taller Límite Cobro", "cobro-limite@test.com");
+        activarPro(token);
+        long reparacionId = node(authPost("/api/reparaciones/ingreso-rapido", token, json(Map.of(
+                "clienteNombre", "Luz", "clienteTelefono", "8002",
+                "equipoMarca", "Apple", "equipoModelo", "iPhone 13",
+                "descripcionProblema", "No carga", "precioEstimado", 50000)))
+                .andExpect(status().isCreated())).at("/reparacion/id").asLong();
+
+        authPost("/api/reparaciones/" + reparacionId + "/cobros", token,
+                json(Map.of("monto", 20000, "metodo", "EFECTIVO")))
+                .andExpect(status().isCreated());
+
+        JsonNode error = node(authPost("/api/reparaciones/" + reparacionId + "/cobros", token,
+                json(Map.of("monto", 30001, "metodo", "TRANSFERENCIA")))
+                .andExpect(status().isConflict()));
+
+        assertThat(error.get("code").asText()).isEqualTo("COBRO_SUPERA_SALDO");
+        assertThat(error.get("message").asText()).isEqualTo("El monto supera el pendiente de cobro.");
+        assertThat(error.at("/details/reparacionId").asLong()).isEqualTo(reparacionId);
+        assertThat(error.at("/details/total").asInt()).isEqualTo(50000);
+        assertThat(error.at("/details/cobrado").asInt()).isEqualTo(20000);
+        assertThat(error.at("/details/monto").asInt()).isEqualTo(30001);
+        assertThat(error.at("/details/pendiente").asInt()).isEqualTo(30000);
+
+        JsonNode resumen = node(authGet("/api/reparaciones/" + reparacionId + "/cobros", token)
+                .andExpect(status().isOk()));
+        assertThat(resumen.get("cobrado").asInt()).isEqualTo(20000);
+        assertThat(resumen.get("saldo").asInt()).isEqualTo(30000);
+        assertThat(resumen.get("cobros")).hasSize(1);
+    }
 }

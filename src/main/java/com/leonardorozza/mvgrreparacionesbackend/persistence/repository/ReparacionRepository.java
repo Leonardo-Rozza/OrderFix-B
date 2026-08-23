@@ -2,8 +2,10 @@ package com.leonardorozza.mvgrreparacionesbackend.persistence.repository;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -19,6 +21,11 @@ public interface ReparacionRepository extends JpaRepository<Reparacion, Long> {
     List<Reparacion> findAllByTallerId(Long tallerId);
 
     Optional<Reparacion> findByIdAndTallerId(Long id, Long tallerId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Reparacion r WHERE r.id = :id AND r.taller.id = :tallerId")
+    Optional<Reparacion> findByIdAndTallerIdForUpdate(
+            @Param("id") Long id, @Param("tallerId") Long tallerId);
 
     Optional<Reparacion> findByCodigoSeguimiento(String codigoSeguimiento);
 

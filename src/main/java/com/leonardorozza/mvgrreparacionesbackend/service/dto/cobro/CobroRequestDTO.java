@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.cobro;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.MetodoPago;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
@@ -13,6 +14,7 @@ public class CobroRequestDTO {
 
     @NotNull
     @Positive
+    @Digits(integer = 8, fraction = 2)
     private BigDecimal monto;
 
     @NotNull
