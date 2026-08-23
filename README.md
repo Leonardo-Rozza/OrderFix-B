@@ -1,13 +1,15 @@
 # OrdenFix — Backend
 
 SaaS **multi-taller** para la gestión integral de talleres de reparación de celulares/dispositivos:
-clientes, equipos, órdenes de reparación, presupuestos, repuestos, inventario con stock, cobros/caja,
+clientes, equipos, órdenes de reparación, presupuestos, repuestos, inventario con stock, cobros manuales,
 seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con cobro por MercadoPago.
 
 > 📚 Documentación relacionada:
 > - **`FRONTEND_INTEGRATION.md`** — contrato completo de la API (request/response exactos, tipos TS).
 > - **`DEPLOY.md`** — guía de despliegue y variables de entorno.
 > - **`docs/runbooks/mercadopago-release.md`** — sandbox, operación y go/no-go de suscripciones.
+> - **`docs/runbooks/cobros-consistencia.md`** — auditoría tenant-aware y saneamiento de cobros
+>   manuales históricos.
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
 
 ---
@@ -47,7 +49,7 @@ datos de otro (hay tests que lo garantizan). El frontend nunca manda `tallerId`.
 - **FREE**: hasta **25 reparaciones/mes** (configurable por `FREE_MAX_REPARACIONES`).
   El consumo se lleva con un **contador mensual** en la suscripción que **no baja al borrar** y se
   **reinicia el día 1**. Superar el tope → `402`.
-- **PRO**: reparaciones ilimitadas + funciones exclusivas: **inventario**, **cobros/caja/recibo** y
+- **PRO**: reparaciones ilimitadas + funciones exclusivas: **inventario**, **cobros/resumen digital** y
   **más de 1 empleado**. Al usarlas sin PRO → `402`.
 - **TRIAL** concede temporalmente el mismo entitlement que PRO y no consume el tope FREE. Un plan
   PRO pausado, vencido o cancelado no mantiene funciones abiertas por el solo nombre del plan.
@@ -92,7 +94,7 @@ Taller (cuenta / tenant)
  │         └── Reparaciones (estado + estado de pago, nº de orden, orden de trabajo, flags de riesgo, técnico, fotos, código de seguimiento)
  │              ├── Repuestos (opcionalmente ligados a un Artículo de inventario)
  │              ├── Presupuestos (ítems, estado, aprobación del cliente)
- │              └── Cobros (pagos parciales / total)
+ │              └── Cobros manuales (activos o anulados con auditoría)
  └── Inventario: Artículos (stock, stock mínimo)
 ```
 
@@ -119,6 +121,7 @@ Detalle de cada request/response en `FRONTEND_INTEGRATION.md`.
 | Área | Endpoints | Notas |
 |------|-----------|-------|
 | **Auth** (público) | `POST /api/auth/register` · `POST /api/auth/login` | Devuelven `{ token, type, email, emailVerificado }` |
+| **Perfil** | `GET /api/perfil` | Identidad del usuario y del taller autenticados; no requiere PRO |
 | **Suscripción** | `GET /api/suscripcion` | Plan, consumo del mes y mapa `funciones` |
 | **Clientes** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado `?q=`) · `DELETE/{id}` (ADMIN) | Item con `equiposCount`, `reparacionesCount`, `ultimaVisita` |
 | **Equipos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /cliente/{id}` · `DELETE/{id}` (ADMIN) | Item con cliente + `reparacionesCount` |
@@ -126,8 +129,9 @@ Detalle de cada request/response en `FRONTEND_INTEGRATION.md`.
 | **Presupuestos** | `POST /api/reparaciones/{id}/presupuestos` · `GET` · `POST /{pid}/aprobar` · `/rechazar` · `/represupuestar` | Ítems discriminados (mano de obra/repuesto + calidad), validez/vencimiento, tipo ORIGINAL/ADICIONAL; mueve el estado de la reparación |
 | **Repuestos** | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /reparacion/{id}` · `DELETE/{id}` (ADMIN) | Con `articuloId` descuenta stock del inventario |
 | **Inventario** (PRO) | `POST` · `PUT/{id}` · `GET/{id}` · `GET` (paginado) · `GET /stock-bajo` · `POST /{id}/ajuste` · `DELETE/{id}` (ADMIN) | Catálogo con stock, ajustes y aviso de stock bajo |
-| **Cobros** (PRO) | `POST /api/reparaciones/{id}/cobros` · `GET /cobros` · `DELETE /cobros/{id}` (ADMIN) · `GET /{id}/recibo` | total/cobrado/saldo; recibo imprimible |
-| **Caja** (PRO) | `GET /api/caja?desde=&hasta=` | Resumen por período + desglose por método |
+| **Cobros** (PRO) | `POST /api/reparaciones/{id}/cobros` · `GET /cobros` · `POST /cobros/{cobroId}/anulacion` (ADMIN) · `GET /resumen-digital` | Registro manual; total/cobrado/saldo/excedente; anulación auditable; resumen informativo no fiscal. `DELETE /cobros/{cobroId}` y `GET /recibo` son alias deprecados |
+| **Datos de cobro** (PRO) | `GET/PUT /api/taller/datos-cobro` · `GET/PUT/DELETE /qr` | Alias/titular/entidad y QR opcionales; escrituras solo ADMIN |
+| **Cobros por período** (PRO) | `GET /api/caja?desde=&hasta=` | Sólo cobros manuales activos, con desglose por método; no es saldo bancario ni conciliación |
 | **Dashboard** | `GET /api/dashboard` | Conteos por estado, consumo, stock bajo, últimas 5 reparaciones |
 | **Usuarios/Empleados** (ADMIN) | `POST` · `GET` · `GET/{id}` · `PATCH/{id}` | Más de 1 empleado es PRO |
 | **Seguimiento** (público) | `GET /api/seguimiento/{codigo}` · `POST /{codigo}/presupuesto/aprobar` · `POST /.../rechazar` | Sin login, por código |
@@ -172,6 +176,11 @@ El `429` protege login, registro, recuperación/verificación, seguimiento públ
 | V18 | Inbox, vínculos, facturas y conciliación auditable de Mercado Pago |
 | V19 | Versión de token para revocar sesiones al cambiar credenciales |
 | V20 | Cifrado y migración de patrón/PIN de dispositivos |
+| V21 | Checks monetarios `NOT VALID`: protegen escrituras nuevas sin bloquear inconsistencias históricas |
+| V22 | Referencia externa opcional en cobros manuales |
+| V23 | Anulación auditable de cobros, sin borrado del movimiento original |
+| V24 | Alias, titular, entidad y visibilidad de datos de cobro por taller |
+| V25 | QR raster normalizado, aislado 1:1 por taller |
 
 ---
 
@@ -219,7 +228,7 @@ integridad de bajas y PostgreSQL/Testcontainers. Los flujos extienden `support/I
 - **AuthTests** (5) — registro, login, credenciales inválidas (401), email duplicado (400), sin token (403).
 - **ReparacionFlowTests** (6) — ingreso rápido + reúso de cliente, denormalización, búsqueda, cambio de estado (DTO + inválido), orden ampliada, paginación.
 - **EstadoTransicionTests** (4) — máquina de estados: camino legal completo, salto ilegal → 409, mismo estado idempotente, terminal sin salida.
-- **EstadoPagoTests** (2) — estado de pago derivado: SIN_COBRAR → PARCIAL → PAGADO (con saldo) y FREE sin cobros.
+- **EstadoPagoTests** — estado de pago derivado, saldo no negativo, excedentes legacy y FREE sin cobros.
 - **IngresoEnriquecidoTests** (2) — número de orden correlativo por taller y bandera roja de cuenta sin credenciales.
 - **ReparacionDeleteTests** (2) — al borrar limpia presupuestos (cascade) y repone stock; bloquea si hay cobros.
 - **PresupuestoFlowTests** (2) — crear + aprobar/rechazar desde el link público.
@@ -227,7 +236,10 @@ integridad de bajas y PostgreSQL/Testcontainers. Los flujos extienden `support/I
 - **EntregaYFotosTests** (2) — fotos con momento (default INGRESO) y conformidad de entrega sellada al pasar a ENTREGADO.
 - **GarantiaTests** (2) — garantía fijada al entregar (default 90 días) y reclamo en garantía vinculado al original.
 - **InventarioStockTests** (3) — descuento/reposición de stock, stock insuficiente (400), stock bajo + dashboard.
-- **CobroCajaReciboTests** (1) — cobros parciales, saldo, recibo y caja.
+- **CobroCajaReciboTests** — cobros parciales, referencia, excedente, anulación auditable, resumen
+  digital/alias legado y cobros por período.
+- **DatosCobroTests / QrCobroTests** — permisos ADMIN/USER, aislamiento por tenant,
+  reemplazo completo, normalización raster y contrato binario del QR.
 - **PlanGatingTests** (3) — FREE → 402 en funciones PRO, mapa `funciones`, multi-empleado.
 - **RolTests** (2) — USER vs ADMIN; empleado desactivado no loguea.
 - **PlanLimitTests** (2) — superar el tope FREE devuelve 402; el reclamo en garantía no consume cupo.
@@ -251,5 +263,5 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/
 ├── persistence/       # entity/ (+ enums) y repository/
 ├── exceptions/        # GlobalExceptionHandler + excepciones de dominio
 └── utils/             # mappers (MapStruct) + jwt
-src/main/resources/db/migration/   # Flyway V1..V20
+src/main/resources/db/migration/   # Flyway V1..V25
 ```
