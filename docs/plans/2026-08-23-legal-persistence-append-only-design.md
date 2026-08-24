@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-23
 
-Estado: diseño aprobado; implementación pendiente
+Estado: diseño aprobado e implementación completada/verificada
 
 Alcance: Flyway, entidades, repositorios e invariantes PostgreSQL; sin controllers, servicios HTTP,
 importador operativo, seed, contenido legal ni enforcement
@@ -103,6 +103,14 @@ de la espera. Si el sello ganó la carrera, el `SELECT ... FOR SHARE` del insert
 bloqueada y rechaza el estado terminal. Las publicaciones introductoras externas se
 bloquean/validan en orden UUID determinístico para evitar deadlocks.
 
+Las operaciones del protocolo que bloquean y luego releen estado exigen explícitamente aislamiento
+`READ COMMITTED`; V27 rechaza `REPEATABLE READ` y `SERIALIZABLE` con SQLSTATE `25001`. Esto evita que
+un snapshot estable omita hijos que terminaron de confirmar mientras el sello esperaba un lock. Los
+`UPDATE` de sello de publicaciones además pasan por un trigger `BEFORE STATEMENT` que adquiere una
+barrera advisory transaccional global **antes** de cualquier lock de fila. Como los sellos son
+operaciones editoriales infrecuentes, esa serialización evita el deadlock cruzado A -> B / B -> A
+sin afectar las lecturas ni el tráfico normal de aceptación.
+
 El digest RFC 8785 se calcula y compara en el futuro importador antes del sello; PostgreSQL preserva
 el `TEXT` canónico y el digest suministrado, comprueba su formato y evita que el grafo normalizado
 cambie después. Ninguna versión puede pasar a `PUBLICADA`, ningún slot puede activarse y ningún
@@ -153,8 +161,9 @@ BORRADOR -> PUBLICADA -> VIGENTE -> REEMPLAZADA | RETIRADA
 
 Cada cambio agrega una fila inmutable a `legal_documento_transiciones`. `RETIRADA` requiere un motivo
 no vacío. `PUBLICADA -> VIGENTE` se rechaza si `vigente_desde` es posterior a
-`transaction_timestamp()`. Los estados terminales no cambian ni pueden volver a ocupar slots, aunque
-otra publicación histórica vuelva a vincular la misma versión.
+`transaction_timestamp()` o si el propio `ocurrido_en` del evento es anterior a `vigente_desde`.
+Los estados terminales no cambian ni pueden volver a ocupar slots, aunque otra publicación histórica
+vuelva a vincular la misma versión.
 
 En `BORRADOR -> PUBLICADA`, el trigger toma `SELECT ... FOR UPDATE` sobre la línea estable y exige
 que `lineage_ordinal` sea estrictamente mayor que el máximo ordinal que haya alcanzado alguna vez
@@ -236,6 +245,8 @@ inmutable de snapshot por `(publicacion, locale, contexto, audiencia)` y
 `legal_requisito_conjunto_miembros` guarda cero o más versiones con FK compuesta a la membresía de
 esa misma publicación, `requisito_linea_id` y `manifest_ordinal`. Son únicos la línea y el ordinal
 dentro del conjunto, por lo que pueden coexistir términos, privacidad y tratamiento sin perder orden.
+El ordinal conserva exactamente la posición global de `legal_publicacion_requisitos`: un snapshot
+filtrado por scope puede contener huecos y no se renumera artificialmente a `1..N`.
 
 `legal_requisito_conjuntos_actuales` es el único puntero mutable, con PK
 `(locale, contexto, audiencia)` y FK al snapshot. Distingue un conjunto vacío deliberadamente válido
@@ -298,7 +309,12 @@ Una herencia exitosa no inserta evidencia ni modifica fechas.
 - usuario y taller con FK compuesta que prueba pertenencia al insertar;
 - snapshots de rol wire y audiencia, con `ADMIN <-> ADMIN_TITULAR` y `USER <-> USER`;
 - `required_set_revision`;
-- `aceptado_en` del servidor.
+- `aceptado_en` autoritativo de PostgreSQL.
+
+El trigger ignora cualquier fecha aportada por el caller y normaliza `aceptado_en` a
+`transaction_timestamp()`. La cabecera de metadata reutiliza exactamente ese instante como
+`capturado_en` y exige que `retener_hasta` todavía sea futuro al confirmar. Así una escritura
+backdated no puede crear metadata ya purgable en la misma transacción.
 
 V27 agrega `UNIQUE users(id, taller_id)` para sostener la FK compuesta. Las aceptaciones que duplican
 user/taller por consulta usan a su vez una FK compuesta `(lote_id, user_id, taller_id)` al lote, de
@@ -363,6 +379,10 @@ tipo, versión de clave y nonce, pero no conserva payload ni longitud.
 - fingerprint HMAC y versión de clave;
 - referencias tipadas al usuario/taller/lote resultante;
 - `completed_at` y `expires_at`, con garantía mínima de 24 horas.
+
+`completed_at` también se normaliza al `aceptado_en` autoritativo del lote; no se confía en una fecha
+del caller. Por lo tanto el `CHECK` de 24 horas se cuenta desde el resultado de negocio real y el
+ledger no puede nacer vencido ni borrarse en la misma transacción.
 
 La unicidad exacta es
 `(operacion, route_template, scope_hmac, idempotency_key_hmac)`. Un `CHECK` exige
@@ -446,6 +466,10 @@ rechazan `DELETE`. Las proyecciones `legal_documento_vigentes` y
 `legal_requisito_conjuntos_actuales` sí se reemplazan mediante delete/insert transaccional; metadata
 técnica e idempotencia poseen una purga acotada y comprobable.
 
+Todas las funciones `legal_*` fijan un `search_path` propio con `pg_catalog`, el schema exacto donde
+Flyway instaló V27 y `pg_temp` al final. Así ninguna tabla o función temporal homónima aportada por la
+conexión puede desviar las validaciones de un trigger.
+
 Los hijos intrínsecos y de membresía también rechazan `INSERT` cuando su publicación dueña o
 introductoria está `SELLADO`. La única mutación del agregado editorial es sellar una publicación
 abierta; nunca se reabre.
@@ -461,7 +485,8 @@ abierta; nunca se reabre.
 - publicación incompleta, ordinales no contiguos, activación antes del sello e inserciones tardías de
   líneas, versiones, contextos, audiencias, documentos, membresías o miembros de snapshot;
 - sello que depende de otra publicación abierta/cíclica y carreras insert-vs-sello en ambos órdenes
-  de commit usando dos conexiones reales;
+  de commit usando dos conexiones reales; barrera previa entre sellos y rechazo explícito de
+  escrituras `REPEATABLE READ`;
 - transiciones ilegales, activación anterior a `vigente_desde`, terminales, intento de revivir e
   inmutabilidad;
 - publicación tardía de un ordinal inferior y carreras concurrentes de publicación sobre la misma
@@ -475,8 +500,8 @@ abierta; nunca se reabre.
 - relaciones requisito-documento incompatibles y transición documental con requisito vigente;
 - actor/tenant/rol/audiencia incorrectos;
 - evidencia con encabezado/documento extra, omisión, snapshot alterado o duplicado;
-- metadata técnica, tamaños/completitud, unicidad de nonce y purga;
-- unicidad idempotente, forma de resultado y expiración;
+- metadata técnica, timestamps autoritativos, tamaños/completitud, unicidad de nonce y purga;
+- unicidad idempotente, timestamp autoritativo, forma de resultado y expiración;
 - FK `RESTRICT` y ausencia de cascadas.
 
 Los tests de triggers diferibles usan `TransactionTemplate` y fuerzan

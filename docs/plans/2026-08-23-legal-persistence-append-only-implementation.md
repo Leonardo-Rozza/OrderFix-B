@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-23
 
-Estado: listo para ejecutar
+Estado: completado y verificado
 
 Diseño fuente: `docs/plans/2026-08-23-legal-persistence-append-only-design.md`
 
@@ -42,7 +42,8 @@ No incluye:
 2. `feat(db): agrega persistencia legal append-only`
 3. `feat(legal): mapea persistencia relacional`
 4. `test(legal): cubre invariantes y concurrencia`
-5. `docs(plan): coordina persistencia legal implementada` en el frontend
+5. `docs(legal): registra cierre fase 2.2`
+6. `docs(plan): coordina persistencia legal implementada` en el frontend
 
 Si una prueba revela una corrección que no puede incorporarse limpiamente al commit de su tarea, se
 crea un `fix(db)` o `fix(legal)` separado. No se mezcla runtime HTTP con esta fase.
@@ -85,6 +86,10 @@ Reglas que deben quedar en PostgreSQL:
 - identidades estables, versión y `lineage_ordinal` únicos;
 - conjuntos intrínsecos no vacíos y ordinales `1..N` al sellar;
 - publicación técnica `ABIERTO -> SELLADO`, terminal;
+- protocolo de escritura con lock+relectura limitado a `READ COMMITTED`, rechazando snapshots de
+  aislamiento que puedan omitir un hijo confirmado durante una espera;
+- barrera advisory `BEFORE STATEMENT` previa a los locks de fila para serializar sellos de
+  publicaciones y evitar dependencias cruzadas en deadlock;
 - roots/hijos/membresías/snapshots insertables sólo con publicación abierta, tomando
   `SELECT ... FOR SHARE` sobre la publicación dueña;
 - dependencias externas provenientes exclusivamente de publicaciones ya selladas;
@@ -93,6 +98,8 @@ Reglas que deben quedar en PostgreSQL:
 - slots documentales exactos por `(tipo, locale, contexto)`;
 - lote de reemplazo sellado, no vacío, sin autociclo y con cobertura split/merge exacta;
 - snapshots actuales homogéneos, completos y sin mezclar publicaciones;
+- miembros de snapshot con el `manifest_ordinal` global de su membresía; al filtrar por scope pueden
+  existir huecos legítimos y no se exige una secuencia local `1..N`;
 - invalidación fail-closed de punteros cuando se reemplaza o retira un documento vigente.
 
 ### 1.3 Evidencia, metadata e idempotencia
@@ -112,6 +119,8 @@ Reglas obligatorias:
 - IP cifrada obligatoria antes de purga; User-Agent opcional y longitud previa máxima 512;
 - nonce/tag/tamaños exactos y `UNIQUE(key_version, nonce)` global;
 - purga por tombstone: nulificar payload/tag/longitud, conservar keyVersion+nonce y marcar fechas;
+- `aceptado_en`, `capturado_en` y `completed_at` normalizados por PostgreSQL, sin permitir
+  retención o idempotencia ya vencidas al confirmar;
 - idempotencia de éxitos con forma tipada por operación, HMAC hex, FK de resultado y expiración
   mínima de 24 horas;
 - `DELETE` bloqueado en historia/evidencia; delete/insert sólo para proyecciones actuales y purgas
@@ -133,6 +142,15 @@ Agrupar funciones por responsabilidad y usar nombres prefijados `legal_`:
 
 Los constraint triggers de completitud se declaran `DEFERRABLE INITIALLY DEFERRED`. Los triggers de
 formato, estado terminal, lock y no-delete fallan inmediatamente.
+
+Los entrypoints que esperan locks y luego releen filas ejecutan una guarda común de aislamiento. Los
+sellos de publicación adquieren además su advisory lock en un trigger por sentencia, antes de que el
+`UPDATE` pueda tomar el lock de la publicación propia.
+
+Al terminar V27, aplicar a toda función `legal_*` un `search_path` fijo compuesto por `pg_catalog`,
+el schema de instalación resuelto por Flyway y `pg_temp` en último lugar. La prueba PostgreSQL debe
+intentar sombrear una tabla legal con una temporal y comprobar que la función continúa leyendo el
+agregado real.
 
 ### 1.5 Prueba estructural y upgrade
 
@@ -227,8 +245,16 @@ Incluir consultas explícitas para:
 - evidencia exacta de actor+requirementVersion;
 - candidatos idempotentes por operación+ruta+scope+hash/version.
 
+Los candidatos idempotentes se consultan como una tupla correlacionada exacta
+`(keyVersion, scopeHmac, keyHmac)` y sólo si `expiresAt` sigue vigente; no se combinan tres listas
+`IN` independientes. Las transiciones se insertan mediante comandos nativos que hacen flush y
+limpian el contexto de persistencia, porque los triggers actualizan la versión y una entity ya
+administrada quedaría obsoleta. La purga expone dos comandos ordenados: primero todos los campos
+cifrados y después la cabecera.
+
 Agregar proyecciones cerradas para catálogo documental, linajes documental/de requisito, requisito
-actual e historial de aceptación; no serializar entities.
+actual e historial de aceptación; no serializar entities. Historial y requisitos actuales cargan
+sus documentos en una segunda consulta por IDs, con orden padre + ordinal + ID estable.
 
 Las cargas de colecciones usan dos pasos o `EntityGraph`; no se pagina un fetch-join de múltiples
 colecciones.
@@ -257,13 +283,15 @@ Sobre PostgreSQL 16 real, probar por grupos:
 
 - formatos, enums, ordinales y duplicados;
 - sello incompleto, ordinales no contiguos, dependencias externas abiertas e inserts tardíos;
+- serialización previa de sellos y rechazo fail-closed de `REPEATABLE READ` en publicaciones,
+  transiciones y reemplazos;
 - máquinas de estado, barrera `vigente_desde`, orden histórico de linaje y terminalidad;
 - slots y reemplazos exactos, incluidos split/merge y rechazo parcial;
 - snapshots múltiples/empty-set/ausencia, promoción multiaudiencia y fail-closed documental;
 - tenant/actor/rol/audiencia y evidencia exacta/inmutable;
 - completitud del lote con `SET CONSTRAINTS ALL IMMEDIATE`;
-- metadata válida, tamaños, tombstone de purga y reserva permanente del nonce;
-- idempotencia, forma del resultado, HMAC y vencimiento;
+- metadata válida, hora autoritativa, tamaños, tombstone de purga y reserva permanente del nonce;
+- idempotencia, hora autoritativa, forma del resultado, HMAC y vencimiento;
 - `RESTRICT`, no-delete y ausencia de cascadas;
 - round-trip mínimo de repositories JPA.
 
@@ -326,6 +354,37 @@ La fase termina sólo si:
 - las pruebas concurrentes no dependen del orden accidental del scheduler;
 - cada commit contiene una sola tarea y no existe push;
 - backend queda limpio y frontend conserva únicamente los untracked ajenos ya existentes.
+
+## Cierre ejecutado
+
+Implementación completada el 2026-08-23 sobre la rama backend
+`codex/lanzamiento-publico-backend`, sin push.
+
+Commits técnicos del corte:
+
+- `8b4b7b1 feat(db): agrega persistencia legal append-only`;
+- `984d108 feat(legal): mapea persistencia relacional`;
+- `cbb5bf1 test(legal): cubre invariantes y concurrencia`.
+
+Resultado entregado:
+
+- V27 con 25 tablas legales, 47 funciones `legal_*` y 77 triggers;
+- 25 entities, 20 repositorios y 7 proyecciones JPA;
+- migración desde cero, upgrade V26 -> V27, schema personalizado y validación Hibernate;
+- timestamps autoritativos, `search_path` endurecido, append-only, evidencia exacta, tombstones,
+  idempotencia y protocolos de concurrencia protegidos en PostgreSQL.
+
+Verificación final:
+
+- `PostgresMigrationIT`: 7/7;
+- `LegalPersistenceIT`: 9/9;
+- `LegalConcurrencyIT`: 7/7;
+- `./mvnw verify`: 185 pruebas unitarias y 28 pruebas de integración, sin fallos ni errores;
+- `git diff --check`: correcto.
+
+Este cierre no agrega endpoints HTTP, importador, contenido legal, seeds, enforcement, cambios de
+registro/login, seguridad o CORS. La persistencia queda disponible como base interna, pero todavía
+no constituye el `BACKEND-HANDOFF 1` consumible por el frontend.
 
 ## Siguiente corte
 
