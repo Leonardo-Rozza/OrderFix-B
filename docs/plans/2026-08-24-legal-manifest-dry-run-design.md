@@ -142,8 +142,11 @@ normal de la aplicación permanece sin cambios cuando no se invoca una operació
 
 ## Entrada y ownership del contrato
 
-El argumento obligatorio es la ruta al `publication-manifest.json`. La raíz de publicación es su
-directorio padre real.
+El argumento obligatorio es la ruta a un archivo llamado exactamente `publication-manifest.json`.
+La raíz de publicación es su directorio padre real y el basename de ese directorio debe coincidir
+con `publicationId`. El CLI puede recibir el bundle desde cualquier ubicación local; la exigencia
+frontend de alojarlo bajo `docs/legal/publications` es una convención de ese repositorio, no una ruta
+absoluta portable al backend.
 
 El backend incorpora una copia inmutable y versionada del JSON Schema v1. El schema frontend sigue
 siendo el artefacto editorial visible, pero ambos repositorios documentan el mismo SHA-256 y poseen
@@ -186,7 +189,7 @@ Cada `source` se resuelve desde la raíz real de la publicación. Debe:
 - cumplir el patrón del schema;
 - resolver a un archivo regular;
 - permanecer dentro de la raíz después de `normalize()` y `toRealPath()`;
-- no atravesar un symlink que escape del release;
+- no atravesar ningún componente symlink, aunque su destino actual permanezca dentro del release;
 - no repetirse entre documentos.
 
 No se siguen URLs, classpath, stdin, dispositivos ni rutas absolutas. Los issues muestran sólo la
@@ -219,8 +222,31 @@ en contenido y afirmaciones:
 - `[JURISDICCIÓN]`;
 - `[HORARIO DE ATENCIÓN]`.
 
-No se intenta descubrir marcadores arbitrarios; el set permanece contractual y coordinado con el
-guard frontend.
+También se rechazan los patrones genéricos ya coordinados con el guard frontend (`{{...}}`,
+`<REPLACE_ME>`, `TODO_LEGAL`, corchetes de dato pendiente) y sus marcadores editoriales de borrador,
+no-publicación o revisión pendiente. No se intenta clasificar lenguaje jurídico libre fuera de ese
+set contractual explícito.
+
+Todo el Markdown, no sólo el H1, rechaza HTML crudo y destinos de enlace con esquema activo
+`javascript:`, `vbscript:` o `data:` después de decodificar las entidades admitidas y remover
+controles ASCII. Los autolinks seguros `https:` y `mailto:` no se consideran HTML crudo.
+
+## Paridad deliberada con el guard frontend
+
+El schema, sus enums, la matriz mínima de cobertura, placeholders, marcadores editoriales y reglas
+de Markdown se mantienen coordinados entre repositorios. El backend agrega garantías que el parser
+frontend actual todavía no acredita: UTF-8/I-JSON estrictos, BOM, nombres JSON duplicados, trailing
+content, RFC 8785 y límites operativos.
+
+No se copian dos sobre-restricciones editoriales que no pertenecen al schema ni a V27:
+
+- un tipo documental puede aparecer más de una vez con keys/versiones y scopes compatibles; esto
+  permite split/merge o versiones paralelas sin perder la identidad estable por key;
+- un documento puede estar vinculado sólo a requisitos opcionales. Sí se rechaza un documento
+  completamente huérfano, pero no se exige que su vínculo sea con `required=true`.
+
+La prueba de paridad congela estas diferencias como decisiones explícitas, de modo que un cambio de
+un solo repositorio no endurezca o relaje silenciosamente el contrato común.
 
 ## Reglas contractuales cruzadas
 
@@ -240,12 +266,14 @@ El validador exige, como mínimo:
 - ordinal tentativo mayor al máximo históricamente publicado de la línea;
 - orden del manifiesto preservado en memberships y snapshots, sin renumerar scopes filtrados;
 - cada scope construido con exactamente los requisitos que le aplican;
-- `REGISTRO/es-AR/ADMIN_TITULAR` con al menos un requisito obligatorio completo.
+- `REGISTRO/es-AR/ADMIN_TITULAR` con cobertura obligatoria completa, acumulable entre varios
+  requisitos del mismo scope.
 
 La puerta de release completo también revisa la matriz congelada en frontend: registro del titular,
 primer ingreso de `USER`, contratación PRO, atestaciones de fotos y credenciales para ambas
 audiencias, y cierre de cuenta para el titular. El reporte identifica scopes faltantes sin fabricar
-requisitos.
+requisitos. La cobertura de cada scope se agrega entre sus requisitos `required=true`; no se exige
+que un único requisito concentre todos los tipos documentales esperados.
 
 El manifiesto v1 no expresa UUID, retiro, motivo ni mapa split/merge. La fase 2.3A no infiere esas
 operaciones. Un dry-run de una futura sustitución sólo acredita que el release puede importarse como
@@ -324,8 +352,7 @@ comprueban ausencia de filas parciales tanto después de `PASS` como de cada cla
 
 - `..`, rutas absolutas y extensiones incorrectas;
 - archivo inexistente/no regular;
-- symlink interno permitido sólo si su destino real sigue confinado;
-- symlink de escape rechazado;
+- cualquier componente symlink rechazado, tanto interno como de escape;
 - carrera básica de sustitución detectada reabriendo/verificando atributos antes de leer.
 
 ### PostgreSQL/Testcontainers
