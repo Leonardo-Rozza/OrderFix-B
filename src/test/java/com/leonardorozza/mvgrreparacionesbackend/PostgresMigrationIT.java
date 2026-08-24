@@ -16,6 +16,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.util.Arrays;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import javax.sql.DataSource;
@@ -26,6 +27,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
 class PostgresMigrationIT {
+
+    private static final Set<String> TABLAS_LEGALES_V27 = Set.of(
+            "legal_publicaciones",
+            "legal_documento_lineas",
+            "legal_documento_versiones",
+            "legal_documento_contextos",
+            "legal_publicacion_documentos",
+            "legal_documento_transiciones",
+            "legal_documento_vigentes",
+            "legal_documento_reemplazo_lotes",
+            "legal_documento_reemplazo_anteriores",
+            "legal_documento_reemplazo_sucesoras",
+            "legal_requisito_lineas",
+            "legal_requisito_audiencias",
+            "legal_requisito_versiones",
+            "legal_requisito_documentos",
+            "legal_publicacion_requisitos",
+            "legal_requisito_transiciones",
+            "legal_requisito_conjuntos",
+            "legal_requisito_conjunto_miembros",
+            "legal_requisito_conjuntos_actuales",
+            "legal_aceptacion_lotes",
+            "legal_aceptaciones",
+            "legal_aceptacion_documentos",
+            "legal_aceptacion_metadatos",
+            "legal_aceptacion_metadatos_cifrados",
+            "legal_idempotencia_resultados");
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
@@ -61,7 +89,7 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27");
 
         String tipoPngQr = jdbcTemplate.queryForObject("""
                 SELECT data_type
@@ -244,6 +272,261 @@ class PostgresMigrationIT {
                 ) AND convalidated = FALSE
                 """, Integer.class);
         assertThat(checksNoValidados).isEqualTo(12);
+    }
+
+    @Test
+    void v27CreaLaEstructuraLegalComprobableSinDatosSemilla() {
+        var tablasLegales = jdbcTemplate.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_type = 'BASE TABLE'
+                  AND table_name LIKE 'legal_%'
+                """, String.class);
+        assertThat(tablasLegales).containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_V27);
+        assertTablasLegalesVacias(jdbcTemplate, "public");
+
+        var tiposRepresentativos = jdbcTemplate.queryForList("""
+                SELECT table_name || '.' || column_name || ':' || data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND (table_name, column_name) IN (
+                    ('legal_publicaciones', 'id'),
+                    ('legal_publicaciones', 'importado_en'),
+                    ('legal_documento_contextos', 'id'),
+                    ('legal_aceptacion_lotes', 'user_id'),
+                    ('legal_aceptacion_metadatos_cifrados', 'nonce')
+                  )
+                """, String.class);
+        assertThat(tiposRepresentativos).containsExactlyInAnyOrder(
+                "legal_publicaciones.id:uuid",
+                "legal_publicaciones.importado_en:timestamp with time zone",
+                "legal_documento_contextos.id:bigint",
+                "legal_aceptacion_lotes.user_id:bigint",
+                "legal_aceptacion_metadatos_cifrados.nonce:bytea");
+
+        String uniqueActorTenant = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'uk_users_id_taller_id'
+                """, String.class);
+        assertThat(uniqueActorTenant).isEqualTo("UNIQUE (id, taller_id)");
+
+        var constraintsClave = jdbcTemplate.queryForList("""
+                SELECT conname
+                FROM pg_constraint
+                WHERE connamespace = 'public'::regnamespace
+                  AND conname IN (
+                    'ck_legal_publicaciones_manifest_sha',
+                    'pk_legal_documento_vigentes',
+                    'fk_legal_aceptacion_lote_actor',
+                    'uk_legal_aceptacion_usuario_requisito',
+                    'uk_legal_aceptacion_metadata_nonce',
+                    'uk_legal_idempotencia_resultado',
+                    'ck_legal_idempotencia_expiracion'
+                  )
+                """, String.class);
+        assertThat(constraintsClave).containsExactlyInAnyOrder(
+                "ck_legal_publicaciones_manifest_sha",
+                "pk_legal_documento_vigentes",
+                "fk_legal_aceptacion_lote_actor",
+                "uk_legal_aceptacion_usuario_requisito",
+                "uk_legal_aceptacion_metadata_nonce",
+                "uk_legal_idempotencia_resultado",
+                "ck_legal_idempotencia_expiracion");
+
+        String fkActorTenant = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'fk_legal_aceptacion_lote_actor'
+                """, String.class);
+        assertThat(fkActorTenant)
+                .contains("FOREIGN KEY (user_id, taller_id)", "REFERENCES users(id, taller_id)",
+                        "ON DELETE RESTRICT");
+
+        Integer foreignKeysLegalesNoRestrict = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_constraint c
+                JOIN pg_class tabla ON tabla.oid = c.conrelid
+                JOIN pg_namespace esquema ON esquema.oid = tabla.relnamespace
+                WHERE esquema.nspname = 'public'
+                  AND tabla.relname LIKE 'legal_%'
+                  AND c.contype = 'f'
+                  AND c.confdeltype <> 'r'
+                """, Integer.class);
+        assertThat(foreignKeysLegalesNoRestrict).isZero();
+
+        var indicesClave = jdbcTemplate.queryForList("""
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname IN (
+                    'idx_legal_publicaciones_locale_estado',
+                    'idx_legal_documento_versiones_lineage',
+                    'idx_legal_requisito_lineas_scope',
+                    'idx_legal_aceptacion_lotes_actor_fecha',
+                    'idx_legal_idempotencia_lookup'
+                  )
+                """, String.class);
+        assertThat(indicesClave).containsExactlyInAnyOrder(
+                "idx_legal_publicaciones_locale_estado",
+                "idx_legal_documento_versiones_lineage",
+                "idx_legal_requisito_lineas_scope",
+                "idx_legal_aceptacion_lotes_actor_fecha",
+                "idx_legal_idempotencia_lookup");
+
+        var triggersClave = jdbcTemplate.queryForList("""
+                SELECT trigger.tgname
+                FROM pg_trigger trigger
+                JOIN pg_class tabla ON tabla.oid = trigger.tgrelid
+                JOIN pg_namespace esquema ON esquema.oid = tabla.relnamespace
+                WHERE esquema.nspname = 'public'
+                  AND NOT trigger.tgisinternal
+                  AND trigger.tgname IN (
+                    'trg_legal_publicacion_update_statement',
+                    'trg_legal_publicacion_update_guard',
+                    'ct_legal_publicacion_sello',
+                    'trg_legal_documento_transicion_isolation',
+                    'trg_legal_requisito_transicion_isolation',
+                    'ct_legal_documento_estado_slots',
+                    'ct_legal_requisito_actual_insert',
+                    'trg_legal_reemplazo_lote_update_isolation',
+                    'ct_legal_reemplazo_lote_sello',
+                    'ct_legal_aceptacion_lote_completo',
+                    'ct_legal_metadata_cifrada_completa',
+                    'trg_legal_idempotencia_update_delete'
+                  )
+                """, String.class);
+        assertThat(triggersClave).containsExactlyInAnyOrder(
+                "trg_legal_publicacion_update_statement",
+                "trg_legal_publicacion_update_guard",
+                "ct_legal_publicacion_sello",
+                "trg_legal_documento_transicion_isolation",
+                "trg_legal_requisito_transicion_isolation",
+                "ct_legal_documento_estado_slots",
+                "ct_legal_requisito_actual_insert",
+                "trg_legal_reemplazo_lote_update_isolation",
+                "ct_legal_reemplazo_lote_sello",
+                "ct_legal_aceptacion_lote_completo",
+                "ct_legal_metadata_cifrada_completa",
+                "trg_legal_idempotencia_update_delete");
+
+        Integer constraintTriggersDiferidos = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_trigger
+                WHERE tgname IN (
+                    'ct_legal_publicacion_sello',
+                    'ct_legal_documento_estado_slots',
+                    'ct_legal_requisito_actual_insert',
+                    'ct_legal_reemplazo_lote_sello',
+                    'ct_legal_aceptacion_lote_completo',
+                    'ct_legal_metadata_cifrada_completa'
+                  )
+                  AND tgdeferrable
+                  AND tginitdeferred
+                """, Integer.class);
+        assertThat(constraintTriggersDiferidos).isEqualTo(6);
+
+        var funcionesClave = jdbcTemplate.queryForList("""
+                SELECT rutina.proname
+                FROM pg_proc rutina
+                JOIN pg_namespace esquema ON esquema.oid = rutina.pronamespace
+                WHERE esquema.nspname = 'public'
+                  AND rutina.proname IN (
+                    'legal_exigir_read_committed',
+                    'legal_publicacion_update_statement_guard',
+                    'legal_publicacion_constraint_guard',
+                    'legal_slots_constraint_guard',
+                    'legal_conjuntos_actuales_constraint_guard',
+                    'legal_reemplazo_constraint_guard',
+                    'legal_aceptacion_constraint_guard',
+                    'legal_idempotencia_update_delete_guard'
+                  )
+                """, String.class);
+        assertThat(funcionesClave).containsExactlyInAnyOrder(
+                "legal_exigir_read_committed",
+                "legal_publicacion_update_statement_guard",
+                "legal_publicacion_constraint_guard",
+                "legal_slots_constraint_guard",
+                "legal_conjuntos_actuales_constraint_guard",
+                "legal_reemplazo_constraint_guard",
+                "legal_aceptacion_constraint_guard",
+                "legal_idempotencia_update_delete_guard");
+
+        Integer funcionesLegalesSinSearchPathSeguro = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_proc funcion
+                JOIN pg_namespace esquema ON esquema.oid = funcion.pronamespace
+                WHERE esquema.nspname = current_schema()
+                  AND funcion.proname LIKE 'legal\\_%' ESCAPE '\\'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(funcion.proconfig) configuracion
+                      WHERE configuracion = format(
+                          'search_path=pg_catalog, %I, pg_temp', current_schema()
+                      )
+                  )
+                """, Integer.class);
+        assertThat(funcionesLegalesSinSearchPathSeguro).isZero();
+    }
+
+    @Test
+    void v27MigraDesdeV26PreservandoUsuariosYTalleresYSinSembrarDatosLegales() {
+        String schema = "v27_upgrade_compatible";
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+
+        Flyway flywayV26 = flywayDeSchema(dataSource, schema, "26");
+        flywayV26.migrate();
+        JdbcTemplate schemaJdbc = new JdbcTemplate(dataSource);
+
+        Long tallerId = schemaJdbc.queryForObject("""
+                INSERT INTO %s.talleres (nombre)
+                VALUES ('Taller preservado V27')
+                RETURNING id
+                """.formatted(schema), Long.class);
+        Long userId = schemaJdbc.queryForObject("""
+                INSERT INTO %s.users (username, password, email, role, active, taller_id)
+                VALUES ('Usuario preservado V27', 'hash', 'preservado-v27@test.com', 'USER', TRUE, ?)
+                RETURNING id
+                """.formatted(schema), Long.class, tallerId);
+        Integer talleresAntes = schemaJdbc.queryForObject(
+                "SELECT COUNT(*) FROM %s.talleres".formatted(schema), Integer.class);
+        Integer usersAntes = schemaJdbc.queryForObject(
+                "SELECT COUNT(*) FROM %s.users".formatted(schema), Integer.class);
+
+        Flyway flywayV27 = flywayDeSchema(dataSource, schema, null);
+        flywayV27.migrate();
+
+        assertThat(flywayV27.info().current().getVersion().toString()).isEqualTo("27");
+        assertThat(schemaJdbc.queryForObject(
+                "SELECT COUNT(*) FROM %s.talleres".formatted(schema), Integer.class))
+                .isEqualTo(talleresAntes);
+        assertThat(schemaJdbc.queryForObject(
+                "SELECT COUNT(*) FROM %s.users".formatted(schema), Integer.class))
+                .isEqualTo(usersAntes);
+        assertThat(schemaJdbc.queryForObject("""
+                SELECT nombre
+                FROM %s.talleres
+                WHERE id = ?
+                """.formatted(schema), String.class, tallerId))
+                .isEqualTo("Taller preservado V27");
+        assertThat(schemaJdbc.queryForObject("""
+                SELECT email
+                FROM %s.users
+                WHERE id = ? AND taller_id = ?
+                """.formatted(schema), String.class, userId, tallerId))
+                .isEqualTo("preservado-v27@test.com");
+
+        var tablasLegales = schemaJdbc.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = ?
+                  AND table_type = 'BASE TABLE'
+                  AND table_name LIKE 'legal_%'
+                """, String.class, schema);
+        assertThat(tablasLegales).containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_V27);
+        assertTablasLegalesVacias(schemaJdbc, schema);
     }
 
     @Test
@@ -438,6 +721,14 @@ class PostgresMigrationIT {
                       ('Admin uno', 'hash', 'legacy-admin-1@test.com', 'ADMIN', TRUE, ?),
                       ('Admin dos', 'hash', 'legacy-admin-2@test.com', 'ADMIN', TRUE, ?)
                     """.formatted(fixture.schema()), tallerId, tallerId);
+        });
+    }
+
+    private void assertTablasLegalesVacias(JdbcTemplate jdbc, String schema) {
+        assertThat(TABLAS_LEGALES_V27).allSatisfy(tabla -> {
+            Integer filas = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM %s.%s".formatted(schema, tabla), Integer.class);
+            assertThat(filas).as("filas semilla en %s.%s", schema, tabla).isZero();
         });
     }
 
