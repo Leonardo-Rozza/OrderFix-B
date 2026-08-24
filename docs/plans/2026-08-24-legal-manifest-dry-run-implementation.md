@@ -43,8 +43,8 @@ El backend incorpora una copia byte-identical de:
 
 ```text
 frontend/docs/legal/publication-manifest.schema.json
-SHA-256: 4b60d2571ac25f6042a84d63cac647a6b157b014c3d642673fd41088beb1ed87
-Tamaño: 10169 bytes
+SHA-256: f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b
+Tamaño: 10547 bytes
 ```
 
 El recurso backend será:

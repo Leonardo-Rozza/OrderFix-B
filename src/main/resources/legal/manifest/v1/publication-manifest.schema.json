@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ordenfix:legal:publication-manifest:1",
+  "title": "OrdenFix legal publication manifest",
+  "description": "Manifest for one immutable legal publication. Once imported or published, its identifier, metadata and referenced bytes are append-only; every correction requires a new publicationId.",
+  "$comment": "Cross-document uniqueness, reference resolution and byte-level SHA-256 verification must also be enforced by the publication validator because JSON Schema cannot compare array members or read referenced files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "publicationId",
+    "locale",
+    "publisherSnapshot",
+    "review",
+    "documents",
+    "requirements"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "publicationId": {
+      "$ref": "#/$defs/publicationId"
+    },
+    "locale": {
+      "$ref": "#/$defs/locale"
+    },
+    "publisherSnapshot": {
+      "$ref": "#/$defs/publisherSnapshot"
+    },
+    "review": {
+      "$ref": "#/$defs/review"
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/document"
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirement"
+      }
+    }
+  },
+  "$defs": {
+    "publicationId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 80,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "sourcePath": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 240,
+      "pattern": "^(?:[a-z0-9][a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*\\.md$"
+    },
+    "legalName": {
+      "oneOf": [
+        {
+          "const": "[RAZÓN SOCIAL]"
+        },
+        {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 200,
+          "pattern": "^(?!\\[)[^\\r\\n]+$"
+        }
+      ]
+    },
+    "taxId": {
+      "oneOf": [
+        {
+          "const": "[CUIT]"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{2}-\\d{8}-\\d$"
+        }
+      ]
+    },
+    "legalAddress": {
+      "oneOf": [
+        {
+          "const": "[DOMICILIO]"
+        },
+        {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 300,
+          "pattern": "^(?!\\[)[^\\r\\n]+$"
+        }
+      ]
+    },
+    "jurisdiction": {
+      "oneOf": [
+        {
+          "const": "[JURISDICCIÓN]"
+        },
+        {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 160,
+          "pattern": "^(?!\\[)[^\\r\\n]+$"
+        }
+      ]
+    },
+    "businessHours": {
+      "oneOf": [
+        {
+          "const": "[HORARIO DE ATENCIÓN]"
+        },
+        {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 160,
+          "pattern": "^(?!\\[)[^\\r\\n]+$"
+        }
+      ]
+    },
+    "publicEmail": {
+      "oneOf": [
+        {
+          "enum": [
+            "[EMAIL LEGAL]",
+            "[EMAIL PRIVACIDAD]"
+          ]
+        },
+        {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^\\s@\\u0000-\\u001F\\u007F-\\u009F\\u00A0\\u1680\\u2000-\\u200A\\u2028-\\u2029\\u202F\\u205F\\u3000\\uFEFF]+@[^\\s@\\u0000-\\u001F\\u007F-\\u009F\\u00A0\\u1680\\u2000-\\u200A\\u2028-\\u2029\\u202F\\u205F\\u3000\\uFEFF]+\\.[^\\s@\\u0000-\\u001F\\u007F-\\u009F\\u00A0\\u1680\\u2000-\\u200A\\u2028-\\u2029\\u202F\\u205F\\u3000\\uFEFF]+$"
+        }
+      ]
+    },
+    "publisherSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legalName",
+        "taxId",
+        "legalAddress",
+        "jurisdiction",
+        "businessHours",
+        "contacts"
+      ],
+      "properties": {
+        "legalName": {
+          "$ref": "#/$defs/legalName"
+        },
+        "taxId": {
+          "$ref": "#/$defs/taxId"
+        },
+        "legalAddress": {
+          "$ref": "#/$defs/legalAddress"
+        },
+        "jurisdiction": {
+          "$ref": "#/$defs/jurisdiction"
+        },
+        "businessHours": {
+          "$ref": "#/$defs/businessHours"
+        },
+        "contacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "legalEmail",
+            "privacyEmail",
+            "supportEmail"
+          ],
+          "properties": {
+            "legalEmail": {
+              "$ref": "#/$defs/publicEmail"
+            },
+            "privacyEmail": {
+              "$ref": "#/$defs/publicEmail"
+            },
+            "supportEmail": {
+              "$ref": "#/$defs/publicEmail"
+            }
+          }
+        }
+      }
+    },
+    "reviewRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "PENDING",
+            "APPROVED"
+          ]
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+        },
+        "reviewedAt": {
+          "$ref": "#/$defs/dateTime"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "APPROVED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 120,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+              },
+              "reviewedAt": {
+                "$ref": "#/$defs/dateTime"
+              }
+            },
+            "required": [
+              "reference",
+              "reviewedAt"
+            ]
+          },
+          "else": {
+            "properties": {
+              "reference": false,
+              "reviewedAt": false
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legal",
+        "accounting"
+      ],
+      "properties": {
+        "legal": {
+          "$ref": "#/$defs/reviewRecord"
+        },
+        "accounting": {
+          "$ref": "#/$defs/reviewRecord"
+        }
+      }
+    },
+    "documentType": {
+      "enum": [
+        "TERMINOS_SERVICIO",
+        "POLITICA_PRIVACIDAD",
+        "ACUERDO_TRATAMIENTO_DATOS",
+        "CONDICIONES_PRO",
+        "POLITICA_CANCELACIONES_REEMBOLSOS",
+        "POLITICA_CIERRE_CUENTA",
+        "AVISO_CLIENTES_TALLER",
+        "TERMINOS_USUARIO",
+        "AVISO_PRIVACIDAD_USUARIO",
+        "COMPROMISO_CONFIDENCIALIDAD",
+        "ATESTACION_DATOS_CLIENTE"
+      ]
+    },
+    "context": {
+      "enum": [
+        "REGISTRO",
+        "PRIMER_INGRESO_EMPLEADO",
+        "USO_CONTINUADO",
+        "CONTRATACION_PRO",
+        "ATESTACION_FOTOS",
+        "ATESTACION_CREDENCIALES",
+        "CIERRE_CUENTA",
+        "ARREPENTIMIENTO"
+      ]
+    },
+    "role": {
+      "enum": [
+        "ADMIN_TITULAR",
+        "USER"
+      ]
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "type",
+        "version",
+        "locale",
+        "source",
+        "sha256",
+        "effectiveAt",
+        "contexts",
+        "requiresReacceptance"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "type": {
+          "$ref": "#/$defs/documentType"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "locale": {
+          "$ref": "#/$defs/locale"
+        },
+        "source": {
+          "$ref": "#/$defs/sourcePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectiveAt": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "contexts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/context"
+          }
+        },
+        "requiresReacceptance": {
+          "type": "boolean"
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "version",
+        "context",
+        "roles",
+        "actType",
+        "statement",
+        "statementSha256",
+        "documents",
+        "required",
+        "requiresReacceptance"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/role"
+          }
+        },
+        "actType": {
+          "enum": [
+            "ACEPTACION",
+            "LECTURA",
+            "DECLARACION"
+          ]
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "pattern": "\\S"
+        },
+        "statementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "documents": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/key"
+          }
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "requiresReacceptance": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
