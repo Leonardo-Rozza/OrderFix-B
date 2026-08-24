@@ -156,6 +156,13 @@ no vacío. `PUBLICADA -> VIGENTE` se rechaza si `vigente_desde` es posterior a
 `transaction_timestamp()`. Los estados terminales no cambian ni pueden volver a ocupar slots, aunque
 otra publicación histórica vuelva a vincular la misma versión.
 
+En `BORRADOR -> PUBLICADA`, el trigger toma `SELECT ... FOR UPDATE` sobre la línea estable y exige
+que `lineage_ordinal` sea estrictamente mayor que el máximo ordinal que haya alcanzado alguna vez
+`PUBLICADA` en esa línea, según su historial de transiciones. Si se publicó `ord3`, un borrador
+omitido `ord2` queda abandonado y ya no puede publicarse después: el carry-forward nunca cambia
+retroactivamente sin cambiar la versión vigente. Las operaciones que publican varias líneas bloquean
+sus IDs en orden UUID determinístico.
+
 `legal_documento_vigentes` materializa slots:
 
 ```text
@@ -216,6 +223,8 @@ cuál requisito es vigente sin inferirlo por fecha o UUID.
 Cada cambio agrega una fila inmutable a `legal_requisito_transiciones`; comparte la máquina de
 estados, terminalidad y sello de publicación. Ese historial prueba si una versión alcanzó alguna vez
 `PUBLICADA`, condición usada por carry-forward. No se usa la fecha de importación como sustituto.
+La transición `BORRADOR -> PUBLICADA` aplica el mismo lock de línea, máximo histórico y orden
+determinístico definido para documentos.
 
 `legal_requisito_documentos` relaciona documentos exactos y ordenados. Un trigger verifica mismo
 locale y que el documento incluya el contexto del requisito. Debe existir al menos uno.
@@ -455,6 +464,8 @@ abierta; nunca se reabre.
   de commit usando dos conexiones reales;
 - transiciones ilegales, activación anterior a `vigente_desde`, terminales, intento de revivir e
   inmutabilidad;
+- publicación tardía de un ordinal inferior y carreras concurrentes de publicación sobre la misma
+  línea, tanto documental como de requisito;
 - ciclo interno de requisitos, eventos, terminalidad y publicación/promoción multiaudiencia;
 - slots solapados;
 - lote de reemplazo no vacío/sin autociclo, sellado, split/merge exacto y reemplazo parcial
