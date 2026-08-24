@@ -56,8 +56,11 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     opcional por taller; USER puede consultarlos, pero no modificarlos.
 18. **Resumen digital no fiscal** (§4.13): `GET /resumen-digital` reemplaza al recibo imprimible. El
     alias `/recibo` sigue temporalmente disponible con el mismo JSON, pero está deprecado.
+19. **Contrato legal v1 congelado** (§4.1.a): quedan definidos documentos/requisitos versionados,
+    evidencia propia, aceptación idempotente, `409`/`428` y caché. Todavía no está implementado ni
+    habilita enforcement.
 
-Los tipos TS de §7 ya reflejan todo esto.
+Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
 ---
 
@@ -195,6 +198,729 @@ Errores: `401` (email o contraseña incorrectos).
 
 > **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
 > de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
+
+### 4.1.a Legal versionado — contrato v1 congelado, implementación pendiente
+
+> **Estado al 2026-08-23:** esta sección congela el contrato objetivo para que backend y frontend
+> puedan implementarlo por separado. Las rutas todavía no existen en runtime y el registro histórico
+> de §4.1 continúa activo hasta completar el rollout compatible. No habilites la UI ni enforcement
+> basándote solamente en esta documentación.
+
+#### Endpoints y autorización
+
+| Método | Ruta | Sesión | Resultado |
+|---|---|---|---|
+| GET | `/api/public/documentos-legales?locale=es-AR&page=0&size=20` | Pública | Catálogo paginado; `contexto` es opcional |
+| GET | `/api/public/documentos-legales/{versionId}` | Pública | Una versión publicada exacta |
+| GET | `/api/public/requisitos-legales?contexto=REGISTRO&locale=es-AR` | Pública | Conjunto vigente para registro |
+| GET | `/api/requisitos-legales` | ADMIN/USER | Requisitos pendientes del actor actual |
+| GET | `/api/aceptaciones-legales?page=0&size=20` | ADMIN/USER | Evidencia propia; `contexto` es opcional |
+| POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
+
+`locale` es obligatorio en los dos GET públicos de colección y v1 sólo admite `es-AR`; el GET por
+UUID no recibe locale. `contexto` es obligatorio en requisitos públicos; inicialmente sólo se
+habilita `REGISTRO`. El catálogo admite omitir `contexto` para listar todas las versiones publicadas
+del locale. No existe fallback silencioso por `Accept-Language`.
+
+Los endpoints autenticados obtienen usuario, tenant y rol de la sesión validada. El navegador nunca
+envía `userId`, `tallerId`, rol ni audiencia. El valor de dominio/JWT continúa siendo `ADMIN`; como
+existe un único `ADMIN` por taller, el backend lo traduce a la audiencia legal `ADMIN_TITULAR` sin
+agregar un claim ni un rol wire nuevo. `USER` no puede aceptar en representación del taller.
+
+#### Enums y tipos TypeScript
+
+```ts
+export type LocaleLegal = 'es-AR';
+
+export type TipoActoLegal =
+  | 'ACEPTACION'
+  | 'LECTURA'
+  | 'DECLARACION';
+
+export type EstadoDocumentoLegal =
+  | 'VIGENTE'
+  | 'REEMPLAZADA'
+  | 'RETIRADA';
+
+export type ContextoLegal =
+  | 'REGISTRO'
+  | 'PRIMER_INGRESO_EMPLEADO'
+  | 'USO_CONTINUADO'
+  | 'CONTRATACION_PRO'
+  | 'ATESTACION_FOTOS'
+  | 'ATESTACION_CREDENCIALES'
+  | 'CIERRE_CUENTA'
+  | 'ARREPENTIMIENTO';
+
+export type TipoDocumentoLegal =
+  | 'TERMINOS_SERVICIO'
+  | 'POLITICA_PRIVACIDAD'
+  | 'ACUERDO_TRATAMIENTO_DATOS'
+  | 'CONDICIONES_PRO'
+  | 'POLITICA_CANCELACIONES_REEMBOLSOS'
+  | 'POLITICA_CIERRE_CUENTA'
+  | 'AVISO_CLIENTES_TALLER'
+  | 'TERMINOS_USUARIO'
+  | 'AVISO_PRIVACIDAD_USUARIO'
+  | 'COMPROMISO_CONFIDENCIALIDAD'
+  | 'ATESTACION_DATOS_CLIENTE';
+
+export interface DocumentoLegalVersion {
+  id: string; // UUID del contenido/versionado inmutable; estado aún puede transicionar
+  tipo: TipoDocumentoLegal;
+  version: string;
+  titulo: string;
+  contenidoMarkdown: string;
+  sha256: string; // 64 hex minúsculas, sin prefijo
+  vigenteDesde: string; // RFC 3339 UTC
+  estado: EstadoDocumentoLegal;
+  locale: LocaleLegal;
+}
+
+export interface DocumentoLegalResumen {
+  id: string;
+  tipo: TipoDocumentoLegal;
+  version: string;
+  titulo: string;
+  sha256: string;
+  vigenteDesde: string;
+  estado: EstadoDocumentoLegal;
+  locale: LocaleLegal;
+}
+
+export interface PageMeta {
+  size: number;
+  number: number;
+  totalElements: number;
+  totalPages: number;
+}
+
+export interface DocumentosLegalesResponse {
+  contexto: ContextoLegal | null;
+  locale: LocaleLegal;
+  documentSetRevision: string; // opaco; hoy sha256:<64-hex>
+  documentos: DocumentoLegalResumen[];
+  page: PageMeta;
+}
+
+export interface RequisitoLegalVersion {
+  id: string; // UUID de la versión exacta del requisito
+  contexto: ContextoLegal;
+  tipoActo: TipoActoLegal;
+  afirmacion: string;
+  afirmacionSha256: string;
+  documentos: DocumentoLegalVersion[];
+  requerido: boolean;
+}
+
+export interface RequisitosLegalesPublicosResponse {
+  contexto: ContextoLegal;
+  locale: LocaleLegal;
+  requiredSetRevision: string;
+  requisitos: RequisitoLegalVersion[];
+}
+
+export interface RequisitosLegalesPendientesResponse {
+  locale: LocaleLegal;
+  requiredSetRevision: string;
+  requisitos: RequisitoLegalVersion[];
+}
+
+export interface AceptacionLegalInput {
+  requisitoVersionId: string;
+  tipoActo: TipoActoLegal;
+  afirmacionSha256: string;
+  documentos: Array<{ documentoVersionId: string; sha256: string }>;
+  confirmado: true;
+}
+
+export interface AceptacionesLegalesRequest {
+  requiredSetRevision: string;
+  aceptacionesLegales: AceptacionLegalInput[];
+}
+
+export interface DocumentoAceptacionLegal {
+  documentoVersionId: string;
+  tipo: TipoDocumentoLegal;
+  version: string;
+  titulo: string;
+  sha256: string;
+}
+
+export interface AceptacionLegalResponse {
+  id: string;
+  requisitoVersionId: string;
+  contexto: ContextoLegal;
+  tipoActo: TipoActoLegal;
+  afirmacion: string;
+  afirmacionSha256: string;
+  documentos: DocumentoAceptacionLegal[];
+  aceptadoEn: string;
+}
+
+export interface AceptacionesLegalesPage {
+  content: AceptacionLegalResponse[];
+  page: PageMeta;
+}
+```
+
+Los IDs son UUID. Los arrays tienen orden contractual: requisitos conservan el ordinal del
+manifiesto; documentos del catálogo usan el mismo orden de `TipoDocumentoLegal` listado arriba y,
+dentro de cada tipo, `vigenteDesde` descendente y UUID ascendente. El request de aceptación se
+compara como conjunto, no por su orden accidental.
+
+El importador primero exige bytes UTF-8 válidos, Unicode NFC, saltos LF y ausencia de BOM; luego
+calcula el digest sobre esos bytes originales, sin normalizarlos ni reescribirlos. Para una
+afirmación, hashea los bytes UTF-8 de su string exacto, sujeto a las mismas invariantes.
+`documentSetRevision` y `requiredSetRevision` son opacos para el front: nunca los interpretes como
+fecha, contador ni partes separables.
+
+#### Catálogo público
+
+```http
+GET /api/public/documentos-legales?locale=es-AR&contexto=REGISTRO&page=0&size=20
+```
+
+Respuesta `200`:
+
+```json
+{
+  "contexto": "REGISTRO",
+  "locale": "es-AR",
+  "documentSetRevision": "sha256:4a8a8f09d37b73795649038408b5f33a7f8d5f0d5f6d39a83b2a8af2f104fc19",
+  "documentos": [
+    {
+      "id": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2026.08.1",
+      "titulo": "Términos y Condiciones de OrdenFix",
+      "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298",
+      "vigenteDesde": "2026-09-01T03:00:00Z",
+      "estado": "VIGENTE",
+      "locale": "es-AR"
+    }
+  ],
+  "page": {
+    "size": 20,
+    "number": 0,
+    "totalElements": 1,
+    "totalPages": 1
+  }
+}
+```
+
+El catálogo devuelve versiones que alguna vez fueron públicas: `VIGENTE`, `REEMPLAZADA` y
+`RETIRADA`. Nunca expone `BORRADOR`, una `PUBLICADA` aún no vigente, referencias de revisión ni rutas
+internas del manifiesto. Devuelve resúmenes sin Markdown; el contenido se obtiene construyendo el GET
+exacto con `id` sobre el mismo cliente cuya base termina en `/api`. No devuelve `href`, para evitar
+ambigüedad entre URLs relativas al origin y relativas a la API. `page` empieza en cero; `size` por
+defecto es 20 y admite 1 a 100. Sin `contexto`, el response usa `"contexto": null`.
+
+El filtro de contexto usa la lista de contextos congelada en cada versión documental publicada, no
+los requisitos que hoy la referencian. Por eso una versión histórica continúa apareciendo bajo el
+contexto que tuvo al publicarse. El `documentSetRevision` identifica el catálogo filtrado completo,
+no sólo la página solicitada.
+
+`BORRADOR -> PUBLICADA -> VIGENTE -> REEMPLAZADA | RETIRADA`; los dos estados finales son
+terminales. Contenido, título, tipo, versión, locale, fecha y digest no cambian después de publicar.
+El título se congela desde el primer H1 del Markdown; una publicación sin H1 válido se rechaza.
+
+El estado es global a la versión, no por contexto. Para un tipo+locale, dos versiones `VIGENTE` no
+pueden solapar contextos. Reemplazar una versión multicontexto debe cubrir todos sus contextos en la
+misma promoción —con una o varias sucesoras disjuntas—; el dry-run de `REEMPLAZADA` rechaza huecos y
+solapamientos. `RETIRADA` puede dejar un hueco deliberado en todos sus contextos mediante una
+operación explícita y auditada. Todo requisito afectado falla cerrado con `503` hasta contar con una
+sucesora; nunca sigue sirviendo el documento retirado como vigente.
+
+Un contexto/locale fuera del contrato responde `400`. Si son soportados pero nunca existió una
+publicación válida para ese filtro, se responde `503 CONTRATO_LEGAL_NO_DISPONIBLE`; no se devuelve un
+catálogo parcial como contrato utilizable. Una página posterior a la última dentro de un catálogo
+válido sí responde `200` con `documentos: []` y metadata de página.
+
+Los UUID son ilustrativos. Los digests de documento y afirmación de los ejemplos corresponden a los
+strings mostrados; las revisiones de conjunto sólo ilustran el formato opaco y no deben copiarse.
+
+#### Documento exacto
+
+```http
+GET /api/public/documentos-legales/77aa2a48-af19-4f80-92bb-d9f220c166d1
+```
+
+Devuelve `200 DocumentoLegalVersion` para una versión `VIGENTE`, `REEMPLAZADA` o `RETIRADA`. Un UUID
+malformado o desconocido, un borrador o una publicación futura responden el mismo `404
+DOCUMENTO_LEGAL_NO_ENCONTRADO`, sin revelar su existencia editorial.
+
+La URL es estable y recargable. Una aceptación histórica enlaza a este recurso por `id`.
+
+#### Requisitos públicos de registro
+
+```http
+GET /api/public/requisitos-legales?contexto=REGISTRO&locale=es-AR
+```
+
+Respuesta `200`:
+
+```json
+{
+  "contexto": "REGISTRO",
+  "locale": "es-AR",
+  "requiredSetRevision": "sha256:db8e1d073852d51b643bba92fd99590bb410578dd09ab7f0b1a1cf25bcf9e15d",
+  "requisitos": [
+    {
+      "id": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+      "contexto": "REGISTRO",
+      "tipoActo": "ACEPTACION",
+      "afirmacion": "Acepto los Términos y Condiciones de OrdenFix.",
+      "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+      "documentos": [
+        {
+          "id": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+          "tipo": "TERMINOS_SERVICIO",
+          "version": "2026.08.1",
+          "titulo": "Términos y Condiciones de OrdenFix",
+          "contenidoMarkdown": "# Términos y Condiciones de OrdenFix\n\n...",
+          "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298",
+          "vigenteDesde": "2026-09-01T03:00:00Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        }
+      ],
+      "requerido": true
+    }
+  ]
+}
+```
+
+Los requisitos aceptables sólo enlazan documentos `VIGENTE`. Debe existir al menos un requisito
+obligatorio completo para `REGISTRO`; de lo contrario el backend falla cerrado con `503`.
+
+#### Requisitos pendientes autenticados
+
+```http
+GET /api/requisitos-legales
+Authorization: Bearer <token>
+```
+
+Devuelve `200 RequisitosLegalesPendientesResponse`. El backend filtra por el actor, su rol actual y
+las evidencias ya registradas. Puede incluir más de un contexto. No envíes rol ni tenant para elegir
+el resultado.
+
+Incluye requisitos aplicables todavía no evidenciados, tanto obligatorios como opcionales. Sólo la
+ausencia de un requisito `requerido=true` puede disparar `428`; omitir uno opcional nunca bloquea la
+cuenta.
+
+El backend puede considerar satisfecho un cambio puramente editorial sin fabricar otra evidencia.
+Los `requiresReacceptance` del manifiesto no forman parte del wire: para heredar, debe existir una
+aceptación previa del mismo `requirement.key`, cada documento vigente debe conservar un
+`document.key` ya evidenciado y **todas** las versiones intermedias del requisito y de esos documentos
+deben tener `requiresReacceptance=false`. Los flags se combinan con OR a lo largo de la cadena: un
+solo `true`, un key nuevo o un documento agregado vuelve el requisito pendiente. Sin evidencia
+previa siempre queda pendiente. La herencia no inserta una aceptación ni cambia su fecha; el historial
+muestra exclusivamente el acto real. El importador impide reutilizar un key para otro tipo/locale,
+contexto, audiencia o tipo de acto.
+
+Si el actor satisfizo todo, la respuesta válida es:
+
+```json
+{
+  "locale": "es-AR",
+  "requiredSetRevision": "sha256:bbd8d51c7eb805a5a2b44bbe0a5877018ac0666986c3aa45256e2a387ad71bf0",
+  "requisitos": []
+}
+```
+
+La revisión es autoritativa, aunque el valor de ejemplo no debe recalcularse ni asumirse en el
+cliente.
+
+#### Registrar aceptación autenticada
+
+```http
+POST /api/aceptaciones-legales
+Authorization: Bearer <token>
+Idempotency-Key: 64f89458-294c-4df5-a88d-833a1f1abcde
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "requiredSetRevision": "sha256:db8e1d073852d51b643bba92fd99590bb410578dd09ab7f0b1a1cf25bcf9e15d",
+  "aceptacionesLegales": [
+    {
+      "requisitoVersionId": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+      "tipoActo": "ACEPTACION",
+      "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+      "documentos": [
+        {
+          "documentoVersionId": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+          "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298"
+        }
+      ],
+      "confirmado": true
+    }
+  ]
+}
+```
+
+Éxito: `204 No Content`, sin body. Un replay con la misma clave y el mismo fingerprint también
+devuelve `204` y no crea otra evidencia.
+
+La lista debe incluir todos los requisitos `requerido=true` del snapshot y puede incluir cualquier
+subconjunto de opcionales conocidos y confirmados. `REQUISITO_FALTANTE` sólo aplica a obligatorios.
+Para cada requisito enviado, sus documentos deben coincidir exactamente: no admite documentos
+omitidos, extra o duplicados. Tampoco admite requisitos desconocidos o duplicados. `tipoActo`,
+digests y `confirmado` son pruebas de qué presentó el front, no una fuente confiable: el backend
+persiste sus propios textos, tipos y digests canónicos con hora del servidor.
+
+Después del `204`, invalidá requisitos y aceptaciones y volvé a consultar. No mantengas una bandera
+local como autorización.
+
+#### Consultar aceptaciones propias
+
+```http
+GET /api/aceptaciones-legales?contexto=REGISTRO&page=0&size=20
+Authorization: Bearer <token>
+```
+
+`contexto` es opcional. `page` empieza en cero; `size` por defecto es 20 y admite 1 a 100. El orden
+es `aceptadoEn` descendente y luego UUID descendente.
+
+Respuesta `200`:
+
+```json
+{
+  "content": [
+    {
+      "id": "bd18f7c5-5fea-4470-bbec-bbcedf40f942",
+      "requisitoVersionId": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+      "contexto": "REGISTRO",
+      "tipoActo": "ACEPTACION",
+      "afirmacion": "Acepto los Términos y Condiciones de OrdenFix.",
+      "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+      "documentos": [
+        {
+          "documentoVersionId": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+          "tipo": "TERMINOS_SERVICIO",
+          "version": "2026.08.1",
+          "titulo": "Términos y Condiciones de OrdenFix",
+          "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298"
+        }
+      ],
+      "aceptadoEn": "2026-09-01T13:42:18Z"
+    }
+  ],
+  "page": {
+    "size": 20,
+    "number": 0,
+    "totalElements": 1,
+    "totalPages": 1
+  }
+}
+```
+
+Sólo devuelve evidencia del actor. No expone IP, User-Agent, claves idempotentes, fingerprints ni
+evidencia de empleados. Internamente, la evidencia sí conserva el snapshot canónico de userId,
+tallerId, rol/audiencia, requisito, revisión, documentos/digests y hora `Instant` UTC; captura IP sólo
+desde proxies confiables configurados y limita User-Agent a 512 caracteres. Esos metadatos se
+protegen/retienen según la política aprobada y se omiten deliberadamente de este endpoint. El
+documento completo se consulta por su URL pública exacta.
+
+#### Registro objetivo con evidencia atómica
+
+Cuando el rollout habilite enforcement, `POST /api/auth/register` requiere además:
+
+```http
+Idempotency-Key: 0a7c6d9b-bd14-4fc5-b828-0ea889dc3bb8
+```
+
+```json
+{
+  "nombreTaller": "CelExpress",
+  "telefonoTaller": "1133334444",
+  "nombreAdmin": "Juan",
+  "email": "juan@celexpress.com",
+  "password": "juan123",
+  "requiredSetRevision": "sha256:db8e1d073852d51b643bba92fd99590bb410578dd09ab7f0b1a1cf25bcf9e15d",
+  "aceptacionesLegales": [
+    {
+      "requisitoVersionId": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+      "tipoActo": "ACEPTACION",
+      "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+      "documentos": [
+        {
+          "documentoVersionId": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+          "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298"
+        }
+      ],
+      "confirmado": true
+    }
+  ]
+}
+```
+
+La respuesta exitosa continúa siendo `201` con el schema de §4.1. Taller, titular, suscripción,
+evidencias e idempotencia se confirman en una transacción. Un fallo no deja una cuenta parcial.
+
+Un replay exitoso no recrea el taller: vuelve a verificar la contraseña contra su hash y emite un
+JWT nuevo con la misma forma de respuesta `201`. `emailVerificado` refleja su valor actual. También
+aplica las precondiciones actuales de emisión de sesión: si cambió la contraseña o el usuario/taller
+ya no puede iniciar sesión, devuelve el error genérico vigente de login/estado de cuenta y nunca
+recrea ni revierte la operación original. El backend no guarda el body, contraseña o JWT en el
+registro de idempotencia.
+
+Durante el rollout aditivo, `enforcement=false` permite el request legacy únicamente cuando faltan
+simultáneamente `Idempotency-Key`, `requiredSetRevision` y `aceptacionesLegales`. Si aparece cualquiera
+de los tres, el bloque completo es obligatorio y el backend lo valida y persiste atómicamente aunque
+el enforcement siga apagado; nunca descarta evidencia enviada por el cliente nuevo. Un bloque parcial
+responde `400` y no crea la cuenta: si falta el header usa `IDEMPOTENCY_KEY_REQUERIDA`; si el header
+existe pero falta un campo legal usa `ACEPTACION_LEGAL_INVALIDA` con
+`PAYLOAD_LEGAL_INCOMPLETO`.
+
+Con `enforcement=true`, omitir los tres elementos devuelve `428 ACEPTACION_LEGAL_REQUERIDA` con el
+set público actual. Un bloque parcial continúa siendo `400`; uno completo siempre se valida. La
+obligatoriedad sólo se activa después de desplegar el frontend compatible y confirmar la publicación
+en staging.
+
+#### Idempotencia
+
+- Header exacto: `Idempotency-Key`; no uses `X-Idempotency-Key`.
+- Valor: UUID v4 canónico de 36 caracteres.
+- Scope autenticado: método + plantilla de ruta + usuario. En registro: método + plantilla de ruta y
+  clave aleatoria global.
+- El fingerprint es HMAC-SHA-256 con secreto servidor sobre método, plantilla, scope y DTO de negocio
+  normalizado/canonicalizado. Orden/whitespace de propiedades JSON no cambia el fingerprint;
+  `aceptacionesLegales` se ordena por `requisitoVersionId` y sus documentos por
+  `documentoVersionId`. En registro, la contraseña participa dentro de ese HMAC para detectar un
+  payload distinto, pero no se persiste ni hashea por separado en el registro idempotente.
+- Se genera una vez por intento lógico y se conserva ante timeout/reintento de red.
+- Modificar el formulario o aceptar un set nuevo crea otra clave.
+- Si ya hay una operación exitosa, igual clave + igual fingerprint reproduce el resultado semántico.
+- Si esa operación existente tiene otro payload, responde `409 IDEMPOTENCY_KEY_REUTILIZADA`.
+- Mientras la misma clave/fingerprint está en curso, el segundo request espera como máximo cinco
+  segundos. Si el primero termina, reproduce su resultado; si no, devuelve `409
+  IDEMPOTENCY_EN_PROGRESO` con `Retry-After: 1`.
+- La garantía por clave dura al menos 24 horas; actor + versión de requisito también tiene unicidad
+  permanente para evitar duplicados entre pestañas.
+- La reserva transitoria de una operación en curso no consume definitivamente la clave. Sólo el
+  commit exitoso guarda resultado/fingerprint y consume la clave.
+- Errores de validación, revisión vieja y fallos no confirmados no se guardan como éxitos. Si la
+  transacción sí hizo commit pero el cliente observó un corte o un `5xx` posterior, el resultado
+  idempotente quedó confirmado en la misma transacción y el retry devuelve éxito.
+
+La resolución de un replay exitoso ocurre antes de comparar la revisión legal actual. Así, una
+respuesta perdida no falla porque se publicó una versión nueva después de la transacción original.
+Dos requests con claves distintas que compiten por la misma evidencia tampoco crean duplicados: si
+la evidencia canónica ya quedó confirmada, ambos terminan en `204`; nunca se filtra un `409` genérico
+de integridad.
+
+#### Caché y ETag
+
+| Recurso | `Cache-Control` | `ETag` / condición |
+|---|---|---|
+| Catálogo público | `public, max-age=0, must-revalidate` | `W/"<documentSetRevision>:p=<page>:s=<size>"` |
+| Requisitos públicos | `public, max-age=0, must-revalidate` | `W/"<requiredSetRevision>"` |
+| Documento exacto `VIGENTE` | `public, max-age=0, must-revalidate` | `W/"doc:<id>:VIGENTE:<sha256>"` |
+| Documento `REEMPLAZADA`/`RETIRADA` | `public, max-age=31536000, immutable` | `W/"doc:<id>:<estado>:<sha256>"` |
+| Requisitos autenticados | `private, no-store` | sin depender de ETag |
+| Aceptaciones propias | `private, no-store` | sin depender de ETag |
+| POST y errores legales | `no-store` | no cachear |
+
+Los ETag son débiles porque validan el snapshot lógico canónico y no prometen identidad byte a byte
+entre Jackson, compresión y proxies. Un `If-None-Match` válido devuelve `304` sin body en los GET
+públicos revalidables. No envíes ese header manualmente desde Axios: delegalo al caché HTTP del
+navegador. La revisión también existe en el body donde el cliente necesita reenviarla, por lo que
+JavaScript no necesita leer el header CORS.
+
+`no-store` no borra la memoria de React Query: las queries autenticadas usan `staleTime: 0`,
+recolección inmediata o limpieza explícita, una key ligada a la sesión y purga antes de cambiar de
+usuario/tenant. No heredan un `staleTime` global de cinco minutos.
+
+Los tres GET públicos legales quedan bajo rate limit por IP configurable. El número exacto no forma
+parte del contrato v1; los headers `X-RateLimit-Limit` y `X-RateLimit-Remaining` son autoritativos y
+un rechazo devuelve el `429` uniforme de §5 con `Retry-After`. Las respuestas cacheadas por el
+navegador evitan requests innecesarios.
+
+Para que Axios pueda leerlos desde el origin del frontend, la implementación debe ampliar el
+`CorsConfig` actual: `Access-Control-Expose-Headers` conserva `Authorization` y agrega
+`Retry-After`, `X-RateLimit-Limit` y `X-RateLimit-Remaining`. Esto también cubre el `Retry-After` del
+`409 IDEMPOTENCY_EN_PROGRESO`. No se expone `ETag` para consumo manual; el navegador maneja la
+revalidación y las revisiones necesarias ya viajan en el body.
+
+La implementación de seguridad debe allowlistear por `HttpMethod.GET` las tres rutas legales exactas;
+no se permite un `permitAll("/api/public/**")` amplio. El bypass JWT y la selección de rate policy
+usan la misma clasificación cerrada.
+
+#### Errores legales exactos
+
+Se conserva el envelope de §5. `timestamp`, `status`, `error`, `message` y `path` siguen presentes;
+`code` y `details` son contractuales para estas decisiones. Todos los errores legales envían
+`Cache-Control: no-store`.
+
+| HTTP / `code` | `details` | Acción del frontend |
+|---|---|---|
+| `400 ACEPTACION_LEGAL_INVALIDA` | `{ "motivos": ["..."] }` | Conservar form, bloquear envío y recargar set si corresponde |
+| `400 CONTEXTO_LEGAL_NO_SOPORTADO` | `{ "contexto": string \| null, "contextosSoportados": ContextoLegal[] }` | No aplicar fallback silencioso |
+| `400 LOCALE_LEGAL_NO_SOPORTADO` | `{ "locale": string \| null, "localesSoportados": LocaleLegal[] }` | Mostrar indisponibilidad del idioma |
+| `400 IDEMPOTENCY_KEY_REQUERIDA` | `{ "header": "Idempotency-Key" }` | Corregir cliente; no reintentar sin clave |
+| `400 IDEMPOTENCY_KEY_INVALIDA` | `{ "header": "Idempotency-Key" }` | Generar UUID v4 nuevo |
+| `404 DOCUMENTO_LEGAL_NO_ENCONTRADO` | `{ "versionId": "uuid" }` | Mostrar versión no disponible |
+| `409 DOCUMENTOS_LEGALES_DESACTUALIZADOS` | `{ "submittedRevision": "...", "requisitosActuales": RequisitosLegalesPublicosResponse \| RequisitosLegalesPendientesResponse }` | Conservar campos no legales y pedir nueva revisión |
+| `409 IDEMPOTENCY_KEY_REUTILIZADA` | `{ "operacion": "REGISTRO" \| "ACEPTACION_LEGAL" }` | No reintentar; crear intento lógico nuevo |
+| `409 IDEMPOTENCY_EN_PROGRESO` | igual `operacion`; header `Retry-After: 1` | Reintentar misma clave/payload después de la espera |
+| `428 ACEPTACION_LEGAL_REQUERIDA` | `{ "requisitosActuales": RequisitosLegalesPublicosResponse \| RequisitosLegalesPendientesResponse }` | Montar gate; no hacer logout |
+| `503 CONTRATO_LEGAL_NO_DISPONIBLE` | `{ "contexto": ContextoLegal \| null, "locale": "es-AR" }` | Bloquear aceptación/registro y ofrecer reintento |
+
+Motivos estables de `ACEPTACION_LEGAL_INVALIDA`:
+
+```text
+REQUISITO_FALTANTE
+REQUISITO_DUPLICADO
+REQUISITO_NO_PERTENECE_AL_CONJUNTO
+DOCUMENTO_FALTANTE
+DOCUMENTO_DUPLICADO
+DOCUMENTO_NO_PERTENECE_AL_REQUISITO
+DIGEST_NO_COINCIDE
+ACTO_NO_COINCIDE
+CONFIRMACION_REQUERIDA
+PAYLOAD_LEGAL_INCOMPLETO
+```
+
+Las listas de valores soportados dependen del endpoint y conservan el orden de los enums de esta
+sección. En `/api/public/requisitos-legales`, `contextosSoportados` es exactamente `["REGISTRO"]`;
+el catálogo público y el filtro opcional del historial propio admiten todos los valores de
+`ContextoLegal`. Omitir `contexto` es válido sólo donde está documentado como opcional. Un query
+obligatorio ausente se representa con `null`; un valor desconocido conserva su string original en
+`details`. `localesSoportados` es `["es-AR"]` en v1 y un locale obligatorio ausente usa `null`.
+
+Si `requiredSetRevision` ya no coincide, el backend devuelve primero `409`, sin intentar convertir
+cada diferencia en un `400`.
+
+Prioridad de evaluación: sesión/actor cuando corresponda; formato de un `Idempotency-Key` presente;
+parseo JSON y DTO normalizado; clasificación legacy/parcial/completa del registro y header requerido;
+fingerprint/replay; disponibilidad del contrato; deduplicación de una evidencia ya confirmada;
+revisión del set; coincidencia semántica de requisitos/documentos. Si todos los requisitos enviados
+ya existen con la misma evidencia canónica, devuelve `204` antes de evaluar freshness y luego el
+frontend refetchea cualquier requisito nuevo. La excepción es registro con enforcement activo y los tres elementos legales
+ausentes, que devuelve `428` en lugar de un error de header. En rollout, las combinaciones parciales
+siguen las reglas de la sección de registro anterior.
+
+En `/api/auth/register`, `requisitosActuales` usa siempre
+`RequisitosLegalesPublicosResponse`. En endpoints autenticados usa siempre
+`RequisitosLegalesPendientesResponse`; no se decide por inspeccionar campos opcionales.
+
+Ejemplo de revisión desactualizada:
+
+```json
+{
+  "timestamp": "2026-09-02T18:10:00",
+  "status": 409,
+  "error": "Conflicto de estado",
+  "message": "Las condiciones cambiaron. Revisá la nueva versión.",
+  "path": "/api/auth/register",
+  "code": "DOCUMENTOS_LEGALES_DESACTUALIZADOS",
+  "details": {
+    "submittedRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "requisitosActuales": {
+      "contexto": "REGISTRO",
+      "locale": "es-AR",
+      "requiredSetRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "requisitos": [
+        {
+          "id": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+          "contexto": "REGISTRO",
+          "tipoActo": "ACEPTACION",
+          "afirmacion": "Acepto los Términos y Condiciones de OrdenFix.",
+          "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+          "documentos": [
+            {
+              "id": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+              "tipo": "TERMINOS_SERVICIO",
+              "version": "2026.08.1",
+              "titulo": "Términos y Condiciones de OrdenFix",
+              "contenidoMarkdown": "# Términos y Condiciones de OrdenFix\n\n...",
+              "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298",
+              "vigenteDesde": "2026-09-01T03:00:00Z",
+              "estado": "VIGENTE",
+              "locale": "es-AR"
+            }
+          ],
+          "requerido": true
+        }
+      ]
+    }
+  }
+}
+```
+
+Ejemplo de gate autenticado:
+
+```json
+{
+  "timestamp": "2026-09-02T18:10:00",
+  "status": 428,
+  "error": "Precondición requerida",
+  "message": "Tenés condiciones pendientes de revisión y aceptación.",
+  "path": "/api/reparaciones",
+  "code": "ACEPTACION_LEGAL_REQUERIDA",
+  "details": {
+    "requisitosActuales": {
+      "locale": "es-AR",
+      "requiredSetRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "requisitos": [
+        {
+          "id": "557a8ce8-c72e-4088-a6b5-e2b0f775eb98",
+          "contexto": "USO_CONTINUADO",
+          "tipoActo": "ACEPTACION",
+          "afirmacion": "Acepto los Términos y Condiciones de OrdenFix.",
+          "afirmacionSha256": "68b041f6843211cb6e8d9e4799b1bb158af90cbf60a2d42fc9d70047a3b8bc1c",
+          "documentos": [
+            {
+              "id": "77aa2a48-af19-4f80-92bb-d9f220c166d1",
+              "tipo": "TERMINOS_SERVICIO",
+              "version": "2026.08.1",
+              "titulo": "Términos y Condiciones de OrdenFix",
+              "contenidoMarkdown": "# Términos y Condiciones de OrdenFix\n\n...",
+              "sha256": "7a3fcccbd0e349cfb44129658cf7dd2d7c230eea560f8367cb6c25a7457b5298",
+              "vigenteDesde": "2026-09-01T03:00:00Z",
+              "estado": "VIGENTE",
+              "locale": "es-AR"
+            }
+          ],
+          "requerido": true
+        }
+      ]
+    }
+  }
+}
+```
+
+El backend nunca incluye contraseña, JWT, clave idempotente ni el request original en `details` o
+logs. Si falta o se corrompe el set vigente responde `503`, nunca éxito con contenido parcial.
+
+`428` no puede bloquear las rutas necesarias para resolverlo: documentos, requisitos, lectura y
+creación de aceptaciones propias, verificación/reenvío de email, estado de cuenta y logout cuando
+existan. Esas rutas no responden recursivamente el mismo `428`.
+
+Rechazar una nueva versión tampoco puede encerrar al usuario en la cuenta. El interceptor del gate
+debe exceptuar las combinaciones exactas de método y ruta destinadas a cancelar renovación o
+suscripción, pedir la baja personal o del servicio, consultar/iniciar/descargar una exportación,
+cerrar la cuenta y solicitar eliminación/supresión. Esto incluye, mientras sigan vigentes, `POST
+/api/pagos/suscripcion/cancelar` y `GET /api/export/excel`; cada reemplazo se incorpora de forma
+explícita, sin wildcards. La excepción sólo evita el `428`: no omite autenticación, rol, aislamiento
+por taller, reautenticación ni controles propios de cada operación.
+
+#### Orden de rollout
+
+1. Backend agrega recursos y persistencia con enforcement apagado.
+2. Staging importa una publicación aprobada y valida ETag/readiness.
+3. Frontend integra lectura, historial, `409`, `428` y limpieza de caché privada.
+4. El registro nuevo empieza a enviar evidencia.
+5. Sólo con telemetría compatible se activa enforcement.
+6. Después se programa reaceptación; nunca se autoacepta a cuentas legacy.
+
+Las decisiones y lo que queda fuera de esta fase están documentados en
+`docs/plans/2026-08-23-legal-api-contract-v1-design.md`.
 
 ---
 
@@ -989,13 +1715,16 @@ Por ejemplo, un conflicto de cobro agrega:
 | 404 | No encontrado (o recurso de otro taller) | "No existe" |
 | 409 | Conflicto: unicidad, transición ilegal, checkout MP o invariantes de cobro (`COBRO_SUPERA_SALDO`, `TOTAL_MENOR_QUE_COBRADO`, `COBRO_YA_ANULADO`) | Resolver por `code`, conservar el formulario y mostrar `message` |
 | 413 | QR por encima de 1 MiB (`ARCHIVO_DEMASIADO_GRAN`) | Conservar el QR vigente y pedir una imagen menor |
+| 428 | Falta una precondición resoluble, como aceptación legal | Resolver el gate indicado por `code`; no hacer logout ni reintentar en loop |
 | 429 | Demasiadas solicitudes en login, registro, recuperación, seguimiento público o webhook MP | Mostrar espera, respetar `Retry-After` y no reintentar en loop |
 | 500 | Error interno (mensaje genérico) | Toast genérico "Intentá más tarde" |
 | 502 | Falló MP o están pausados los nuevos checkouts | Toast con `message`; el POST de checkout se puede reintentar |
+| 503 | Servicio o contrato requerido temporalmente indisponible | Bloquear la acción dependiente, respetar `Retry-After` si existe y ofrecer reintento |
 
-Los endpoints limitados incluyen `X-RateLimit-Limit` y `X-RateLimit-Remaining`; al rechazar agregan
-`Retry-After` en segundos. El frontend no llama al webhook, pero debe respetar estos headers en los
-otros endpoints públicos.
+Los endpoints limitados —login, registro, recuperación/verificación, seguimiento, webhook y los GET
+legales públicos cuando se implementen— incluyen `X-RateLimit-Limit` y `X-RateLimit-Remaining`; al
+rechazar agregan `Retry-After` en segundos. El frontend no llama al webhook, pero debe respetar estos
+headers en los otros endpoints públicos.
 
 ---
 
@@ -1365,6 +2094,21 @@ Usá esta lista para marcar qué está integrado en el repo del frontend.
 - [ ] Sandbox valida approved, rejected, paused, canceled, refunded, charged_back y eventos duplicados.
 - [ ] Con MP activo, retorno y webhook usan URLs HTTPS públicas aunque el API local siga en HTTP;
       secretos de MP nunca existen en variables `VITE_*`.
+
+### Legal versionado (cuando el backend esté implementado)
+
+- [ ] El registro obtiene `REGISTRO/es-AR`, presenta todo el set y envía revisión, IDs, actos y
+      digests con un `Idempotency-Key` estable por intento lógico.
+- [ ] `409 DOCUMENTOS_LEGALES_DESACTUALIZADOS` conserva los campos no legales, reemplaza el set y
+      solicita revisar nuevamente sólo las aceptaciones afectadas.
+- [ ] `428 ACEPTACION_LEGAL_REQUERIDA` monta un gate resoluble y nunca provoca logout o retry global.
+- [ ] Catálogo y requisitos públicos delegan ETag/304 al navegador; el cliente no crea manualmente
+      un `If-None-Match` con Axios.
+- [ ] Requisitos y aceptaciones autenticados usan caché de memoria ligada a sesión con
+      `staleTime: 0` y se purgan antes de cambiar usuario o tenant.
+- [ ] El Centro de Confianza muestra `VIGENTE`, `REEMPLAZADA` y `RETIRADA`; cada aceptación enlaza la
+      versión UUID exacta y no usa borradores locales como fallback.
+- [ ] ADMIN continúa viajando como `ROLE_ADMIN`; `ADMIN_TITULAR` no se espera como claim del JWT.
 
 ### Aceptación mínima
 

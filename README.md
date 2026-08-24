@@ -11,6 +11,8 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > - **`docs/runbooks/cobros-consistencia.md`** — auditoría tenant-aware y saneamiento de cobros
 >   manuales históricos.
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
+> - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — decisiones y rollout del contrato
+>   legal v1 congelado; implementación todavía pendiente.
 
 ---
 
