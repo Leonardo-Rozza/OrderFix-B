@@ -1,7 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core;
 
 /**
- * Códigos estables del núcleo de lectura y canonicalización del manifiesto.
+ * Códigos estables del núcleo de validación legal del manifiesto.
  *
  * <p>Los mensajes son deliberadamente constantes: nunca incluyen bytes, valores del manifiesto,
  * rutas absolutas ni detalles de excepciones.</p>
@@ -60,7 +60,109 @@ public enum LegalManifestIssueCode {
             "El manifiesto validado no pudo mapearse al modelo legal v1."),
     MANIFEST_CANONICALIZATION_ERROR(
             LegalManifestStatus.ERROR,
-            "No se pudo completar la canonicalización del manifiesto.");
+            "No se pudo completar la canonicalización del manifiesto."),
+    MANIFEST_PATH_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "Se requiere la ruta local del manifiesto."),
+    MANIFEST_FILENAME_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El manifiesto debe llamarse publication-manifest.json."),
+    RELEASE_ROOT_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "La raíz local de la publicación no es válida."),
+    RELEASE_SYMLINK_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "La raíz de la publicación no puede ser un enlace simbólico."),
+    MANIFEST_NOT_REGULAR(
+            LegalManifestStatus.BLOCKED,
+            "La ruta del manifiesto no identifica un archivo regular."),
+    MANIFEST_FILE_CHANGED(
+            LegalManifestStatus.BLOCKED,
+            "El archivo del manifiesto cambió durante su lectura."),
+    MANIFEST_READ_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la lectura segura del archivo del manifiesto."),
+    PUBLICATION_ID_DIRECTORY_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El identificador de publicación no coincide con su directorio."),
+    DOCUMENT_SOURCE_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "La ruta declarada para el documento legal no es válida."),
+    DOCUMENT_SOURCE_DUPLICATE(
+            LegalManifestStatus.BLOCKED,
+            "Una fuente Markdown está declarada más de una vez."),
+    DOCUMENT_NOT_FOUND(
+            LegalManifestStatus.BLOCKED,
+            "No se encontró el documento legal declarado."),
+    DOCUMENT_NOT_REGULAR(
+            LegalManifestStatus.BLOCKED,
+            "La fuente declarada no identifica un archivo regular."),
+    DOCUMENT_SYMLINK_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "La fuente legal no puede atravesar enlaces simbólicos."),
+    DOCUMENT_PATH_ESCAPE(
+            LegalManifestStatus.BLOCKED,
+            "La fuente legal intenta salir de la raíz de publicación."),
+    DOCUMENT_FILE_CHANGED(
+            LegalManifestStatus.BLOCKED,
+            "El documento legal cambió durante su lectura."),
+    DOCUMENT_SIZE_LIMIT_EXCEEDED(
+            LegalManifestStatus.BLOCKED,
+            "Un documento legal supera el límite permitido de 1 MiB."),
+    DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED(
+            LegalManifestStatus.BLOCKED,
+            "Los documentos legales superan el límite total permitido de 16 MiB."),
+    DOCUMENT_READ_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la lectura segura de un documento legal."),
+    LEGAL_TEXT_UTF8_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal no contiene UTF-8 válido."),
+    LEGAL_TEXT_BOM_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal no puede contener BOM."),
+    LEGAL_TEXT_CR_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal debe usar saltos LF y no puede contener CR."),
+    LEGAL_TEXT_CONTROL_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal contiene un carácter de control no permitido."),
+    LEGAL_TEXT_NFC_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal debe estar normalizado en Unicode NFC."),
+    LEGAL_TEXT_SURROGATE_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal contiene un surrogate Unicode inválido."),
+    LEGAL_TEXT_UNICODE_NONCHARACTER_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El texto legal contiene un noncharacter Unicode no permitido."),
+    LEGAL_TEXT_DIGEST_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El SHA-256 del texto legal no coincide con el manifiesto."),
+    LEGAL_TEXT_VALIDATION_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la validación del texto legal."),
+    DOCUMENT_H1_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "El documento legal debe contener un encabezado H1 ATX."),
+    DOCUMENT_H1_PLAIN_TEXT_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "El encabezado H1 debe contener sólo texto plano."),
+    DOCUMENT_H1_TOO_LONG(
+            LegalManifestStatus.BLOCKED,
+            "El encabezado H1 supera el límite de 300 caracteres."),
+    DOCUMENT_HTML_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El documento legal no puede contener HTML crudo."),
+    DOCUMENT_ACTIVE_LINK_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El documento legal contiene un esquema de enlace activo no permitido."),
+    LEGAL_PLACEHOLDER_FOUND(
+            LegalManifestStatus.BLOCKED,
+            "El contenido legal conserva un placeholder editorial."),
+    LEGAL_EDITORIAL_MARKER_FOUND(
+            LegalManifestStatus.BLOCKED,
+            "El contenido legal conserva un marcador editorial no publicable.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;

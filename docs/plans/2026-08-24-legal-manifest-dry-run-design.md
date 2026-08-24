@@ -197,9 +197,11 @@ ruta relativa saneada.
 
 ## Validación de Markdown y afirmaciones
 
-Cada Markdown y cada `statement` debe ser UTF-8/NFC/LF, sin BOM. El digest se calcula sobre los bytes
-UTF-8 exactos ya validados, sin reescritura. Debe coincidir en tiempo constante con el SHA-256 del
-manifiesto.
+Cada Markdown y cada `statement` debe ser UTF-8/NFC/LF, sin BOM. También se rechazan noncharacters
+Unicode, C0 salvo TAB/LF, DEL y C1: `U+0000` no es admisible en `text` de PostgreSQL y el resto no
+es contenido legal visible seguro ni puede usarse para alterar el parseo u ocultar marcadores
+editoriales. El digest se calcula sobre los bytes UTF-8 exactos ya validados, sin reescritura. Debe
+coincidir en tiempo constante con el SHA-256 del manifiesto.
 
 El título se obtiene del primer encabezado ATX H1 `# Título`. Para v1:
 
@@ -227,6 +229,11 @@ También se rechazan los patrones genéricos ya coordinados con el guard fronten
 no-publicación o revisión pendiente. No se intenta clasificar lenguaje jurídico libre fuera de ese
 set contractual explícito.
 
+La detección combina la fuente con el texto visible del AST CommonMark: entidades, énfasis,
+soft-breaks y caracteres Unicode de formato no pueden fragmentar un marcador. La normalización se
+usa sólo para detectar y nunca reescribe el contenido acreditado. Los labels reales de links e
+imágenes quedan fuera del patrón genérico de corchetes, pero sus destinos siguen auditados.
+
 Todo el Markdown, no sólo el H1, rechaza HTML crudo y destinos de enlace con esquema activo
 `javascript:`, `vbscript:` o `data:` después de decodificar las entidades admitidas y remover
 controles ASCII. Los autolinks seguros `https:` y `mailto:` no se consideran HTML crudo.
@@ -237,6 +244,9 @@ El schema, sus enums, la matriz mínima de cobertura, placeholders, marcadores e
 de Markdown se mantienen coordinados entre repositorios. El backend agrega garantías que el parser
 frontend actual todavía no acredita: UTF-8/I-JSON estrictos, BOM, nombres JSON duplicados, trailing
 content, RFC 8785 y límites operativos.
+
+La copia exacta del schema y el guard equivalente del frontend se actualizan y verifican como puerta
+del Corte 4; este corte backend por sí solo no declara cerrada esa paridad entre repositorios.
 
 No se copian dos sobre-restricciones editoriales que no pertenecen al schema ni a V27:
 

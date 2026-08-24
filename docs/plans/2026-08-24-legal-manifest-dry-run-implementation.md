@@ -23,7 +23,8 @@ interno legal se usa la línea Jackson 2 ya presente en el proyecto:
 
 - `com.networknt:json-schema-validator:2.0.7`;
 - Jackson 2 BOM `2.22.1`;
-- `io.github.erdtman:java-json-canonicalization:1.1`.
+- `io.github.erdtman:java-json-canonicalization:1.1`;
+- `org.commonmark:commonmark:0.30.0`.
 
 NetworkNT 2.x soporta Draft 2020-12 sin subir Jackson 3 a `3.2.1`, lo que evita modificar el
 serializador principal de toda la API en este corte. La actualización secundaria de Jackson 2 sí
@@ -32,6 +33,11 @@ requiere regresión completa de Flyway, JWT, springdoc y filtros que ya lo usan.
 Se excluye `jackson-dataformat-yaml` del edge de NetworkNT y la API legal acepta únicamente
 `InputFormat.JSON`. Se conserva `com.ethlo.time:itu` para afirmar `date-time`. Joni y Graal no se
 agregan; son opcionales y los patrones v1 quedan cubiertos con el motor JDK.
+
+CommonMark se limita al parser AST core, sin renderer ni extensiones. La versión `0.30.0` congela
+límites de anidamiento/bloques y correcciones de complejidad para input hostil; no agrega
+dependencias transitivas de runtime. El AST es la fuente para distinguir HTML, enlaces, imágenes,
+código y referencias, evitando que expresiones regulares incompletas decidan semántica Markdown.
 
 El tag upstream `2.0.7` posee una trazabilidad GitHub inconsistente. La fuente reproducible para el
 binario es Maven Central y su POM Jackson 2. El lock efectivo y los checksums quedan registrados por
@@ -240,12 +246,16 @@ Crear pruebas:
    symlink de la cadena, aunque apunte dentro de la raíz.
 3. Reabrir/verificar atributos antes de leer para reducir sustituciones TOCTOU; un cambio bloquea.
 4. Aplicar límite individual y total antes/durante la lectura.
-5. Exigir UTF-8 fatal, sin BOM/CR, NFC y SHA-256 exacto sobre bytes originales.
-6. Extraer el primer H1 ATX; exigir texto plano no vacío y máximo 300 caracteres.
+5. Exigir UTF-8 fatal, sin BOM/CR, NFC, sin noncharacters ni controles C0/C1 no permitidos, y
+   SHA-256 exacto sobre bytes originales.
+6. Extraer el primer H1 ATX, incluido un `#` vacío que no puede saltarse en favor de otro posterior;
+   exigir texto plano no vacío y máximo 300 caracteres.
 7. Rechazar HTML crudo en todo el Markdown y links `javascript:`, `vbscript:` o `data:` aun con
    entidades/controles. Permitir autolinks seguros `https:` y `mailto:`.
 8. Compartir los siete placeholders, patrones genéricos y marcadores editoriales actuales del
-   frontend. Ignorar correctamente links Markdown y checkboxes al detectar corchetes pendientes.
+   frontend. Inspeccionar tanto la fuente como el texto visible derivado del AST para cerrar markup,
+   entidades, caracteres de formato invisibles y soft-breaks; ignorar correctamente labels de links,
+   imágenes y checkboxes al detectar corchetes genéricos sin ocultar sus destinos.
 9. Sanear todas las locations a rutas relativas que cumplan un patrón de salida seguro.
 
 ### Pruebas y puerta
@@ -297,7 +307,10 @@ monolítico.
 
 7. Derivar scopes y miembros preservando el ordinal global del manifiesto. El plan es inmutable y
    compartido por `validate`, `dry-run` y el futuro importador.
-8. Crear una fixture golden estática de 11 documentos, 6 requisitos y 8 scopes; ningún test positivo
+8. Encapsular el plan en un valor acreditado con constructor no público. El dry-run JDBC aceptará
+   sólo ese tipo emitido por `LegalManifestValidator`; no records/DTOs fabricables por callers.
+   Revalidar defensivamente los límites antes de toda preasignación aunque el schema ya los cubra.
+9. Crear una fixture golden estática de 11 documentos, 6 requisitos y 8 scopes; ningún test positivo
    puede depender del ejemplo editorial incompleto.
 
 ### Pruebas y puerta
