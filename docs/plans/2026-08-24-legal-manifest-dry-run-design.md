@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-24
 
-Estado: diseño aprobado; implementación en curso (Cortes 1 a 4 y mirror frontend cerrados; Cortes
-5 a 7 pendientes)
+Estado: diseño aprobado; implementación en curso (Cortes 1 a 5 y mirror frontend cerrados; Cortes
+6 a 7 pendientes)
 
 Fuentes normativas:
 
@@ -121,7 +121,7 @@ existentes ni constraints diferibles.
 
 Ejecuta primero el mismo núcleo puro y, si no existen blockers estáticos:
 
-1. comprueba que el schema objetivo posee V27 y que Hibernate/JDBC ven el modelo esperado;
+1. comprueba por catálogo PostgreSQL/JDBC que el schema objetivo posee V27 y el modelo esperado;
 2. contrasta keys y versiones con las identidades persistidas;
 3. calcula ordinales tentativos sin interpretar la versión humana;
 4. construye el grafo provisional de publicación, documentos, requisitos, membresías y snapshots;
@@ -132,6 +132,14 @@ Ejecuta primero el mismo núcleo puro y, si no existen blockers estáticos:
 
 La transacción usa `READ COMMITTED`, porque V27 rechaza niveles con snapshots estables en los
 protocolos que esperan locks y luego releen estado. Ningún camino del comando puede hacer commit.
+
+El protocolo acreditado primero descubre las versiones existentes, toma sus locks
+`FOR KEY SHARE NOWAIT` en orden estable y recién después bloquea las líneas por key. Luego relee y
+rechaza cualquier versión aparecida entre ambas lecturas como concurrencia operativa. Las
+publicaciones históricas introductorias se bloquean selladas antes de comparar sus hijos. Las
+identidades nuevas se insertan por key, aunque los memberships conservan el ordinal explícito del
+manifiesto; así dos releases equivalentes con arrays inversos no forman ciclos sobre los índices
+únicos.
 
 ### Contexto operativo aislado
 
@@ -145,7 +153,10 @@ escanea ni ejecuta:
 - Flyway automático.
 
 El comando falla si V27 no está aplicada; nunca migra una base como efecto colateral. El contexto
-normal de la aplicación permanece sin cambios cuando no se invoca una operación legal.
+normal de la aplicación permanece sin cambios cuando no se invoca una operación legal. La
+configuración JDBC aislada sólo se habilita mediante la propiedad interna
+`ordenfix.legal.dry-run-context.enabled=true`, que el futuro CLI controlará dentro de su propio
+proceso; no es una opción de runtime de la API normal.
 
 ## Entrada y ownership del contrato
 
@@ -321,6 +332,13 @@ Como los UUID definitivos no se persisten en este corte, el reporte no promete I
 `requiredSetRevision`/`documentSetRevision` finales. Sí informa los conteos, scopes y operaciones
 tentativas necesarios para revisar el release.
 
+PostgreSQL almacena `timestamptz` con precisión de microsegundos. El dry-run rechaza antes de
+escribir cualquier `effectiveAt` o timestamp de revisión con fracción más precisa, para no aceptar
+un valor que la base redondearía silenciosamente. La revisión provisional de scope tampoco es un
+contrato público: usa SHA-256 sobre el domain tag UTF-8
+`ordenfix:legal-dry-run-scope:v1\n`, el JSON canónico y, separados por NUL, locale, contexto y
+audiencia. El importador real podrá reemplazarla mediante una decisión versionada.
+
 ## Modelo de reporte
 
 La salida canónica es machine-readable y determinista. Contiene:
@@ -372,6 +390,9 @@ orientada a teléfono/email y sería incorrecta para el dominio legal.
 El orquestador del dry-run abre una transacción nueva, fuerza constraints y siempre la marca
 rollback-only en `finally`. Si la conexión se corta, PostgreSQL revierte la transacción. Las pruebas
 comprueban ausencia de filas parciales tanto después de `PASS` como de cada clase de fallo tardío.
+La clasificación estable distingue conflicto persistido y constraint (`BLOCKED`) de aislamiento,
+lock, timeout SQL, conexión, concurrencia, schema incompatible y fallo operativo genérico
+(`ERROR`), sin inspeccionar ni publicar mensajes de PostgreSQL.
 
 ## Estrategia de pruebas
 
@@ -404,6 +425,13 @@ comprueban ausencia de filas parciales tanto después de `PASS` como de cada cla
 - error tardío y desconexión sin estado parcial;
 - aislamiento `READ COMMITTED` y timeouts acotados;
 - contexto CLI sin Flyway, users/talleres semilla, runners ni schedulers.
+
+El Corte 5 quedó acreditado sobre PostgreSQL 16 con 41 pruebas enfocadas: 20 de traducción de
+fallos, 14 de contraste/rollback y 7 de concurrencia/fallos tardíos. Incluye constraint diferible,
+V26, dependencia abierta, identidad y metadata incompatibles, precisión temporal, transición
+versión→línea, órdenes inversos, timeouts, desconexión real y recuperación del pool. La regresión
+unitaria completa posterior ejecutó 517 pruebas sin fallos; `verify` completo permanece como puerta
+final del Corte 7 para volver a ejecutarse junto con la CLI terminada.
 
 ### Regresión
 

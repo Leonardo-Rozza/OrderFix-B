@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-24
 
-Estado: en ejecución; Cortes 1 a 4 y mirror frontend cerrados; Cortes 5 a 7 pendientes
+Estado: en ejecución; Cortes 1 a 5 y mirror frontend cerrados; Cortes 6 a 7 pendientes
 
 Diseño aprobado:
 
@@ -386,14 +386,20 @@ Usar configuración explícita, sin `@SpringBootApplication` ni `@ComponentScan`
 
 ```java
 @Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(
+    name = "ordenfix.legal.dry-run-context.enabled",
+    havingValue = "true")
 @ImportAutoConfiguration({DataSourceAutoConfiguration.class, JdbcTemplateAutoConfiguration.class})
-@Import({LegalV27SchemaVerifier.class, LegalDryRunPersistence.class,
-         LegalManifestDryRunService.class})
-final class LegalDryRunDatabaseConfiguration { }
+public class LegalDryRunDatabaseConfiguration { /* beans explícitos */ }
 ```
 
 Declarar `JdbcTransactionManager` y `TransactionTemplate`. No importar Flyway, Hibernate, MVC,
 Security, Mail, Actuator ni scheduling. `validate` nunca construye este contexto.
+
+La condición explícita es necesaria porque el package legal vive debajo del package raíz de la
+aplicación: sin ella, el component scan normal detectaría la configuración y el
+`JdbcTransactionManager` competiría con el transaction manager JPA. El futuro CLI activa la
+propiedad internamente; la API normal no la configura.
 
 ### Transacción
 
@@ -415,18 +421,27 @@ Leer una vez `transaction_timestamp()` y usarlo para todos los timestamps provis
 
 1. Bloquear un `publication_external_id` ya existente; la idempotencia real queda en 2.3B.
 2. Buscar líneas documentales y de requisitos por `clave` global, no por key+locale.
-3. Para línea existente, comparar identidad completa y exigir publicación introductoria sellada.
-4. Para key+version existente, comparar exactamente metadata, bytes, contextos/audiencias y
+3. Descubrir versiones existentes y tomar `FOR KEY SHARE NOWAIT` en orden UUID+tipo antes de
+   bloquear líneas; después bloquear líneas por key, releer y clasificar cualquier aparición
+   intermedia como `DB_CONCURRENCY`.
+4. Para línea existente, comparar identidad completa y exigir publicación introductoria sellada.
+5. Para key+version existente, comparar exactamente metadata, bytes, contextos/audiencias y
    relaciones ordenadas. Reutilizar sólo coincidencia exacta.
-5. Para versión nueva usar `max(lineage_ordinal)+1`; nunca interpretar el string de versión.
-6. Insertar publicación `ABIERTO`, líneas/versiones/hijos nuevos y memberships con ordinales
-   contiguos globales.
-7. Crear snapshots para cada `(locale, contexto, audiencia)`, con todos los requisitos aplicables y
+6. Para versión nueva usar `max(lineage_ordinal)::bigint+1`, validar rango y nunca interpretar el
+   string de versión.
+7. Bloquear `FOR SHARE`, en orden UUID, todas las publicaciones introductorias históricas y exigir
+   `SELLADO` antes de comparar contextos, audiencias o relaciones hijas.
+8. Insertar publicación `ABIERTO`, líneas/versiones/hijos nuevos por key estable y memberships con
+   los ordinales globales explícitos del manifiesto. El orden físico anti-deadlock no renumera nada.
+9. Crear snapshots para cada `(locale, contexto, audiencia)`, con todos los requisitos aplicables y
    ordinales globales que pueden contener huecos.
-8. Calcular revisión provisional interna `sha256:<digest(manifest+scope)>`; no exponerla ni prometer
-   que será la revisión final.
-9. Sellar con `transaction_timestamp()` mediante SQL y exigir una fila actualizada.
-10. Ejecutar `SET CONSTRAINTS ALL IMMEDIATE`, construir conteos y revertir.
+10. Calcular la revisión provisional como SHA-256 de
+    `ordenfix:legal-dry-run-scope:v1\n || canonicalJson || NUL || locale || NUL || contexto || NUL
+    || audiencia`; no exponerla ni prometer que será la revisión final.
+11. Rechazar timestamps con más de seis dígitos fraccionarios antes de entregarlos a
+    `timestamptz`, evitando redondeo silencioso.
+12. Sellar con `transaction_timestamp()` mediante SQL y exigir una fila actualizada.
+13. Ejecutar `SET CONSTRAINTS ALL IMMEDIATE`, construir conteos y revertir.
 
 Tablas provisionales exactas:
 
@@ -467,6 +482,45 @@ Cubrir PASS y cero filas; fallo diferido y cero filas; reutilización exacta; co
 identidad, bytes, fecha, flags, contexts, audiences y docs; publicación externa abierta; V26 sin
 migración; aislamiento/timeouts; lock retenido; desconexión; secuencias que pueden avanzar; tablas
 no legales sin cambios.
+
+### Implementación acreditada
+
+El Corte 5 quedó implementado sin entities ni repositories JPA y sin ampliar el contexto normal:
+
+- el servicio acepta exclusivamente `ValidatedRelease`, abre `REQUIRES_NEW/READ_COMMITTED`, aplica
+  los tres timeouts y marca rollback-only desde `finally`;
+- el verificador usa catálogo/JDBC, exige una V27 exitosa, las 12 tablas ordinarias y la firma
+  exacta `legal_validar_publicacion_sellada(uuid) -> void`, sin bean Flyway;
+- nueve códigos DB separan blockers persistidos/constraints de errores operativos y el mapper
+  recorre causas, suppressed, `nextException` y excepciones transaccionales sin leer mensajes;
+- el protocolo `probe → KEY SHARE NOWAIT de versiones → líneas por key → relectura` evita el ciclo
+  con transiciones V27; la inserción por key evita ciclos de índices únicos entre manifests
+  equivalentes con arrays inversos;
+- publicaciones históricas se bloquean selladas antes de releer hijos, cerrando el TOCTOU entre
+  validación de metadata y cierre de la publicación introductoria;
+- la simulación toca sólo las 12 tablas declaradas, fuerza constraints diferibles y devuelve
+  conteos sin UUID; filas legales y no legales quedan idénticas al baseline tras `PASS` o fallo.
+
+Verificación ejecutada con Java 21 y PostgreSQL 16/Testcontainers:
+
+```text
+LegalDatabaseFailureMapperTest       20 PASS
+LegalManifestDryRunIT                14 PASS
+LegalManifestDryRunConcurrencyIT      7 PASS
+Batería enfocada                     41 PASS
+./mvnw test                         517 PASS
+```
+
+La concurrencia cubre lock de transición versión→línea, locks retenidos, orden inverso de
+identidades nuevas, aislamiento incorrecto y deadlines. La desconexión usa una sesión real
+terminada por PostgreSQL, demuestra `DB_CONNECTION`, cero estado parcial y recuperación posterior
+del pool. `./mvnw verify` completo se conserva como puerta final del Corte 7, después de incorporar
+el CLI.
+
+Riesgo no bloqueante registrado: en los máximos contractuales la implementación deliberadamente
+simple realiza numerosos round-trips JDBC individuales y podría acercarse al timeout de 45 s en una
+base remota con alta latencia. El Corte 6 no cambia este protocolo; antes de reutilizarlo para la
+importación real 2.3B se medirá y, si hace falta, se agruparán inserts sin relajar locks ni reglas.
 
 Commit: `feat(legal): simula grafo V27 con rollback obligatorio`.
 
