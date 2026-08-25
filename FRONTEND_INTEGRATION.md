@@ -56,9 +56,10 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     opcional por taller; USER puede consultarlos, pero no modificarlos.
 18. **Resumen digital no fiscal** (§4.13): `GET /resumen-digital` reemplaza al recibo imprimible. El
     alias `/recibo` sigue temporalmente disponible con el mismo JSON, pero está deprecado.
-19. **Contrato legal v1 congelado** (§4.1.a): quedan definidos documentos/requisitos versionados,
-    evidencia propia, aceptación idempotente, `409`/`428` y caché. Todavía no está implementado ni
-    habilita enforcement.
+19. **Contrato legal v1 y preimportación segura** (§4.1.a): quedan definidos
+    documentos/requisitos versionados, evidencia propia, aceptación idempotente, `409`/`428` y
+    caché. La persistencia V27 y la CLI interna `validate`/`dry-run` están listas; las APIs, la
+    importación confirmada y el enforcement todavía no están habilitados.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
@@ -199,12 +200,13 @@ Errores: `401` (email o contraseña incorrectos).
 > **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
 > de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
 
-### 4.1.a Legal versionado — contrato v1 congelado, implementación pendiente
+### 4.1.a Legal versionado — contrato v1 congelado, preimportación interna disponible
 
-> **Estado al 2026-08-23:** esta sección congela el contrato objetivo para que backend y frontend
-> puedan implementarlo por separado. Las rutas todavía no existen en runtime y el registro histórico
-> de §4.1 continúa activo hasta completar el rollout compatible. No habilites la UI ni enforcement
-> basándote solamente en esta documentación.
+> **Estado al 2026-08-25:** la Fase 2.3A cerró el schema, la persistencia append-only V27 y una CLI
+> interna de validación/dry-run rollback-only. Las rutas de esta sección todavía no existen en
+> runtime y el registro histórico de §4.1 continúa activo hasta completar el rollout compatible. La
+> herramienta no importa, publica ni habilita enforcement: no actives la UI basándote solamente en
+> esta documentación.
 
 #### Endpoints y autorización
 
@@ -909,6 +911,102 @@ cerrar la cuenta y solicitar eliminación/supresión. Esto incluye, mientras sig
 /api/pagos/suscripcion/cancelar` y `GET /api/export/excel`; cada reemplazo se incorpora de forma
 explícita, sin wildcards. La excepción sólo evita el `428`: no omite autenticación, rol, aislamiento
 por taller, reautenticación ni controles propios de cada operación.
+
+#### CLI interna de preimportación (Fase 2.3A)
+
+Esta herramienta es operativa del backend; el frontend no la invoca ni consume su salida. El build
+genera un ejecutable separado del API:
+
+```text
+target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar
+```
+
+Uso:
+
+```bash
+java -jar target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar \
+  validate --manifest=/ruta/release/publication-manifest.json
+
+SPRING_DATASOURCE_URL=jdbc:postgresql://host:5432/database \
+SPRING_DATASOURCE_USERNAME=usuario \
+SPRING_DATASOURCE_PASSWORD=secreto \
+java -jar target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar \
+  dry-run --manifest=/ruta/release/publication-manifest.json
+```
+
+El parser acepta exactamente un comando (`validate` o `dry-run`) y una única asignación
+`--manifest=<path>`. No admite passwords ni propiedades Spring por argumento. `validate` es
+completamente offline. `dry-run` exige `SPRING_DATASOURCE_URL`; por allowlist puede recibir también
+`SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` y
+`SPRING_DATASOURCE_DRIVER_CLASS_NAME`. La base debe estar migrada previamente y ser compatible con
+V27: la CLI nunca ejecuta Flyway.
+
+El launcher debe eliminar o controlar `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS`.
+La JVM procesa esas variables antes de entrar a `main`, por lo que quedan fuera de la garantía de
+redacción propia del comando.
+
+Mientras stdout permanezca operativo, contiene un único JSON compacto UTF-8, seguido por un único
+LF. El orden estable de primer nivel es:
+
+```text
+reportVersion, command, status, persisted, publication, counts, dryRun, issues,
+omittedIssueCount
+```
+
+- `publication`: `publicationId`, `schemaVersion`, `manifestSha256`;
+- `counts`: `documents`, `requirements`, `scopes`;
+- `dryRun`: `newDocumentLines`, `newDocumentVersions`, `reusedDocumentVersions`,
+  `newRequirementLines`, `newRequirementVersions`, `reusedRequirementVersions`; es `null` en
+  cualquier reporte salvo un `dry-run` con estado `PASS`;
+- cada issue: `severity`, `code`, `location`, `message`.
+
+`persisted` es siempre `false`. Los estados y exit codes son `PASS`/`0`, `BLOCKED`/`2` y
+`ERROR`/`3`. Se exponen como máximo 200 issues; el resto se cuenta en `omittedIssueCount`. Fuera de
+la metadata segura enumerada (`publication`, `counts` y, cuando corresponde, `dryRun`), el reporte no
+incluye argumentos, campos o contenido sensible, ruta absoluta, PII, SQL, stack traces, constraints
+desconocidas ni credenciales.
+
+Límites bloqueantes v1:
+
+| Recurso | Máximo |
+|---|---:|
+| manifiesto raw | 1 MiB (`1_048_576`) |
+| profundidad JSON | 32 |
+| tokens JSON | 100.000 |
+| string JSON | 1 MiB |
+| nombre de campo JSON | 256 |
+| número JSON | 128 caracteres |
+| documentos | 128 |
+| requisitos | 256 |
+| documentos por requisito | 16 |
+| Markdown individual | 1 MiB |
+| Markdown total | 16 MiB |
+| issues expuestos | 200 |
+
+El schema v1 pesa `10547` bytes y su SHA-256 es
+`f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b`; la copia frontend y la
+embebida en backend deben permanecer byte-identical. La fixture golden acredita 11 documentos, 6
+requisitos y 8 scopes.
+
+Matriz contractual mínima:
+
+| Scope obligatorio | Tipos requeridos agregados |
+|---|---|
+| `REGISTRO / ADMIN_TITULAR` | términos, privacidad, DPA |
+| `PRIMER_INGRESO_EMPLEADO / USER` | términos usuario, privacidad usuario, confidencialidad |
+| `CONTRATACION_PRO / ADMIN_TITULAR` | términos, condiciones PRO, cancelaciones/reembolsos |
+| `ATESTACION_FOTOS / ADMIN_TITULAR,USER` | aviso clientes, atestación |
+| `ATESTACION_CREDENCIALES / ADMIN_TITULAR,USER` | aviso clientes, atestación |
+| `CIERRE_CUENTA / ADMIN_TITULAR` | cierre de cuenta |
+
+El dry-run construye el grafo provisional dentro de PostgreSQL y fuerza rollback. Después de
+`PASS`, blockers y errores tardíos, el delta confirmado en las 12 tablas legales es cero. Esto no
+promete ausencia de efectos físicos: puede generar WAL, tomar locks y avanzar secuencias no
+transaccionales. Para exigir cero efectos físicos se usa una base descartable; para una validación
+sin interacción con infraestructura se usa `validate`.
+
+El cierre reproducible, la matriz de pruebas y los alcances pendientes están en
+`docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`.
 
 #### Orden de rollout
 
@@ -1989,6 +2087,9 @@ window.location.href = data.initPoint;
 - **Exportación a Excel** (§4.14): el ADMIN descarga todos los datos del taller en un `.xlsx`.
 - **Gating por plan**: inventario, cobros manuales/datos de cobro y multi-empleado son PRO
   (402 + mapa `funciones` en §4.2). Perfil y dashboard son FREE.
+- **Preimportación legal interna (Fase 2.3A)**: schema v1, persistencia V27 y CLI aislada
+  `validate`/`dry-run` rollback-only. Todavía no existen las APIs legales, la importación sellada,
+  la promoción/readiness ni el enforcement descritos en §4.1.a.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
@@ -2095,7 +2196,7 @@ Usá esta lista para marcar qué está integrado en el repo del frontend.
 - [ ] Con MP activo, retorno y webhook usan URLs HTTPS públicas aunque el API local siga en HTTP;
       secretos de MP nunca existen en variables `VITE_*`.
 
-### Legal versionado (cuando el backend esté implementado)
+### Legal versionado (cuando las APIs del backend estén implementadas)
 
 - [ ] El registro obtiene `REGISTRO/es-AR`, presenta todo el set y envía revisión, IDs, actos y
       digests con un `Idempotency-Key` estable por intento lógico.

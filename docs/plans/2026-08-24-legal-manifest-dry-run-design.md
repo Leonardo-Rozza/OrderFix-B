@@ -2,8 +2,11 @@
 
 Fecha: 2026-08-24
 
-Estado: diseño aprobado; implementación en curso (Cortes 1 a 6 y mirror frontend cerrados; Corte 7
-pendiente)
+Estado: implementación cerrada y verificada (Cortes 1 a 7)
+
+Cierre y evidencia reproducible:
+
+- `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`.
 
 Fuentes normativas:
 
@@ -451,8 +454,15 @@ inspección acredita ambos `Start-Class` y que los jars excluyen `application-se
 cuatro procesos acreditan códigos `0/2/3/0`, salida JSON redactada y rollback V27, y el quinto
 delimita la salida pre-`main` de
 `JAVA_TOOL_OPTIONS`. Una secuencia identity que avanza fuera del rollback demuestra que no es un
-PASS simulado sin interacción JDBC. La regresión backend completa ejecutó 562 unitarias y 56 IT sin
-fallos; el Corte 7 conserva la regresión cross-repo y el cierre documental final.
+PASS simulado sin interacción JDBC.
+
+El Corte 7 cerró la paridad cross-repo sin cambiar el contrato: los schemas son byte-identical
+(`10547` bytes y SHA-256
+`f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b`), la fixture golden produjo
+el mismo plan estático (11 documentos, 6 requisitos y 8 scopes), las 64 pruebas backend enfocadas y
+las 42 del guard frontend pasaron, y el build frontend terminó limpio. La regresión backend final
+ejecutó 562 unitarias y 56 IT sin fallos. El cierre documental frontend quedó en `19b4953` y la
+evidencia completa se conserva en el documento de cierre.
 
 ### Regresión
 
@@ -490,6 +500,9 @@ La fase 2.3A sólo se considera cerrada si:
 - `./mvnw verify` y `git diff --check` pasan;
 - los commits son atómicos y locales;
 - `BACKEND-HANDOFF 1` sigue documentado como no disponible.
+
+Todos estos puntos quedaron acreditados al cerrar el Corte 7. La fase reduce el riesgo de una
+importación futura, pero no constituye readiness de publicación ni habilitación pública.
 
 ## Siguientes cortes
 

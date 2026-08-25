@@ -2,11 +2,12 @@
 
 Fecha: 2026-08-24
 
-Estado: en ejecución; Cortes 1 a 6 y mirror frontend cerrados; Corte 7 pendiente
+Estado: implementación cerrada y verificada; Cortes 1 a 7 completos
 
 Diseño aprobado:
 
 - `docs/plans/2026-08-24-legal-manifest-dry-run-design.md`;
+- `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`;
 - corrección de paridad editorial `d7d7b24`;
 - persistencia append-only V27 y mappings de Fase 2.2.
 
@@ -99,7 +100,8 @@ Estados:
 
 Exit codes: `0`, `2` y `3`, respectivamente.
 
-El JSON de stdout es compacto, UTF-8, determinista y tiene esta forma estable:
+Mientras stdout permanezca operativo, el JSON es compacto, UTF-8, determinista y tiene esta forma
+estable:
 
 ```json
 {
@@ -598,8 +600,9 @@ launcher confiable:
 - Config Data queda confinado a `optional:classpath:/ordenfix-legal-cli/`; valores hostiles de
   `SPRING_MAIN_SOURCES`, `SPRING_CONFIG_IMPORT`, locations adicionales, web o logging no pueden
   sumar la aplicación normal ni cargar configuración externa;
-- stdout contiene un único objeto JSON compacto, UTF-8 y determinista, seguido por un único LF.
-  El orden congelado es `reportVersion`, `command`, `status`, `persisted`, `publication`, `counts`,
+- mientras stdout permanezca operativo, contiene un único objeto JSON compacto, UTF-8 y
+  determinista, seguido por un único LF. El orden congelado es `reportVersion`, `command`, `status`,
+  `persisted`, `publication`, `counts`,
   `dryRun`, `issues`, `omittedIssueCount`; el writer no cierra el stream ni agrega el LF por sí
   mismo;
 - un fallo esperado siempre se traduce a `BLOCKED` o `ERROR`. Si falla el propio stream de salida
@@ -667,36 +670,30 @@ atómicos; no se hace push.
 
 ## Corte 7 — Paridad frontend, regresión y cierre
 
-### Backend
+### Implementación ejecutada
 
-Modificar:
+El corte confirmó que JDBC y la CLI no introdujeron diferencias semánticas respecto del guard
+frontend. Se actualizaron `FRONTEND_INTEGRATION.md`, el diseño, este plan y el documento de cierre
+`docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`. En frontend se actualizaron
+`docs/legal/README.md` y el plan de lanzamiento en el commit local `19b4953`.
 
-- `FRONTEND_INTEGRATION.md`;
-- diseño/plan si la implementación prueba una diferencia real;
-- agregar un cierre de Fase 2.3A bajo `docs/plans/`.
+La copia frontend y el recurso backend del schema quedaron byte-identical: `10547` bytes, SHA-256
+`f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b`. La fixture golden exacta
+produjo en el guard frontend `issues: []`; `validate` y `dry-run` conservaron la misma publicación y
+los mismos conteos estáticos: 11 documentos, 6 requisitos y 8 scopes. Su manifiesto raw tiene SHA-256
+`cf1de54de0ebe43e792c15e2d0b4329e2f1e65023d71b0eca689a21e2392b68d` y la canonicalización JCS,
+`b3b452c8f6f4deb459c31524466936f50265c165c772d50ea75364b8c9c6f3e1`.
 
-Registrar comandos, formato de reporte, límites, variables DB, garantías de rollback, efectos
-físicos posibles (WAL/locks/secuencias), matriz, SHA del schema y pasos reproducibles.
+La suite RFC 8785 acredita el corpus oficial fijado por checksum, cuatro vectores oficiales
+compatibles, dos vectores de producto más estrictos y los 24 números finitos del Apéndice B, además
+del orden UTF-16 y escapes. El frontend no reimplementa JCS ni los límites de bytes/carreras del
+backend: ese comportamiento sigue siendo autoritativo del CLI.
 
-### Frontend
-
-El mirror funcional ya quedó completado en un commit propio (`d38e276`) sobre:
-
-- `scripts/lib/public-release-validation.mjs` o su test para congelar el SHA del schema;
-- `scripts/check-public-release.test.mjs` para acreditar drift;
-- `docs/plans/2026-08-23-lanzamiento-publico-confianza-cuenta-plan.md`;
-- `docs/legal/README.md`.
-
-En el Corte 7 sólo se reejecuta la regresión cross-repo y se actualiza el cierre documental si JDBC
-o la CLI prueban una diferencia nueva. No se cambia a los exit codes del CLI ni se conecta todavía
-el frontend al backend.
-
-### Verificación final
+### Verificación final ejecutada
 
 Backend:
 
 ```bash
-./mvnw test
 ./mvnw verify
 git diff --check
 git status --short --branch
@@ -705,33 +702,39 @@ git status --short --branch
 Frontend:
 
 ```bash
-npm test -- --run scripts/check-public-release.test.mjs
+npm run test:release
 npm run build
 git diff --check
 git status --short --branch
 ```
 
-Confirmar explícitamente:
+Resultado:
 
-- misma fixture produce el mismo plan estático en ambos comandos;
-- schema/hash/paridad congelados;
-- vectores RFC 8785 verdes;
-- PASS, blocker y error tardío dejan cero filas en las 12 tablas;
-- ningún runner/scheduler/HTTP/Flyway se activa;
-- ninguna ruta/PII/secret aparece en reportes;
-- jar principal y frontend no cambian comportamiento fuera del guard acordado;
-- worktrees conservan cambios ajenos y no existe push.
+```text
+Backend enfocado de paridad/JCS/reporte       64 PASS
+Frontend guard                               42 PASS
+Frontend build                               PASS
+Backend ./mvnw verify unitarias             562 PASS
+Backend ./mvnw verify integración            56 PASS
+Schema cmp/hash                              PASS
+Fixture golden exacta en frontend            issues: []
+Rollback PASS/BLOCKED/error tardío            cero filas legales
+```
 
-Commits de cierre sugeridos:
+El primer `./mvnw verify` del cierre encontró un fallo SSL transitorio durante el
+provisioning/migración de la IT, antes de ejecutar aserciones de `LegalManifestCliProcessIT`. La IT
+aislada pasó 6/6 y el `verify` completo repetido cerró 562/56 sin fallos; no fue necesario cambiar
+código.
 
-- backend: `test(legal): endurece CLI y rollback del dry-run`;
-- backend: `docs(legal): cierra fase 2.3A`;
-- frontend: `d38e276 fix(legal): alinea guard con contrato backend v1`;
-- frontend: `docs(plan): registra paridad estatica del manifiesto v1`.
+Quedaron acreditados el aislamiento de HTTP/Flyway/JPA/runners/schedulers, la redacción del reporte,
+los exit codes `0/2/3`, el rollback en las 12 tablas y el posible avance físico de WAL, locks y
+secuencias. Los worktrees conservaron los archivos ajenos del frontend y no se hizo push. El cierre
+backend se entrega en el commit documental local `docs(legal): cierra fase 2.3A`.
 
 ## Criterio de salida
 
-2.3A termina cuando los cortes anteriores están verificados y documentados en commits locales
+2.3A quedó cerrada con los cortes anteriores verificados y documentados en commits locales
 atómicos. El resultado acerca el lanzamiento porque elimina una clase importante de errores
-editoriales y de persistencia antes de importar, pero no permite publicar todavía: el siguiente
-corte es 2.3B, importación idempotente y sello real sin promoción.
+editoriales y de persistencia antes de importar, pero no permite publicar todavía:
+`BACKEND-HANDOFF 1` continúa cerrado y el siguiente corte es 2.3B, importación idempotente y sello
+real sin promoción.
