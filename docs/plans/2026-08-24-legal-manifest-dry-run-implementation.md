@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-24
 
-Estado: en ejecución; Cortes 1 a 5 y mirror frontend cerrados; Cortes 6 a 7 pendientes
+Estado: en ejecución; Cortes 1 a 6 y mirror frontend cerrados; Corte 7 pendiente
 
 Diseño aprobado:
 
@@ -107,10 +107,13 @@ El JSON de stdout es compacto, UTF-8, determinista y tiene esta forma estable:
   "command": "validate",
   "status": "PASS",
   "persisted": false,
-  "publicationId": "release-2026-08-24",
-  "schemaVersion": 1,
-  "manifestSha256": "...",
+  "publication": {
+    "publicationId": "release-2026-08-24",
+    "schemaVersion": 1,
+    "manifestSha256": "..."
+  },
   "counts": {"documents": 11, "requirements": 6, "scopes": 8},
+  "dryRun": null,
   "issues": [],
   "omittedIssueCount": 0
 }
@@ -385,7 +388,6 @@ No modificar entities ni repositories JPA existentes.
 Usar configuración explícita, sin `@SpringBootApplication` ni `@ComponentScan`:
 
 ```java
-@Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
     name = "ordenfix.legal.dry-run-context.enabled",
     havingValue = "true")
@@ -396,10 +398,11 @@ public class LegalDryRunDatabaseConfiguration { /* beans explícitos */ }
 Declarar `JdbcTransactionManager` y `TransactionTemplate`. No importar Flyway, Hibernate, MVC,
 Security, Mail, Actuator ni scheduling. `validate` nunca construye este contexto.
 
-La condición explícita es necesaria porque el package legal vive debajo del package raíz de la
-aplicación: sin ella, el component scan normal detectaría la configuración y el
-`JdbcTransactionManager` competiría con el transaction manager JPA. El futuro CLI activa la
-propiedad internamente; la API normal no la configura.
+La ausencia de `@Configuration`/`@Component` es deliberada: aunque el package legal vive debajo del
+package raíz, el component scan normal no puede descubrir esta clase ni registrar su
+`JdbcTransactionManager`, incluso si una property hostil habilita el flag. Spring la procesa como
+configuración lite sólo cuando el CLI la registra explícitamente como source. La condición conserva
+una segunda defensa para ese registro explícito y el CLI la activa internamente.
 
 ### Transacción
 
@@ -514,8 +517,8 @@ Batería enfocada                     41 PASS
 La concurrencia cubre lock de transición versión→línea, locks retenidos, orden inverso de
 identidades nuevas, aislamiento incorrecto y deadlines. La desconexión usa una sesión real
 terminada por PostgreSQL, demuestra `DB_CONNECTION`, cero estado parcial y recuperación posterior
-del pool. `./mvnw verify` completo se conserva como puerta final del Corte 7, después de incorporar
-el CLI.
+del pool. La puerta `./mvnw verify` completa se volvió a ejecutar al cerrar el Corte 6 con el CLI
+empaquetado, sin reemplazar la regresión cross-repo final del Corte 7.
 
 Riesgo no bloqueante registrado: en los máximos contractuales la implementación deliberadamente
 simple realiza numerosos round-trips JDBC individuales y podría acercarse al timeout de 45 s en una
@@ -542,9 +545,14 @@ Modificar:
 Crear pruebas:
 
 - `LegalManifestArgumentsTest.java`;
+- `LegalManifestCliTest.java`;
+- `LegalManifestReportTest.java`;
 - `LegalManifestReportWriterTest.java`;
 - `LegalManifestCliIsolationIT.java`;
 - `LegalManifestCliProcessIT.java`.
+
+Modificar además `MvgrReparacionesBackendApplicationTests.java` para acreditar que la aplicación
+normal no escanea los beans dry-run aunque el flag interno llegue habilitado.
 
 ### Interfaz
 
@@ -570,6 +578,54 @@ Configurar un segundo `spring-boot:repackage` con classifier `legal-cli` y main 
 manteniendo el jar normal con `MvgrReparacionesBackendApplication`. Extender el check Ant de
 `application-secret.properties` a ambos jars.
 
+### Implementación acreditada
+
+El Corte 6 quedó implementado como una frontera CLI aislada dentro de una JVM iniciada por un
+launcher confiable:
+
+- el parser admite exactamente `validate|dry-run` seguido de una única asignación
+  `--manifest=<path>`; no acepta argumentos Spring, passwords, duplicados ni extras;
+- `validate` y todo blocker estático ejecutan solamente `LegalManifestValidator`, sin construir un
+  contexto Spring ni consultar configuración de base;
+- `dry-run` abre, sin reenviar argumentos, un contexto `WebApplicationType.NONE` cuya única fuente
+  primaria es `LegalDryRunDatabaseConfiguration`, y siempre lo cierra mediante
+  try-with-resources;
+- `LegalDryRunDatabaseConfiguration` no posee un estereotipo escaneable: la aplicación normal no
+  incorpora sus beans aunque reciba hostilmente el flag interno en `true`;
+- el environment hijo elimina `systemProperties` y `systemEnvironment`, copia mediante allowlist
+  sólo `spring.datasource.url`, `username`, `password` y `driver-class-name`, y fija internamente
+  web, banner, startup info, shutdown hook, keep-alive, JMX, Flyway y logging;
+- Config Data queda confinado a `optional:classpath:/ordenfix-legal-cli/`; valores hostiles de
+  `SPRING_MAIN_SOURCES`, `SPRING_CONFIG_IMPORT`, locations adicionales, web o logging no pueden
+  sumar la aplicación normal ni cargar configuración externa;
+- stdout contiene un único objeto JSON compacto, UTF-8 y determinista, seguido por un único LF.
+  El orden congelado es `reportVersion`, `command`, `status`, `persisted`, `publication`, `counts`,
+  `dryRun`, `issues`, `omittedIssueCount`; el writer no cierra el stream ni agrega el LF por sí
+  mismo;
+- un fallo esperado siempre se traduce a `BLOCKED` o `ERROR`. Si falla el propio stream de salida
+  o escapa un fallo interno de última frontera, `LegalManifestCli` termina con `3` sin emitir por sí
+  mismo stack trace, causa, ruta, SQL ni credenciales; también detecta el estado de error que
+  `PrintStream` usa para absorber un `IOException` de `System.out`;
+- la construcción del CLI ocurre dentro de la frontera estática de `main`; si falla durante la
+  inicialización se escribe un envelope constante pre-serializado, independiente de Jackson, y se
+  conserva el exit code `3`;
+- `maven-jar-plugin` produce primero un jar fino clasificado y el segundo repackage lo transforma
+  en el ejecutable `legal-cli`, evitando usar como entrada el jar principal ya repaquetado;
+- el jar normal conserva `MvgrReparacionesBackendApplication` como `Start-Class`, el clasificado
+  usa `LegalManifestCli` y el check Ant inspecciona ambos por separado.
+
+La supresión de causas inesperadas es una decisión deliberada respecto del diseño inicial de
+“debug protegido”: este comando no posee por ahora un canal de diagnóstico separado con garantías
+de redacción. Se prioriza que la configuración Spring controlada por el CLI no pueda convertir
+stderr en una fuga; si se necesita observabilidad futura, deberá agregarse como reporte
+estructurado seguro y probado.
+
+La garantía de redacción comienza al entrar en `LegalManifestCli.main` y cubre el código propio y
+la configuración Spring. El operador/CI debe limpiar o controlar `JAVA_TOOL_OPTIONS`,
+`JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS`: la JVM las procesa antes de `main`, puede cargar agentes y
+escribe al menos parte de su valor en stderr. La IT las elimina en los escenarios contractuales y
+posee un escenario separado que acredita explícitamente este límite pre-`main`.
+
 ### Pruebas y puerta
 
 - args válidos/inválidos y manifest faltante;
@@ -578,9 +634,36 @@ manteniendo el jar normal con `MvgrReparacionesBackendApplication`. Extender el 
 - validate inválido sin conexión;
 - dry-run sin DB da `ERROR` seguro;
 - contexto sin Flyway, runners, schedulers, servlet ni web server;
-- ambos jars arrancan con su main correcta y no contienen secrets.
+- la aplicación normal no escanea la configuración dry-run ni con su flag habilitado;
+- ambos jars declaran el `Start-Class` correcto y excluyen `application-secret.properties`; el jar
+  `legal-cli` arranca en cinco escenarios reales;
+- el launcher debe entregar las variables de opciones JVM ausentes o controladas.
 
-Commit: `feat(legal): expone validate y dry-run por CLI aislada`.
+Verificación ejecutada con Java 21, procesos JVM reales y PostgreSQL 16/Testcontainers:
+
+```text
+LegalManifestArguments/Report/Cli unitarias     45 PASS
+LegalManifestCliIsolationIT                      1 PASS
+LegalManifestCliProcessIT                        6 PASS
+./mvnw verify unitarias                        562 PASS
+./mvnw verify integración                       56 PASS
+check Ant de application-secret.properties (ambos jars) PASS
+```
+
+La prueba de aislamiento usa una base vacía y acredita que no aparece
+`flyway_schema_history`; también comprueba ausencia de JPA, servlet, web server, runners,
+schedulers y beans de la app normal, más el cierre del pool Hikari. Una regresión del arranque
+normal prueba además que el flag hostil no agrega la configuración JDBC. La IT de proceso combina
+una inspección de los dos jars con cinco JVM hijas. Cuatro escenarios contractuales cubren
+`validate` PASS/BLOCKED y `dry-run` ERROR/PASS (`0/2/3/0`) bajo variables Spring hostiles; el PASS
+V27 abre el contexto aislado, valida redacción estricta y confirma cero filas legales. La quinta JVM
+demuestra el límite pre-`main` de `JAVA_TOOL_OPTIONS`. Cada JVM hija tiene un watchdog de 75 s,
+superior al timeout transaccional de 45 s, para permitir que el CLI
+traduzca el vencimiento antes de que la prueba termine el proceso. El avance no transaccional de la
+secuencia de contextos acredita además que el proceso sí ejerció inserts reales antes del rollback.
+
+Commits locales del corte: implementación, empaquetado, pruebas y documentación se conservan
+atómicos; no se hace push.
 
 ## Corte 7 — Paridad frontend, regresión y cierre
 

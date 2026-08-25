@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-24
 
-Estado: diseño aprobado; implementación en curso (Cortes 1 a 5 y mirror frontend cerrados; Cortes
-6 a 7 pendientes)
+Estado: diseño aprobado; implementación en curso (Cortes 1 a 6 y mirror frontend cerrados; Corte 7
+pendiente)
 
 Fuentes normativas:
 
@@ -368,8 +368,16 @@ Exit codes:
 - `2`: `BLOCKED` por entrada o contrato inválido;
 - `3`: `ERROR` operativo/configuración/DB.
 
-Un error inesperado conserva detalles en logging protegido sólo cuando el operador habilita debug;
-stdout mantiene el envelope seguro.
+Los fallos esperables conservan siempre el envelope seguro. La construcción del CLI también ocurre
+dentro de la frontera protegida y su último fallback es un envelope constante pre-serializado que
+no depende de Jackson. La frontera CLI no ofrece un modo debug: descarta causas inesperadas y
+termina con `3` para impedir que el código propio publique
+logging, rutas, SQL o credenciales en stdout/stderr. Si falla el propio stream no puede prometerse
+un envelope, pero el CLI tampoco imprime un stack trace. Esta garantía comienza al entrar en
+`LegalManifestCli.main`: `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` son procesadas
+por la JVM antes de `main`, pueden escribir su contenido en stderr y deben llegar ausentes o bajo
+control de un launcher confiable. Un canal de diagnóstico futuro deberá ser estructurado,
+redactado y probado antes de habilitarse.
 
 ## Manejo de fallos y rollback
 
@@ -430,8 +438,21 @@ El Corte 5 quedó acreditado sobre PostgreSQL 16 con 41 pruebas enfocadas: 20 de
 fallos, 14 de contraste/rollback y 7 de concurrencia/fallos tardíos. Incluye constraint diferible,
 V26, dependencia abierta, identidad y metadata incompatibles, precisión temporal, transición
 versión→línea, órdenes inversos, timeouts, desconexión real y recuperación del pool. La regresión
-unitaria completa posterior ejecutó 517 pruebas sin fallos; `verify` completo permanece como puerta
-final del Corte 7 para volver a ejecutarse junto con la CLI terminada.
+unitaria completa posterior ejecutó 517 pruebas sin fallos.
+
+El Corte 6 agregó 45 pruebas unitarias de argumentos, reporte y frontera CLI, una IT de aislamiento
+y una IT de empaquetado/proceso con seis casos: una inspección de ambos jars y cinco ejecuciones JVM
+reales del `legal-cli`. El environment del dry-run expone por allowlist sólo las cuatro propiedades
+datasource y elimina las fuentes system/env del contexto hijo; así no pueden inyectarse sources,
+Config Data, Flyway, web o logging desde el host. La configuración JDBC tampoco es candidata del
+component scan normal, incluso si el flag interno llega hostilmente habilitado. Sobre una base vacía
+no crea `flyway_schema_history`, no registra JPA/web/runners/schedulers y cierra Hikari. La
+inspección acredita ambos `Start-Class` y que los jars excluyen `application-secret.properties`;
+cuatro procesos acreditan códigos `0/2/3/0`, salida JSON redactada y rollback V27, y el quinto
+delimita la salida pre-`main` de
+`JAVA_TOOL_OPTIONS`. Una secuencia identity que avanza fuera del rollback demuestra que no es un
+PASS simulado sin interacción JDBC. La regresión backend completa ejecutó 562 unitarias y 56 IT sin
+fallos; el Corte 7 conserva la regresión cross-repo y el cierre documental final.
 
 ### Regresión
 
