@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: Corte 1 completado; Cortes 2 a 7 pendientes
+Estado: Cortes 1 y 2 completados; Cortes 3 a 7 pendientes
 
 Diseño aprobado:
 
@@ -140,6 +140,8 @@ Commit: `feat(legal): calcula revision definitiva de requisitos`.
 
 ## Corte 2 — Gate y writer compartidos
 
+Estado: completado el 2026-08-25.
+
 ### Objetivo
 
 Separar coordinación transaccional, escritura del grafo y semántica de dry-run sin cambiar ninguna
@@ -161,7 +163,7 @@ Modificar:
 - `LegalManifestDryRunService.java`;
 - `LegalDryRunDatabaseConfiguration.java`;
 - `LegalV27SchemaVerifier.java`;
-- `LegalDatabaseFailureMapper.java`;
+- `LegalDatabaseFailureMapper.java` — revisado; no requirió cambios de códigos ni mensajes v1;
 - `LegalManifestDryRunIT.java`;
 - `LegalManifestDryRunConcurrencyIT.java`;
 - tests CLI v1 que congelen bytes.
@@ -187,7 +189,8 @@ Modificar:
 
 ### Pruebas y puerta
 
-- El writer aislado no ejecuta `SET`, advisory lock, schema ni permisos.
+- El writer aislado no ejecuta `SET` de sesión/transacción, advisory lock, schema ni permisos; sólo
+  fuerza el `SET CONSTRAINTS ALL IMMEDIATE` que forma parte de su responsabilidad V27.
 - El gate ejecuta preflights y lock antes del primer query del grafo.
 - PASS, BLOCKED y ERROR del dry-run producen exactamente los mismos bytes v1 previos.
 - Las 12 tablas quedan sin delta; las secuencias pueden avanzar como ya estaba documentado.
@@ -199,6 +202,27 @@ Modificar:
 ./mvnw -Dit.test=LegalManifestDryRunIT,LegalManifestDryRunConcurrencyIT verify
 git diff --check
 ```
+
+### Evidencia del Corte 2
+
+- gate compartido con orden acreditado
+  `statement_timeout -> preflights -> lock_timeout=30s -> advisory xact lock -> lock_timeout=5s -> callback`;
+- transacción productiva congelada en `REQUIRES_NEW`, `READ_COMMITTED`, timeout total de 75 s, con
+  presupuestos package-private que sólo permiten reducciones de test;
+- consulta de `publication_external_id` dentro del gate y antes del writer; un fallo del writer
+  cruza la frontera transaccional, completa rollback y recién entonces se traduce al reporte;
+- writer aislado sin SQL de gate, catálogo, privilegios o replay; sello, constraints inmediatas,
+  validación V27 explícita, comprobación `BORRADOR` y receipt con timestamps releídos desde DB;
+- dos dry-runs con orden inverso acreditan exactamente un writer dentro del grafo y otro esperando
+  el lock editorial; ambos terminan PASS y rollback-only;
+- lock editorial retenido con presupuestos reducidos `statement=2s/lock=1s` produce
+  `DB_LOCK_TIMEOUT` antes del grafo, sin delta de tablas ni secuencias, y el retry posterior pasa;
+- PASS, BLOCKED y ERROR obtenidos del servicio/gate reales se renderizan byte a byte como reporte
+  v1; el jar conserva aislamiento, procesos reales, exit codes y una única LF en la frontera CLI;
+- verificación completa sobre PostgreSQL 16.14: 588 pruebas unitarias y 60 pruebas de integración,
+  todas sin fallos; los IT focalizados del corte aportan 17 casos de grafo y 8 de concurrencia;
+- ninguna migración, endpoint, importación real, cambio frontend, deploy o push formó parte del
+  corte.
 
 Commit: `refactor(legal): comparte gate y writer del manifiesto`.
 

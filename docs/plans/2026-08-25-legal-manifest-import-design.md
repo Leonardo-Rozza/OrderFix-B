@@ -306,6 +306,12 @@ imports que respetan el protocolo cooperativo y evita sus carreras. No se afirma
 un ciclo creado por un writer ajeno al gate: un timeout o deadlock provocado por ese writer se
 revierte y se mapea a `ERROR`, sin presentar éxito ni dejar escrituras nuevas parciales.
 
+En producción, `statement_timeout` y el presupuesto temporal del advisory lock valen ambos 30 s.
+Si expiran en el mismo borde, PostgreSQL puede informar timeout de sentencia o de lock; ambos son
+resultados operativos seguros y revierten la transacción completa. La evidencia determinista del
+timeout específico de lock usa únicamente en tests presupuestos reducidos `statement=2s/lock=1s`,
+sin modificar los valores productivos.
+
 ## Idempotencia y replay
 
 No se usa `legal_idempotencia_resultados`: V27 la limita a `REGISTRO` y `ACEPTACION_LEGAL`, exige

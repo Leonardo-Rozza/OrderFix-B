@@ -13,6 +13,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.util.List;
 
 /** Minimal non-web Spring context used exclusively by the legal manifest dry-run. */
 @ConditionalOnProperty(
@@ -25,7 +26,11 @@ import javax.sql.DataSource;
 public class LegalDryRunDatabaseConfiguration {
 
     public static final String ENABLED_PROPERTY = "ordenfix.legal.dry-run-context.enabled";
-    static final int TRANSACTION_TIMEOUT_SECONDS = 45;
+
+    @Bean
+    LegalDatabaseBudgets legalDatabaseBudgets() {
+        return LegalDatabaseBudgets.production();
+    }
 
     @Bean
     JdbcTransactionManager legalDryRunTransactionManager(DataSource dataSource) {
@@ -34,13 +39,14 @@ public class LegalDryRunDatabaseConfiguration {
 
     @Bean
     TransactionTemplate legalDryRunTransactionTemplate(
-            JdbcTransactionManager legalDryRunTransactionManager) {
+            JdbcTransactionManager legalDryRunTransactionManager,
+            LegalDatabaseBudgets legalDatabaseBudgets) {
         TransactionTemplate transaction = new TransactionTemplate(
                 legalDryRunTransactionManager);
         transaction.setName("legal-manifest-dry-run");
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-        transaction.setTimeout(TRANSACTION_TIMEOUT_SECONDS);
+        transaction.setTimeout(legalDatabaseBudgets.transactionTimeoutSeconds());
         transaction.setReadOnly(false);
         return transaction;
     }
@@ -61,24 +67,37 @@ public class LegalDryRunDatabaseConfiguration {
     }
 
     @Bean
-    LegalDryRunPersistence legalDryRunPersistence(
+    LegalManifestGraphWriter legalManifestGraphWriter(
             JdbcTemplate jdbcTemplate,
             LegalRequiredSetRevisionCalculator legalRequiredSetRevisionCalculator) {
-        return new LegalDryRunPersistence(
+        return new LegalManifestGraphWriter(
                 jdbcTemplate,
                 legalRequiredSetRevisionCalculator);
     }
 
     @Bean
-    LegalManifestDryRunService legalManifestDryRunService(
+    LegalManifestDatabaseGate legalManifestDatabaseGate(
             TransactionTemplate legalDryRunTransactionTemplate,
-            LegalV27SchemaVerifier legalV27SchemaVerifier,
-            LegalDryRunPersistence legalDryRunPersistence,
+            JdbcTemplate jdbcTemplate,
+            LegalDatabaseBudgets legalDatabaseBudgets,
+            LegalV27SchemaVerifier legalV27SchemaVerifier) {
+        return new LegalManifestDatabaseGate(
+                legalDryRunTransactionTemplate,
+                jdbcTemplate,
+                legalDatabaseBudgets,
+                List.of(legalV27SchemaVerifier));
+    }
+
+    @Bean
+    LegalManifestDryRunService legalManifestDryRunService(
+            LegalManifestDatabaseGate legalManifestDatabaseGate,
+            JdbcTemplate jdbcTemplate,
+            LegalManifestGraphWriter legalManifestGraphWriter,
             LegalDatabaseFailureMapper legalDatabaseFailureMapper) {
         return new LegalManifestDryRunService(
-                legalDryRunTransactionTemplate,
-                legalV27SchemaVerifier,
-                legalDryRunPersistence,
+                legalManifestDatabaseGate,
+                jdbcTemplate,
+                legalManifestGraphWriter,
                 legalDatabaseFailureMapper);
     }
 }

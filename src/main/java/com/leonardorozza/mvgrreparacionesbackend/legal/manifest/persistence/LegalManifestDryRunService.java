@@ -1,11 +1,15 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Simulates the complete V27 legal graph and always rolls the transaction back.
@@ -16,19 +20,19 @@ import java.util.Objects;
  */
 public final class LegalManifestDryRunService {
 
-    private final TransactionTemplate transactionTemplate;
-    private final LegalV27SchemaVerifier schemaVerifier;
-    private final LegalDryRunPersistence persistence;
+    private final LegalManifestDatabaseGate databaseGate;
+    private final JdbcTemplate jdbc;
+    private final LegalManifestGraphWriter graphWriter;
     private final LegalDatabaseFailureMapper failureMapper;
 
     LegalManifestDryRunService(
-            TransactionTemplate transactionTemplate,
-            LegalV27SchemaVerifier schemaVerifier,
-            LegalDryRunPersistence persistence,
+            LegalManifestDatabaseGate databaseGate,
+            JdbcTemplate jdbc,
+            LegalManifestGraphWriter graphWriter,
             LegalDatabaseFailureMapper failureMapper) {
-        this.transactionTemplate = Objects.requireNonNull(transactionTemplate, "transactionTemplate");
-        this.schemaVerifier = Objects.requireNonNull(schemaVerifier, "schemaVerifier");
-        this.persistence = Objects.requireNonNull(persistence, "persistence");
+        this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
+        this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.graphWriter = Objects.requireNonNull(graphWriter, "graphWriter");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
     }
 
@@ -36,22 +40,48 @@ public final class LegalManifestDryRunService {
     public LegalManifestValidation<DryRunResult> dryRun(ValidatedRelease release) {
         Objects.requireNonNull(release, "release");
         try {
-            DryRunResult result = transactionTemplate.execute(status -> {
+            LegalManifestGraphReceipt receipt = databaseGate.execute(status -> {
                 try {
-                    persistence.configureTransaction();
-                    schemaVerifier.verify();
-                    return persistence.stageAndValidate(release);
+                    requirePublicationAbsent(release.plan().manifest().publicationId());
+                    return graphWriter.writeNew(release);
                 } finally {
                     status.setRollbackOnly();
                 }
             });
-            if (result == null) {
+            if (receipt == null) {
                 throw new IllegalStateException("El dry-run no produjo un resultado");
             }
-            return LegalManifestValidation.pass(result);
+            return LegalManifestValidation.pass(toDryRunResult(receipt));
         } catch (RuntimeException exception) {
             return LegalManifestValidation.failure(failureMapper.map(exception));
         }
+    }
+
+    private void requirePublicationAbsent(String externalId) {
+        List<UUID> existing = jdbc.query("""
+                SELECT id
+                  FROM legal_publicaciones
+                 WHERE publication_external_id = ?
+                 FOR UPDATE
+                """, (rs, rowNumber) -> rs.getObject(1, UUID.class), externalId);
+        if (!existing.isEmpty()) {
+            throw new LegalDryRunBlockedException(LegalManifestIssue.at(
+                    LegalManifestIssueCode.DB_PERSISTED_CONFLICT,
+                    "database/publication"));
+        }
+    }
+
+    private static DryRunResult toDryRunResult(LegalManifestGraphReceipt receipt) {
+        return new DryRunResult(
+                receipt.documents(),
+                receipt.requirements(),
+                receipt.scopes(),
+                receipt.newDocumentLines(),
+                receipt.newDocumentVersions(),
+                receipt.reusedDocumentVersions(),
+                receipt.newRequirementLines(),
+                receipt.newRequirementVersions(),
+                receipt.reusedRequirementVersions());
     }
 
     /** Safe aggregate counts for the tentative operations; no provisional identifier is exposed. */

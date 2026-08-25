@@ -38,6 +38,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -173,6 +174,42 @@ class LegalManifestDryRunConcurrencyIT {
     }
 
     @Test
+    void retainedEditorialLockTimesOutBeforeGraphAccessAndRetryRecovers() throws Exception {
+        Long editorialLockId = jdbc.queryForObject(
+                "SELECT pg_catalog.hashtextextended(?, 0)",
+                Long.class,
+                LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+        assertThat(editorialLockId).isNotNull();
+        Map<String, Long> baseline = requiredTableCounts();
+        Boolean sequenceCalledBefore = jdbc.queryForObject(
+                "SELECT is_called FROM legal_documento_contextos_id_seq",
+                Boolean.class);
+        LegalDatabaseBudgets reducedBudgets = new LegalDatabaseBudgets(5, 2, 1, 1);
+        LegalManifestDryRunService reducedService = serviceWithTransaction(
+                TransactionDefinition.ISOLATION_READ_COMMITTED,
+                5,
+                reducedBudgets);
+
+        try (Connection holder = context.getBean(DataSource.class).getConnection()) {
+            acquireAdvisoryLock(holder, editorialLockId);
+
+            LegalManifestValidation<DryRunResult> validation =
+                    reducedService.dryRun(goldenRelease);
+
+            assertFailure(validation, LegalManifestStatus.ERROR,
+                    LegalManifestIssueCode.DB_LOCK_TIMEOUT);
+            assertThat(requiredTableCounts()).isEqualTo(baseline);
+            assertThat(jdbc.queryForObject(
+                    "SELECT is_called FROM legal_documento_contextos_id_seq",
+                    Boolean.class)).isEqualTo(sequenceCalledBefore);
+            releaseAdvisoryLock(holder, editorialLockId);
+        }
+
+        assertPass(service.dryRun(goldenRelease));
+        assertThat(requiredTableCounts()).isEqualTo(baseline);
+    }
+
+    @Test
     void retainedHistoricalLineLockMapsToLockTimeoutWithoutPartialRows() throws Exception {
         UUID publicationId = insertOpenPublication("lock-holder-publication");
         UUID lineId = UUID.randomUUID();
@@ -234,7 +271,7 @@ class LegalManifestDryRunConcurrencyIT {
     }
 
     @Test
-    void inverseManifestOrdersCompleteWithoutDeadlockAndAlwaysRollBack() throws Exception {
+    void inverseManifestOrdersAreSerializedBeforeGraphAccessAndAlwaysRollBack() throws Exception {
         ValidatedRelease forward = copyAndValidateGolden(
                 "concurrent-forward-order-v1",
                 false);
@@ -260,9 +297,10 @@ class LegalManifestDryRunConcurrencyIT {
                     .isTrue();
             start.countDown();
             awaitCondition(
-                    "dos inserts documentales concurrentes bloqueados en la barrera/unique",
+                    "un writer en el grafo y el segundo esperando el lock editorial",
                     DATABASE_POLL_TIMEOUT,
-                    () -> activeBlockedDocumentInserts(observer) == 2);
+                    () -> activeBlockedDocumentInserts(observer) == 1
+                            && activeBlockedEditorialGateWaits(observer) == 1);
             releaseAdvisoryLock(gate, NEW_LINE_GATE_LOCK_ID);
 
             assertPass(first.get(30, TimeUnit.SECONDS));
@@ -346,16 +384,31 @@ class LegalManifestDryRunConcurrencyIT {
     }
 
     private LegalManifestDryRunService serviceWithTransaction(int isolation, int timeoutSeconds) {
+        return serviceWithTransaction(
+                isolation,
+                timeoutSeconds,
+                LegalDatabaseBudgets.production());
+    }
+
+    private LegalManifestDryRunService serviceWithTransaction(
+            int isolation,
+            int timeoutSeconds,
+            LegalDatabaseBudgets budgets) {
         TransactionTemplate transaction = new TransactionTemplate(
                 context.getBean(JdbcTransactionManager.class));
         transaction.setName("legal-manifest-dry-run-test");
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         transaction.setIsolationLevel(isolation);
         transaction.setTimeout(timeoutSeconds);
-        return new LegalManifestDryRunService(
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
-                context.getBean(LegalV27SchemaVerifier.class),
-                context.getBean(LegalDryRunPersistence.class),
+                jdbc,
+                budgets,
+                List.of(context.getBean(LegalV27SchemaVerifier.class)));
+        return new LegalManifestDryRunService(
+                gate,
+                jdbc,
+                context.getBean(LegalManifestGraphWriter.class),
                 context.getBean(LegalDatabaseFailureMapper.class));
     }
 
@@ -483,6 +536,20 @@ class LegalManifestDryRunConcurrencyIT {
                    AND query LIKE '%INSERT INTO legal_documento_lineas%'
                 """, Integer.class, DRY_RUN_APPLICATION_NAME);
         return Objects.requireNonNull(count, "active blocked document inserts");
+    }
+
+    private static int activeBlockedEditorialGateWaits(JdbcTemplate observer) {
+        Integer count = observer.queryForObject("""
+                SELECT count(*)::integer
+                  FROM pg_catalog.pg_stat_activity
+                 WHERE datname = pg_catalog.current_database()
+                   AND application_name = ?
+                   AND state = 'active'
+                   AND wait_event_type = 'Lock'
+                   AND query LIKE '%pg_advisory_xact_lock%'
+                   AND query LIKE '%hashtextextended%'
+                """, Integer.class, DRY_RUN_APPLICATION_NAME);
+        return Objects.requireNonNull(count, "active blocked editorial gate waits");
     }
 
     private static Optional<Integer> sleepingPublicationInsertPid(JdbcTemplate observer) {

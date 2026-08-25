@@ -17,7 +17,6 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.Legal
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.DocumentPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.RequirementPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.ScopePlan;
-import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService.DryRunResult;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -37,15 +36,15 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 
-/** Stages and validates a provisional V27 graph inside the caller's rollback-only transaction. */
-final class LegalDryRunPersistence {
+/** Writes and seals one new V27 legal graph inside the caller-owned transaction. */
+final class LegalManifestGraphWriter {
 
     private static final String DATABASE_LOCATION = "database/legal-manifest";
 
     private final JdbcTemplate jdbc;
     private final LegalRequiredSetRevisionCalculator requiredSetRevisionCalculator;
 
-    LegalDryRunPersistence(
+    LegalManifestGraphWriter(
             JdbcTemplate jdbc,
             LegalRequiredSetRevisionCalculator requiredSetRevisionCalculator) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
@@ -54,20 +53,13 @@ final class LegalDryRunPersistence {
                 "requiredSetRevisionCalculator");
     }
 
-    void configureTransaction() {
-        jdbc.execute("SET LOCAL lock_timeout TO '5s'");
-        jdbc.execute("SET LOCAL statement_timeout TO '30s'");
-    }
-
-    DryRunResult stageAndValidate(ValidatedRelease release) {
+    LegalManifestGraphReceipt writeNew(ValidatedRelease release) {
         Objects.requireNonNull(release, "release");
         LegalPublicationPlan plan = release.plan();
         requireAccreditedLimits(plan);
         OffsetDateTime transactionTime = Objects.requireNonNull(
                 jdbc.queryForObject("SELECT transaction_timestamp()", OffsetDateTime.class),
                 "transaction timestamp");
-
-        blockExistingPublication(plan.manifest().publicationId());
 
         Map<String, DocumentLineRow> discoveredDocumentLines =
                 readDocumentLines(plan.documents(), false);
@@ -116,6 +108,9 @@ final class LegalDryRunPersistence {
             throw blocked(DATABASE_LOCATION);
         }
         jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        jdbc.queryForList(
+                "SELECT legal_validar_publicacion_sellada(?)",
+                publicationId);
 
         int newDocumentLines = (int) documents.values().stream()
                 .filter(ResolvedDocument::newLine)
@@ -129,7 +124,15 @@ final class LegalDryRunPersistence {
         int newRequirementVersions = (int) requirements.stream()
                 .filter(ResolvedRequirement::newVersion)
                 .count();
-        return new DryRunResult(
+        verifyNewVersionsRemainDraft(
+                publicationId,
+                newDocumentVersions,
+                newRequirementVersions);
+        PublicationSealRow publication = readSealedPublication(publicationId);
+        return new LegalManifestGraphReceipt(
+                publicationId,
+                publication.importedAt().toInstant(),
+                publication.sealedAt().toInstant(),
                 plan.documentCount(),
                 plan.requirementCount(),
                 plan.scopeCount(),
@@ -141,16 +144,24 @@ final class LegalDryRunPersistence {
                 plan.requirementCount() - newRequirementVersions);
     }
 
-    private void blockExistingPublication(String externalId) {
-        List<UUID> existing = jdbc.query("""
-                SELECT id
+    private PublicationSealRow readSealedPublication(UUID publicationId) {
+        PublicationSealRow publication = querySingle("""
+                SELECT estado_construccion, importado_en, sellado_en
                   FROM legal_publicaciones
-                 WHERE publication_external_id = ?
-                 FOR UPDATE
-                """, (rs, rowNumber) -> rs.getObject(1, UUID.class), externalId);
-        if (!existing.isEmpty()) {
+                 WHERE id = ?
+                 FOR SHARE
+                """, (rs, rowNumber) -> new PublicationSealRow(
+                        rs.getString("estado_construccion"),
+                        rs.getObject("importado_en", OffsetDateTime.class),
+                        rs.getObject("sellado_en", OffsetDateTime.class)),
+                publicationId)
+                .orElseThrow(() -> blocked("database/publication"));
+        if (!"SELLADO".equals(publication.state())
+                || publication.importedAt() == null
+                || publication.sealedAt() == null) {
             throw blocked("database/publication");
         }
+        return publication;
     }
 
     private Map<String, DocumentLineRow> readDocumentLines(
@@ -165,7 +176,7 @@ final class LegalDryRunPersistence {
                       FROM legal_documento_lineas
                      WHERE clave = ?
                     """ + (lock ? " FOR UPDATE" : ""),
-                    LegalDryRunPersistence::mapDocumentLine,
+                    LegalManifestGraphWriter::mapDocumentLine,
                     key)
                     .ifPresent(row -> rows.put(key, row));
         }
@@ -184,7 +195,7 @@ final class LegalDryRunPersistence {
                       FROM legal_requisito_lineas
                      WHERE clave = ?
                     """ + (lock ? " FOR UPDATE" : ""),
-                    LegalDryRunPersistence::mapRequirementLine,
+                    LegalManifestGraphWriter::mapRequirementLine,
                     key)
                     .ifPresent(row -> rows.put(key, row));
         }
@@ -287,7 +298,7 @@ final class LegalDryRunPersistence {
                            contenido_markdown, sha256, vigente_desde, requires_reacceptance
                       FROM legal_documento_versiones
                      WHERE documento_linea_id = ? AND version = ?
-                    """, LegalDryRunPersistence::mapDocumentVersion,
+                    """, LegalManifestGraphWriter::mapDocumentVersion,
                     line.id(), declaration.version());
 
             if (existingVersion.isPresent()) {
@@ -365,7 +376,7 @@ final class LegalDryRunPersistence {
                            afirmacion_sha256, requerido, requires_reacceptance
                       FROM legal_requisito_versiones
                      WHERE requisito_linea_id = ? AND version = ?
-                    """, LegalDryRunPersistence::mapRequirementVersion,
+                    """, LegalManifestGraphWriter::mapRequirementVersion,
                     line.id(), declaration.version());
             if (existingVersion.isPresent()) {
                 RequirementVersionRow version = existingVersion.orElseThrow();
@@ -461,7 +472,7 @@ final class LegalDryRunPersistence {
                           FROM legal_requisito_documentos
                          WHERE requisito_version_id = ?
                          ORDER BY documento_ordinal
-                        """, LegalDryRunPersistence::mapRequirementDocument,
+                        """, LegalManifestGraphWriter::mapRequirementDocument,
                         requirement.versionId());
                 boolean relationMatches = relations.size() == requirement.documents().size();
                 for (int index = 0; relationMatches && index < relations.size(); index++) {
@@ -686,6 +697,44 @@ final class LegalDryRunPersistence {
         }
     }
 
+    private void verifyNewVersionsRemainDraft(
+            UUID publicationId,
+            int expectedDocumentVersions,
+            int expectedRequirementVersions) {
+        Boolean documentsRemainDraft = jdbc.queryForObject("""
+                SELECT count(*) = ?
+                   AND count(*) FILTER (
+                       WHERE estado = 'BORRADOR'
+                         AND estado_cambiado_en IS NULL
+                         AND ultimo_motivo IS NULL
+                   ) = ?
+                  FROM legal_documento_versiones
+                 WHERE publicacion_intro_id = ?
+                """, Boolean.class,
+                expectedDocumentVersions,
+                expectedDocumentVersions,
+                publicationId);
+        Boolean requirementsRemainDraft = jdbc.queryForObject("""
+                SELECT count(*) = ?
+                   AND count(*) FILTER (
+                       WHERE estado = 'BORRADOR'
+                         AND estado_cambiado_en IS NULL
+                         AND ultimo_motivo IS NULL
+                   ) = ?
+                  FROM legal_requisito_versiones
+                 WHERE publicacion_intro_id = ?
+                """, Boolean.class,
+                expectedRequirementVersions,
+                expectedRequirementVersions,
+                publicationId);
+        if (!Boolean.TRUE.equals(documentsRemainDraft)
+                || !Boolean.TRUE.equals(requirementsRemainDraft)) {
+            throw new LegalDryRunBlockedException(LegalManifestIssue.at(
+                    LegalManifestIssueCode.DB_CONSTRAINT,
+                    "database/publication"));
+        }
+    }
+
     private static LegalRequiredSetProjection projectScope(
             ScopePlan scope,
             Map<Integer, ResolvedRequirement> requirementsByOrdinal) {
@@ -694,7 +743,7 @@ final class LegalDryRunPersistence {
                 .map(member -> Objects.requireNonNull(
                         requirementsByOrdinal.get(member.manifestOrdinal()),
                         "resolved scope requirement"))
-                .map(LegalDryRunPersistence::projectRequirement)
+                .map(LegalManifestGraphWriter::projectRequirement)
                 .toList();
         return new LegalRequiredSetProjection(scope.context(), scope.locale(), requirements);
     }
@@ -703,7 +752,7 @@ final class LegalDryRunPersistence {
             ResolvedRequirement requirement) {
         RequirementEntry declaration = requirement.declaration();
         List<DocumentProjection> documents = requirement.documents().stream()
-                .map(LegalDryRunPersistence::projectDocument)
+                .map(LegalManifestGraphWriter::projectDocument)
                 .toList();
         return new RequirementProjection(
                 requirement.versionId(),
@@ -886,6 +935,12 @@ final class LegalDryRunPersistence {
     ) { }
 
     private record RequirementDocumentRow(int ordinal, UUID documentVersionId) { }
+
+    private record PublicationSealRow(
+            String state,
+            OffsetDateTime importedAt,
+            OffsetDateTime sealedAt
+    ) { }
 
     private enum VersionKind {
         DOCUMENT,

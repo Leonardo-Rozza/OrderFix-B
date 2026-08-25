@@ -88,6 +88,38 @@ class LegalManifestReportWriterTest {
     }
 
     @Test
+    void keepsTheBlockedDryRunV1BytesFrozen() throws IOException {
+        LegalManifestReport report = LegalManifestReport.forDryRun(
+                goldenRelease,
+                LegalManifestValidation.failure(LegalManifestIssue.at(
+                        LegalManifestIssueCode.DB_PERSISTED_CONFLICT,
+                        "database/publication")));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(report, output);
+
+        assertThat(output.toString(StandardCharsets.UTF_8)).isEqualTo("""
+                {"reportVersion":1,"command":"dry-run","status":"BLOCKED","persisted":false,"publication":{"publicationId":"release-valid-v1","schemaVersion":1,"manifestSha256":"%s"},"counts":{"documents":11,"requirements":6,"scopes":8},"dryRun":null,"issues":[{"severity":"BLOCKED","code":"DB_PERSISTED_CONFLICT","location":"database/publication","message":"El release entra en conflicto con una identidad legal ya persistida."}],"omittedIssueCount":0}"""
+                .formatted(GOLDEN_JCS_SHA256));
+    }
+
+    @Test
+    void keepsTheErrorDryRunV1BytesFrozen() throws IOException {
+        LegalManifestReport report = LegalManifestReport.forDryRun(
+                goldenRelease,
+                LegalManifestValidation.failure(LegalManifestIssue.at(
+                        LegalManifestIssueCode.DB_LOCK_TIMEOUT,
+                        "database")));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(report, output);
+
+        assertThat(output.toString(StandardCharsets.UTF_8)).isEqualTo("""
+                {"reportVersion":1,"command":"dry-run","status":"ERROR","persisted":false,"publication":{"publicationId":"release-valid-v1","schemaVersion":1,"manifestSha256":"%s"},"counts":{"documents":11,"requirements":6,"scopes":8},"dryRun":null,"issues":[{"severity":"ERROR","code":"DB_LOCK_TIMEOUT","location":"database","message":"La simulación legal agotó el tiempo de espera de un lock."}],"omittedIssueCount":0}"""
+                .formatted(GOLDEN_JCS_SHA256));
+    }
+
+    @Test
     void writesOnlyCappedOrderedSafeIssuesAndTheOmittedCount() throws IOException {
         List<LegalManifestIssue> candidates = new ArrayList<>();
         for (int index = LegalManifestLimits.MAX_EXPOSED_ISSUES + 1; index >= 0; index--) {

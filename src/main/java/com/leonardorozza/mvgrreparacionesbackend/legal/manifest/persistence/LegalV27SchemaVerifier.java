@@ -8,7 +8,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Verifies the exact PostgreSQL objects required by the V27 provisional graph. */
-final class LegalV27SchemaVerifier {
+final class LegalV27SchemaVerifier implements LegalDatabasePreflight {
 
     private static final String ISSUE_LOCATION = "database/schema";
     private static final String FLYWAY_HISTORY_TABLE = "flyway_schema_history";
@@ -32,7 +32,8 @@ final class LegalV27SchemaVerifier {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
     }
 
-    void verify() {
+    @Override
+    public void verify() {
         String schema = jdbc.queryForObject(
                 "SELECT pg_catalog.current_schema()",
                 String.class);

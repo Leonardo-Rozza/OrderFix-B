@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestReport;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestReportWriter;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
@@ -29,11 +31,14 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -53,6 +58,8 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Stream;
 
+import javax.sql.DataSource;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
@@ -60,6 +67,17 @@ class LegalManifestDryRunIT {
 
     private static final String GOLDEN_MANIFEST =
             "/legal/manifest/release-valid-v1/publication-manifest.json";
+    private static final String GOLDEN_JCS_SHA256 =
+            "b3b452c8f6f4deb459c31524466936f50265c165c772d50ea75364b8c9c6f3e1";
+    private static final String PASS_REPORT_V1 = """
+            {"reportVersion":1,"command":"dry-run","status":"PASS","persisted":false,"publication":{"publicationId":"release-valid-v1","schemaVersion":1,"manifestSha256":"%s"},"counts":{"documents":11,"requirements":6,"scopes":8},"dryRun":{"newDocumentLines":11,"newDocumentVersions":11,"reusedDocumentVersions":0,"newRequirementLines":6,"newRequirementVersions":6,"reusedRequirementVersions":0},"issues":[],"omittedIssueCount":0}"""
+            .formatted(GOLDEN_JCS_SHA256);
+    private static final String BLOCKED_REPORT_V1 = """
+            {"reportVersion":1,"command":"dry-run","status":"BLOCKED","persisted":false,"publication":{"publicationId":"release-valid-v1","schemaVersion":1,"manifestSha256":"%s"},"counts":{"documents":11,"requirements":6,"scopes":8},"dryRun":null,"issues":[{"severity":"BLOCKED","code":"DB_PERSISTED_CONFLICT","location":"database/publication","message":"El release entra en conflicto con una identidad legal ya persistida."}],"omittedIssueCount":0}"""
+            .formatted(GOLDEN_JCS_SHA256);
+    private static final String ERROR_REPORT_V1 = """
+            {"reportVersion":1,"command":"dry-run","status":"ERROR","persisted":false,"publication":{"publicationId":"release-valid-v1","schemaVersion":1,"manifestSha256":"%s"},"counts":{"documents":11,"requirements":6,"scopes":8},"dryRun":null,"issues":[{"severity":"ERROR","code":"DB_SCHEMA_INCOMPATIBLE","location":"database/schema","message":"La base no posee el schema legal V27 compatible requerido por el dry-run."}],"omittedIssueCount":0}"""
+            .formatted(GOLDEN_JCS_SHA256);
     private static final String V26_SCHEMA = "legal_dry_run_v26";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -109,8 +127,15 @@ class LegalManifestDryRunIT {
     }
 
     @Test
-    void goldenReleasePassesThroughV27AndLeavesNoProvisionalRows() {
+    void goldenReleasePassesThroughV27AndLeavesNoProvisionalRows() throws IOException {
         assertThat(v27Context.getBeansOfType(Flyway.class)).isEmpty();
+        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
+        assertThat(transaction.getPropagationBehavior())
+                .isEqualTo(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        assertThat(transaction.getIsolationLevel())
+                .isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        assertThat(transaction.getTimeout()).isEqualTo(75);
+        assertThat(transaction.isReadOnly()).isFalse();
         Map<String, Long> baseline = requiredTableCounts(jdbc);
         Map<String, Long> allLegalBaseline = tableCounts(jdbc, true);
         Map<String, Long> nonLegalBaseline = tableCounts(jdbc, false);
@@ -134,9 +159,36 @@ class LegalManifestDryRunIT {
         assertThat(result.newRequirementLines()).isEqualTo(6);
         assertThat(result.newRequirementVersions()).isEqualTo(6);
         assertThat(result.reusedRequirementVersions()).isZero();
+        assertDryRunReportBytes(validation, PASS_REPORT_V1);
         assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
         assertThat(tableCounts(jdbc, true)).isEqualTo(allLegalBaseline);
         assertThat(tableCounts(jdbc, false)).isEqualTo(nonLegalBaseline);
+    }
+
+    @Test
+    void isolatedWriterDoesNotExecuteGateSchemaPrivilegeOrReplayQueries() {
+        Map<String, Long> baseline = requiredTableCounts(jdbc);
+        GuardedWriterJdbcTemplate guardedJdbc = new GuardedWriterJdbcTemplate(
+                v27Context.getBean(DataSource.class));
+        LegalManifestGraphWriter writer = new LegalManifestGraphWriter(
+                guardedJdbc,
+                v27Context.getBean(LegalRequiredSetRevisionCalculator.class));
+        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
+
+        LegalManifestGraphReceipt receipt = transaction.execute(status -> {
+            try {
+                return writer.writeNew(goldenRelease);
+            } finally {
+                status.setRollbackOnly();
+            }
+        });
+
+        assertThat(receipt).isNotNull();
+        assertThat(receipt.publicationUuid()).isNotNull();
+        assertThat(guardedJdbc.sql())
+                .anyMatch(statement -> statement.startsWith("SET CONSTRAINTS ALL IMMEDIATE"))
+                .noneMatch(statement -> statement.contains("publication_external_id = ?"));
+        assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
     }
 
     @Test
@@ -159,22 +211,16 @@ class LegalManifestDryRunIT {
     void requiredSetRevisionsAreReconstructedFromPostgresAndTheTransactionRollsBack() {
         Map<String, Long> baseline = requiredTableCounts(jdbc);
         Map<String, Long> allLegalBaseline = tableCounts(jdbc, true);
-        LegalDryRunPersistence persistence = v27Context.getBean(LegalDryRunPersistence.class);
+        LegalManifestDatabaseGate gate = v27Context.getBean(LegalManifestDatabaseGate.class);
+        LegalManifestGraphWriter writer = v27Context.getBean(LegalManifestGraphWriter.class);
         LegalRequiredSetRevisionCalculator calculator =
                 v27Context.getBean(LegalRequiredSetRevisionCalculator.class);
-        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
 
         List<ScopeRevisionEvidence> evidence = Objects.requireNonNull(
-                transaction.execute(status -> {
+                gate.execute(status -> {
                     try {
-                        persistence.configureTransaction();
-                        persistence.stageAndValidate(goldenRelease);
-                        UUID publicationId = Objects.requireNonNull(jdbc.queryForObject("""
-                                SELECT id
-                                  FROM legal_publicaciones
-                                 WHERE publication_external_id = ?
-                                """, UUID.class,
-                                goldenRelease.plan().manifest().publicationId()));
+                        LegalManifestGraphReceipt receipt = writer.writeNew(goldenRelease);
+                        UUID publicationId = receipt.publicationUuid();
                         assertImportedVersionsRemainDraft(publicationId);
                         return reconstructScopeRevisions(publicationId, calculator);
                     } finally {
@@ -196,7 +242,7 @@ class LegalManifestDryRunIT {
     }
 
     @Test
-    void existingPublicationExternalIdBlocksWithoutChangingTheBaseline() {
+    void existingPublicationExternalIdBlocksWithoutChangingTheBaseline() throws IOException {
         UUID existingPublicationId = insertOpenPublication(
                 goldenRelease.plan().manifest().publicationId());
         Map<String, Long> baseline = requiredTableCounts(jdbc);
@@ -209,6 +255,7 @@ class LegalManifestDryRunIT {
         assertThat(validation.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.DB_PERSISTED_CONFLICT);
+        assertDryRunReportBytes(validation, BLOCKED_REPORT_V1);
         assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
         assertThat(jdbc.queryForObject("""
                 SELECT estado_construccion
@@ -339,16 +386,15 @@ class LegalManifestDryRunIT {
                 ReleaseMutation.NONE);
         Map<String, Long> baseline = requiredTableCounts(jdbc);
         Map<String, Long> allLegalBaseline = tableCounts(jdbc, true);
-        LegalDryRunPersistence persistence = v27Context.getBean(LegalDryRunPersistence.class);
-        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
+        LegalManifestDatabaseGate gate = v27Context.getBean(LegalManifestDatabaseGate.class);
+        LegalManifestGraphWriter writer = v27Context.getBean(LegalManifestGraphWriter.class);
 
         HistoricalReuseEvidence evidence = Objects.requireNonNull(
-                transaction.execute(status -> {
+                gate.execute(status -> {
                     try {
-                        persistence.configureTransaction();
-                        DryRunResult result = persistence.stageAndValidate(incoming);
-                        UUID incomingPublicationId = publicationId(
-                                incoming.plan().manifest().publicationId());
+                        LegalManifestGraphReceipt receipt = writer.writeNew(incoming);
+                        DryRunResult result = toDryRunResult(receipt);
+                        UUID incomingPublicationId = receipt.publicationUuid();
                         return new HistoricalReuseEvidence(
                                 result,
                                 captureVersionGraph(incomingPublicationId),
@@ -405,7 +451,7 @@ class LegalManifestDryRunIT {
     }
 
     @Test
-    void v26IsRejectedWithoutRunningFlywayOrCreatingLegalTables() {
+    void v26IsRejectedWithoutRunningFlywayOrCreatingLegalTables() throws IOException {
         JdbcTemplate v26Jdbc = new JdbcTemplate(schemaDataSource(V26_SCHEMA));
         String versionBefore = currentFlywayVersion(v26Jdbc);
         assertThat(versionBefore).isEqualTo("26");
@@ -423,18 +469,40 @@ class LegalManifestDryRunIT {
         assertThat(validation.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.DB_SCHEMA_INCOMPATIBLE);
+        assertDryRunReportBytes(validation, ERROR_REPORT_V1);
         assertThat(currentFlywayVersion(v26Jdbc)).isEqualTo(versionBefore);
         assertThat(legalTableCount(v26Jdbc, V26_SCHEMA)).isZero();
     }
 
     private DryRunResult commitValidatedRelease(ValidatedRelease release) {
-        LegalDryRunPersistence persistence = v27Context.getBean(LegalDryRunPersistence.class);
-        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
-        DryRunResult result = transaction.execute(status -> {
-            persistence.configureTransaction();
-            return persistence.stageAndValidate(release);
-        });
-        return Objects.requireNonNull(result, "committed dry-run seed result");
+        LegalManifestDatabaseGate gate = v27Context.getBean(LegalManifestDatabaseGate.class);
+        LegalManifestGraphWriter writer = v27Context.getBean(LegalManifestGraphWriter.class);
+        LegalManifestGraphReceipt receipt = gate.execute(status -> writer.writeNew(release));
+        return toDryRunResult(Objects.requireNonNull(receipt, "committed graph receipt"));
+    }
+
+    private static void assertDryRunReportBytes(
+            LegalManifestValidation<DryRunResult> validation,
+            String expected) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        new LegalManifestReportWriter().write(
+                LegalManifestReport.forDryRun(goldenRelease, validation),
+                output);
+        assertThat(output.toByteArray())
+                .containsExactly(expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static DryRunResult toDryRunResult(LegalManifestGraphReceipt receipt) {
+        return new DryRunResult(
+                receipt.documents(),
+                receipt.requirements(),
+                receipt.scopes(),
+                receipt.newDocumentLines(),
+                receipt.newDocumentVersions(),
+                receipt.reusedDocumentVersions(),
+                receipt.newRequirementLines(),
+                receipt.newRequirementVersions(),
+                receipt.reusedRequirementVersions());
     }
 
     private ValidatedRelease copyAndValidateGolden(
@@ -917,6 +985,84 @@ class LegalManifestDryRunIT {
 
     private static String quoteIdentifier(String identifier) {
         return '"' + identifier.replace("\"", "\"\"") + '"';
+    }
+
+    private static final class GuardedWriterJdbcTemplate extends JdbcTemplate {
+
+        private final List<String> sql = new ArrayList<>();
+
+        GuardedWriterJdbcTemplate(DataSource dataSource) {
+            super(dataSource);
+        }
+
+        List<String> sql() {
+            return List.copyOf(sql);
+        }
+
+        @Override
+        public void execute(String statement) {
+            inspect(statement);
+            super.execute(statement);
+        }
+
+        @Override
+        public int update(String statement, Object... arguments) {
+            inspect(statement);
+            return super.update(statement, arguments);
+        }
+
+        @Override
+        public <T> List<T> query(
+                String statement,
+                RowMapper<T> rowMapper,
+                Object... arguments) {
+            inspect(statement);
+            return super.query(statement, rowMapper, arguments);
+        }
+
+        @Override
+        public <T> T queryForObject(
+                String statement,
+                Class<T> requiredType,
+                Object... arguments) {
+            inspect(statement);
+            return super.queryForObject(statement, requiredType, arguments);
+        }
+
+        @Override
+        public <T> List<T> queryForList(
+                String statement,
+                Class<T> elementType,
+                Object... arguments) {
+            inspect(statement);
+            return super.queryForList(statement, elementType, arguments);
+        }
+
+        @Override
+        public List<Map<String, Object>> queryForList(
+                String statement,
+                Object... arguments) {
+            inspect(statement);
+            return super.queryForList(statement, arguments);
+        }
+
+        private void inspect(String statement) {
+            String normalized = statement.strip().replaceAll("\\s+", " ");
+            String lower = normalized.toLowerCase(java.util.Locale.ROOT);
+            boolean requiredConstraintFlush =
+                    lower.equals("set constraints all immediate");
+            if ((lower.startsWith("set ") && !requiredConstraintFlush)
+                    || lower.contains("set_config(")
+                    || lower.contains("pg_advisory")
+                    || lower.contains("pg_catalog.")
+                    || lower.contains("information_schema.")
+                    || lower.contains("current_schema")
+                    || lower.contains("flyway_schema_history")
+                    || lower.contains("_privilege(")) {
+                throw new AssertionError("El writer ejecutó SQL reservado al gate/preflight");
+            }
+            sql.add(normalized);
+        }
     }
 
     private record PersistedScopeRow(
