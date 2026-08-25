@@ -64,6 +64,12 @@ public enum LegalManifestIssueCode {
     MANIFEST_VALIDATION_ERROR(
             LegalManifestStatus.ERROR,
             "No se pudo completar la validación integral del manifiesto."),
+    CLI_ARGUMENTS_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "Los argumentos del comando legal no son válidos."),
+    CLI_OPERATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar el comando legal."),
     MANIFEST_PATH_REQUIRED(
             LegalManifestStatus.BLOCKED,
             "Se requiere la ruta local del manifiesto."),
