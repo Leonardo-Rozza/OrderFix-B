@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-24
 
-Estado: listo para ejecutar
+Estado: en ejecución; Cortes 1 a 4 backend cerrados y mirror frontend pendiente
 
 Diseño aprobado:
 
@@ -282,11 +282,22 @@ Crear:
 
 ### Implementación
 
-1. Exigir revisión legal y contable `APPROVED` con referencia y fecha válida; mapear sólo al plan,
-   sin persistir.
+1. Exigir revisión legal y contable `APPROVED` con referencia, fecha válida y sin marcadores
+   editoriales; mapear sólo al plan, sin persistir.
+   Los tres contactos del snapshot deben cumplir la misma política pública del guard frontend:
+   local-part ASCII válida, dominio DNS con al menos dos labels y rechazo de IPs, hosts internos,
+   TLDs reservados y dominios `example.*`. `CONTACT_MISMATCH` permanece fuera del core porque sólo
+   compara variables del deploy frontend.
+   En v1, `taxId` conserva el contrato congelado de formato `NN-NNNNNNNN-N`; no acredita checksum
+   ni existencia ante ARCA. La fixture usa un valor sintético y la revisión profesional sigue siendo
+   la responsable de confirmar la identidad real antes de una publicación.
 2. Validar unicidad de document key, requirement key, source, combinaciones key+version y
    referencias dentro de cada requisito.
 3. Validar locale, contexto, audiencia, acto, statement digest y compatibilidad documental.
+   Los campos editoriales obligatorios, cada `statement` y el título H1 deben conservar al menos
+   un code point visible después de ignorar whitespace, space separators y las categorías Unicode
+   `FORMAT`/`MARK`; texto visualmente vacío siempre bloquea y cualquier control C0/C1 invalida el
+   campo completo.
 4. Rechazar documento completamente huérfano, pero aceptar uno ligado sólo a requisitos
    opcionales.
 5. Permitir varias keys del mismo tipo documental; no copiar
@@ -306,10 +317,16 @@ La cobertura se suma entre requisitos `required=true` del scope; no se fuerza un
 monolítico.
 
 7. Derivar scopes y miembros preservando el ordinal global del manifiesto. El plan es inmutable y
-   compartido por `validate`, `dry-run` y el futuro importador.
+   compartido por `validate`, `dry-run` y el futuro importador. Documentos y requisitos conservan
+   un `manifestOrdinal` explícito; los requisitos con múltiples audiencias repiten ese mismo ordinal
+   en cada scope y los scopes mantienen el orden de primera aparición.
 8. Encapsular el plan en un valor acreditado con constructor no público. El dry-run JDBC aceptará
    sólo ese tipo emitido por `LegalManifestValidator`; no records/DTOs fabricables por callers.
    Revalidar defensivamente los límites antes de toda preasignación aunque el schema ya los cubra.
+   Esta opacidad evita el uso accidental de DTOs sin validar dentro de la aplicación; no pretende
+   aislar código hostil cargado en la misma JVM frente a reflection/`Unsafe` ni es un sello
+   criptográfico. La persistencia consumirá únicamente los snapshots inmutables del token y nunca
+   reabrirá las rutas, por lo que un cambio posterior del bundle no altera los bytes acreditados.
 9. Crear una fixture golden estática de 11 documentos, 6 requisitos y 8 scopes; ningún test positivo
    puede depender del ejemplo editorial incompleto.
 
@@ -318,6 +335,26 @@ monolítico.
 Cubrir cada fila de matriz, agregación entre requisitos, roles múltiples, docs opcionales, docs
 huérfanos, múltiples docs del mismo tipo, referencias/contexts incompatibles, 11 tipos presentes y
 paridad/diferencias deliberadas con los 35 códigos legales del guard frontend.
+
+La fixture golden congela además estos fingerprints reproducibles:
+
+```text
+manifest raw: 8751 bytes
+manifest raw SHA-256: cf1de54de0ebe43e792c15e2d0b4329e2f1e65023d71b0eca689a21e2392b68d
+manifest JCS: 6584 bytes
+manifest JCS SHA-256: b3b452c8f6f4deb459c31524466936f50265c165c772d50ea75364b8c9c6f3e1
+Markdown total: 672 bytes
+```
+
+La prueba backend de paridad es hermética: no busca un checkout hermano. Congela el schema, enums,
+matriz, placeholders, vectores Markdown y los 35 códigos del guard; también registra 18 garantías
+adicionales del backend y las dos diferencias deliberadas (tipos repetidos y binding sólo opcional).
+El espejo frontend se actualiza en un commit propio antes de declarar cerrada la paridad entre
+repositorios.
+
+Puerta backend ejecutada con Java 21 después de la auditoría independiente: 91 pruebas enfocadas y
+497 pruebas completas, sin fallos, errores ni skips. `git diff --check` queda limpio antes del
+commit del corte.
 
 Commit: `feat(legal): valida contrato y cobertura del release`.
 

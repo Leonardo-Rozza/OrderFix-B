@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "publicationId": "release-valid-v1",
+  "locale": "es-AR",
+  "publisherSnapshot": {
+    "legalName": "OrdenFix Argentina SAS",
+    "taxId": "30-00000000-0",
+    "legalAddress": "Calle Pública 100, CABA",
+    "jurisdiction": "Ciudad Autónoma de Buenos Aires",
+    "businessHours": "Lunes a viernes de 9 a 17 h",
+    "contacts": {
+      "legalEmail": "legal@ordenfix.com",
+      "privacyEmail": "privacidad@ordenfix.com",
+      "supportEmail": "soporte@ordenfix.com"
+    }
+  },
+  "review": {
+    "legal": {
+      "status": "APPROVED",
+      "reference": "LEGAL-2026-001",
+      "reviewedAt": "2026-08-20T12:00:00-03:00"
+    },
+    "accounting": {
+      "status": "APPROVED",
+      "reference": "ACCOUNTING-2026-001",
+      "reviewedAt": "2026-08-20T12:00:00-03:00"
+    }
+  },
+  "documents": [
+    {
+      "key": "terminos",
+      "type": "TERMINOS_SERVICIO",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "terminos.md",
+      "sha256": "54500183a35d6e0baefd9fa8a3cbb61a5c009d93177d448344045858945a1beb",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "REGISTRO",
+        "USO_CONTINUADO",
+        "CONTRATACION_PRO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "privacidad",
+      "type": "POLITICA_PRIVACIDAD",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "privacidad.md",
+      "sha256": "6d78cd6fcb34fa077082549678cc52a26f2807c8a290d7dfd78a0466cbe29cb9",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "REGISTRO",
+        "USO_CONTINUADO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "tratamiento-datos",
+      "type": "ACUERDO_TRATAMIENTO_DATOS",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "tratamiento-datos.md",
+      "sha256": "9132ec14a72ebf66e8535c14e5cd156f81fe3953b0d4c98d76a03e7efe680138",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "REGISTRO",
+        "USO_CONTINUADO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "condiciones-pro",
+      "type": "CONDICIONES_PRO",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "condiciones-pro.md",
+      "sha256": "8a6b3e59864c5e45772d58ce7d0b811db4ea3c683aa8bde070c9bcaef185ebff",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "CONTRATACION_PRO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "cancelaciones-reembolsos",
+      "type": "POLITICA_CANCELACIONES_REEMBOLSOS",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "cancelaciones-reembolsos.md",
+      "sha256": "f1f6089f62e8ea53896af12af84f10b48a4d828e14a2749bfc4bea0977b551c5",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "CONTRATACION_PRO",
+        "ARREPENTIMIENTO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "cierre-cuenta",
+      "type": "POLITICA_CIERRE_CUENTA",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "cierre-cuenta.md",
+      "sha256": "1c6c02b294e13b59b4d87a7685956c75d286a673e5656d6841e4ea0faff5ae5a",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "CIERRE_CUENTA"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "aviso-clientes-taller",
+      "type": "AVISO_CLIENTES_TALLER",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "aviso-clientes-taller.md",
+      "sha256": "0f2ebf0928752718e2952681b1c0c0406c345756f7c1397411b43f90f9570a50",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "ATESTACION_FOTOS",
+        "ATESTACION_CREDENCIALES"
+      ],
+      "requiresReacceptance": false
+    },
+    {
+      "key": "terminos-usuario",
+      "type": "TERMINOS_USUARIO",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "terminos-usuario.md",
+      "sha256": "19181f03dc7ec03380f6b2d2ebc179a52e8ea2378234b915ceaefba45cf94f7d",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "PRIMER_INGRESO_EMPLEADO",
+        "USO_CONTINUADO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "aviso-privacidad-usuario",
+      "type": "AVISO_PRIVACIDAD_USUARIO",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "aviso-privacidad-usuario.md",
+      "sha256": "82ea17e05e4113181d7c35e8740e276b36cefe4c84948ee02b3aae7f2c7fa397",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "PRIMER_INGRESO_EMPLEADO",
+        "USO_CONTINUADO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "compromiso-confidencialidad",
+      "type": "COMPROMISO_CONFIDENCIALIDAD",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "compromiso-confidencialidad.md",
+      "sha256": "3cbbbee07d5e9a65c786326951add8929bcb9746d8bd445bd1cca59c4b466860",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "PRIMER_INGRESO_EMPLEADO",
+        "USO_CONTINUADO"
+      ],
+      "requiresReacceptance": true
+    },
+    {
+      "key": "atestacion-datos-cliente",
+      "type": "ATESTACION_DATOS_CLIENTE",
+      "version": "1.0.0",
+      "locale": "es-AR",
+      "source": "atestacion-datos-cliente.md",
+      "sha256": "649851783d2a534fac0caf09315a1bdff03400856776551a52f0d79b3f47b7a7",
+      "effectiveAt": "2026-09-01T00:00:00-03:00",
+      "contexts": [
+        "ATESTACION_FOTOS",
+        "ATESTACION_CREDENCIALES"
+      ],
+      "requiresReacceptance": true
+    }
+  ],
+  "requirements": [
+    {
+      "key": "admin-registration",
+      "version": "1.0.0",
+      "context": "REGISTRO",
+      "roles": [
+        "ADMIN_TITULAR"
+      ],
+      "actType": "ACEPTACION",
+      "statement": "Confirmo el requisito admin-registration de OrdenFix.",
+      "statementSha256": "c2baa002ce4e1acc46cb63161da0c598e2642e45aa08182da70e534c1fd2cb13",
+      "documents": [
+        "terminos",
+        "privacidad",
+        "tratamiento-datos"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    },
+    {
+      "key": "employee-first-login",
+      "version": "1.0.0",
+      "context": "PRIMER_INGRESO_EMPLEADO",
+      "roles": [
+        "USER"
+      ],
+      "actType": "ACEPTACION",
+      "statement": "Confirmo el requisito employee-first-login de OrdenFix.",
+      "statementSha256": "a9bf1acdd8cae6a2ab0babe6175a13b0283327f97ad1c093b74c31a7ecb3cac7",
+      "documents": [
+        "terminos-usuario",
+        "aviso-privacidad-usuario",
+        "compromiso-confidencialidad"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    },
+    {
+      "key": "pro-checkout",
+      "version": "1.0.0",
+      "context": "CONTRATACION_PRO",
+      "roles": [
+        "ADMIN_TITULAR"
+      ],
+      "actType": "ACEPTACION",
+      "statement": "Confirmo el requisito pro-checkout de OrdenFix.",
+      "statementSha256": "8c627d472ad6d76d1f89cc25b998f5db3d03f79f466447ceac38f0e3549fdcf5",
+      "documents": [
+        "terminos",
+        "condiciones-pro",
+        "cancelaciones-reembolsos"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    },
+    {
+      "key": "customer-photo-attestation",
+      "version": "1.0.0",
+      "context": "ATESTACION_FOTOS",
+      "roles": [
+        "ADMIN_TITULAR",
+        "USER"
+      ],
+      "actType": "DECLARACION",
+      "statement": "Confirmo el requisito customer-photo-attestation de OrdenFix.",
+      "statementSha256": "5b2c51ca45d3a9bf233722dc3526eee04b8e5eb3ecea55db0af5193091d36aa5",
+      "documents": [
+        "aviso-clientes-taller",
+        "atestacion-datos-cliente"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    },
+    {
+      "key": "customer-credential-attestation",
+      "version": "1.0.0",
+      "context": "ATESTACION_CREDENCIALES",
+      "roles": [
+        "ADMIN_TITULAR",
+        "USER"
+      ],
+      "actType": "DECLARACION",
+      "statement": "Confirmo el requisito customer-credential-attestation de OrdenFix.",
+      "statementSha256": "6b58ec9fc3a228d24c462f34974faec96a7231c5bcb002229d6f6528f6711f81",
+      "documents": [
+        "aviso-clientes-taller",
+        "atestacion-datos-cliente"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    },
+    {
+      "key": "account-closure",
+      "version": "1.0.0",
+      "context": "CIERRE_CUENTA",
+      "roles": [
+        "ADMIN_TITULAR"
+      ],
+      "actType": "ACEPTACION",
+      "statement": "Confirmo el requisito account-closure de OrdenFix.",
+      "statementSha256": "deb63b95481f88141ec08871c5997931abfb21966e37788efa741dcf0d9f6442",
+      "documents": [
+        "cierre-cuenta"
+      ],
+      "required": true,
+      "requiresReacceptance": true
+    }
+  ]
+}

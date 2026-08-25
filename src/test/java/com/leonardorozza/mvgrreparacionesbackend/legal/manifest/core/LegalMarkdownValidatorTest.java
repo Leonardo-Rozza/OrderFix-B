@@ -54,7 +54,11 @@ class LegalMarkdownValidatorTest {
             "## Sólo H2",
             "#",
             "# ",
-            "#\t\t"
+            "#\t\t",
+            "# \u00A0\u2007\u202F",
+            "# \u200B\u2060\uFEFF",
+            "# \u200E\u200F",
+            "# \uFE0F\u034F\u0301\u20DD"
     })
     void blocksMissingOrEmptyAtxH1(String markdown) {
         assertBlocked(markdown, LegalManifestIssueCode.DOCUMENT_H1_REQUIRED);

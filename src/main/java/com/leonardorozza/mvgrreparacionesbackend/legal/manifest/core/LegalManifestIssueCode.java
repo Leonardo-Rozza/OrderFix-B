@@ -61,6 +61,9 @@ public enum LegalManifestIssueCode {
     MANIFEST_CANONICALIZATION_ERROR(
             LegalManifestStatus.ERROR,
             "No se pudo completar la canonicalización del manifiesto."),
+    MANIFEST_VALIDATION_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la validación integral del manifiesto."),
     MANIFEST_PATH_REQUIRED(
             LegalManifestStatus.BLOCKED,
             "Se requiere la ruta local del manifiesto."),
@@ -162,7 +165,52 @@ public enum LegalManifestIssueCode {
             "El contenido legal conserva un placeholder editorial."),
     LEGAL_EDITORIAL_MARKER_FOUND(
             LegalManifestStatus.BLOCKED,
-            "El contenido legal conserva un marcador editorial no publicable.");
+            "El contenido legal conserva un marcador editorial no publicable."),
+    PROFESSIONAL_REVIEW_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "La publicación requiere revisión jurídica y contable aprobada."),
+    MANIFEST_CONTACTS_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "Los contactos de la publicación deben usar direcciones de correo públicas válidas."),
+    MANIFEST_DUPLICATE_DOCUMENT(
+            LegalManifestStatus.BLOCKED,
+            "Una identidad documental está declarada más de una vez."),
+    MANIFEST_DUPLICATE_REQUIREMENT(
+            LegalManifestStatus.BLOCKED,
+            "Una identidad de requisito está declarada más de una vez."),
+    DOCUMENT_LOCALE_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El locale del documento no coincide con el de la publicación."),
+    DOCUMENT_CONTEXT_DUPLICATE(
+            LegalManifestStatus.BLOCKED,
+            "Un documento declara el mismo contexto más de una vez."),
+    REQUIREMENT_ROLE_DUPLICATE(
+            LegalManifestStatus.BLOCKED,
+            "Un requisito declara la misma audiencia más de una vez."),
+    REQUIREMENT_DOCUMENT_DUPLICATE(
+            LegalManifestStatus.BLOCKED,
+            "Un requisito referencia el mismo documento más de una vez."),
+    REQUIREMENT_DOCUMENT_UNKNOWN(
+            LegalManifestStatus.BLOCKED,
+            "Un requisito referencia un documento inexistente."),
+    REQUIREMENT_DOCUMENT_AMBIGUOUS(
+            LegalManifestStatus.BLOCKED,
+            "Un requisito referencia una identidad documental ambigua."),
+    REQUIREMENT_CONTEXT_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "Un documento no cubre el contexto de su requisito."),
+    REQUIRED_DOCUMENT_MISSING(
+            LegalManifestStatus.BLOCKED,
+            "Falta un tipo documental obligatorio para la publicación."),
+    REQUIRED_DOCUMENT_UNBOUND(
+            LegalManifestStatus.BLOCKED,
+            "Un documento no está vinculado a ningún requisito."),
+    REQUIRED_REQUIREMENT_MISSING(
+            LegalManifestStatus.BLOCKED,
+            "Falta un requisito obligatorio para un scope legal."),
+    REQUIRED_REQUIREMENT_DOCUMENT_MISSING(
+            LegalManifestStatus.BLOCKED,
+            "Un scope obligatorio no cubre todos sus tipos documentales.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;

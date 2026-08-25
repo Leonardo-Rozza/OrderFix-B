@@ -11,7 +11,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Validated, immutable input consumed by the database dry-run boundary.
+ * Immutable normalized plan produced after contract validation.
+ *
+ * <p>This record is intentionally a readable data model, not a trust token. Database operations
+ * must accept only the opaque accredited value emitted by the manifest validator.</p>
  */
 public record LegalPublicationPlan(
         LegalManifestV1 manifest,
@@ -49,14 +52,26 @@ public record LegalPublicationPlan(
     }
 
     public record DocumentPlan(
+            int manifestOrdinal,
             DocumentEntry declaration,
             String title,
             String markdown
     ) {
         public DocumentPlan {
+            requireOrdinal(manifestOrdinal);
             declaration = Objects.requireNonNull(declaration, "declaration");
             title = Objects.requireNonNull(title, "title");
             markdown = Objects.requireNonNull(markdown, "markdown");
+        }
+    }
+
+    public record RequirementPlan(
+            int manifestOrdinal,
+            RequirementEntry declaration
+    ) {
+        public RequirementPlan {
+            requireOrdinal(manifestOrdinal);
+            declaration = Objects.requireNonNull(declaration, "declaration");
         }
     }
 
@@ -64,13 +79,19 @@ public record LegalPublicationPlan(
             LocaleLegal locale,
             ContextoLegal context,
             AudienciaLegal audience,
-            List<RequirementEntry> requirements
+            List<RequirementPlan> requirements
     ) {
         public ScopePlan {
             locale = Objects.requireNonNull(locale, "locale");
             context = Objects.requireNonNull(context, "context");
             audience = Objects.requireNonNull(audience, "audience");
             requirements = List.copyOf(Objects.requireNonNull(requirements, "requirements"));
+        }
+    }
+
+    private static void requireOrdinal(int ordinal) {
+        if (ordinal < 0) {
+            throw new IllegalArgumentException("El ordinal del manifiesto no puede ser negativo");
         }
     }
 }

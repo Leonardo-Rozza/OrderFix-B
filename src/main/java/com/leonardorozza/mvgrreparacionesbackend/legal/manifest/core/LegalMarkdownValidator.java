@@ -62,7 +62,7 @@ public final class LegalMarkdownValidator {
 
         AtxHeading candidate = inspection.firstAtxH1;
         String title = null;
-        if (candidate == null || candidate.title().isBlank()) {
+        if (candidate == null || !LegalVisibleText.isPublishable(candidate.title())) {
             issues.add(h1Required);
         } else {
             title = candidate.title().strip();

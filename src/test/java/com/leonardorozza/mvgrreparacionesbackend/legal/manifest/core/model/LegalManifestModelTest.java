@@ -8,6 +8,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.Legal
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1.ReviewRecord;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1.ReviewStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.DocumentPlan;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.RequirementPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan.ScopePlan;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
@@ -68,11 +69,14 @@ class LegalManifestModelTest {
         sourceDocuments.clear();
         sourceRequirements.clear();
 
-        var firstDocumentPlan = new DocumentPlan(firstDocument, "Términos", "# Términos\n");
-        var secondDocumentPlan = new DocumentPlan(secondDocument, "Privacidad", "# Privacidad\n");
+        var firstDocumentPlan = new DocumentPlan(0, firstDocument, "Términos", "# Términos\n");
+        var secondDocumentPlan = new DocumentPlan(1, secondDocument, "Privacidad", "# Privacidad\n");
         var sourceDocumentPlans = new ArrayList<>(List.of(firstDocumentPlan, secondDocumentPlan));
 
-        var sourceScopeRequirements = new ArrayList<>(List.of(firstRequirement, secondRequirement));
+        var sourceScopeRequirements = new ArrayList<>(List.of(
+                new RequirementPlan(0, firstRequirement),
+                new RequirementPlan(1, secondRequirement)
+        ));
         var firstScope = new ScopePlan(
                 LocaleLegal.ES_AR,
                 ContextoLegal.REGISTRO,
@@ -83,7 +87,7 @@ class LegalManifestModelTest {
                 LocaleLegal.ES_AR,
                 ContextoLegal.REGISTRO,
                 AudienciaLegal.USER,
-                List.of(secondRequirement)
+                List.of(new RequirementPlan(1, secondRequirement))
         );
         sourceScopeRequirements.clear();
 
@@ -110,7 +114,14 @@ class LegalManifestModelTest {
         assertEquals(List.of(AudienciaLegal.ADMIN_TITULAR, AudienciaLegal.USER),
                 plan.scopes().stream().map(ScopePlan::audience).toList());
         assertEquals(List.of("admin-registration", "admin-confirmation"),
-                firstScope.requirements().stream().map(RequirementEntry::key).toList());
+                firstScope.requirements().stream()
+                        .map(RequirementPlan::declaration)
+                        .map(RequirementEntry::key)
+                        .toList());
+        assertEquals(List.of(0, 1),
+                firstScope.requirements().stream()
+                        .map(RequirementPlan::manifestOrdinal)
+                        .toList());
 
         assertThrows(UnsupportedOperationException.class,
                 () -> firstDocument.contexts().add(ContextoLegal.CONTRATACION_PRO));
@@ -163,7 +174,7 @@ class LegalManifestModelTest {
                 () -> new ReviewRecord(null, null, null));
         assertThrows(NullPointerException.class,
                 () -> new LegalPublicationPlan(manifest, null, "0".repeat(64), List.of(), List.of()));
-        var requirementsWithNull = new ArrayList<RequirementEntry>();
+        var requirementsWithNull = new ArrayList<RequirementPlan>();
         requirementsWithNull.add(null);
         assertThrows(NullPointerException.class,
                 () -> new ScopePlan(
@@ -172,6 +183,8 @@ class LegalManifestModelTest {
                         AudienciaLegal.ADMIN_TITULAR,
                         requirementsWithNull
                 ));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DocumentPlan(-1, manifest.documents().getFirst(), "Título", "# Título"));
     }
 
     private static LegalManifestV1 manifest(

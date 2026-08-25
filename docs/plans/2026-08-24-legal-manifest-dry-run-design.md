@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-24
 
-Estado: diseño aprobado; implementación pendiente
+Estado: diseño aprobado; implementación en curso (Cortes 1 a 4 backend cerrados; mirror frontend
+pendiente)
 
 Fuentes normativas:
 
@@ -101,6 +102,12 @@ entities serializables. Sus responsabilidades son:
 
 El futuro importador 2.3B debe consumir ese mismo plan. No se permite implementar un segundo parser
 o una validación más permisiva para el camino que escribe.
+
+El valor acreditado que envuelve el plan es una frontera de tipos contra el uso accidental de
+entradas no validadas, no una sandbox frente a reflection/`Unsafe` ni una firma criptográfica. El
+camino JDBC usa los snapshots inmutables ya leídos y nunca vuelve a abrir las rutas de origen; así,
+el TOCTOU residual inevitable del filesystem no puede sustituir el contenido que se simula o
+persiste.
 
 ### Comando `validate`
 
@@ -211,6 +218,13 @@ El título se obtiene del primer encabezado ATX H1 `# Título`. Para v1:
 - se recorta únicamente el whitespace exterior permitido;
 - el valor resultante debe cumplir el límite persistente de 300 caracteres.
 
+Además, los campos editoriales obligatorios del publicador, las afirmaciones y el H1 deben contener
+al menos un code point visible. Para esta decisión se ignoran `Character.isWhitespace`,
+`Character.isSpaceChar` y las categorías Unicode `FORMAT` y `MARK`; NBSP, zero-width spaces, word
+joiners, variation selectors, marcas combinantes o direccionales no pueden convertir un valor
+visualmente vacío en contenido publicable. Todo control C0/C1 invalida el campo completo, incluso
+cuando está embebido entre caracteres visibles.
+
 Esta regla evita que frontend/backend deriven títulos distintos de Markdown complejo.
 
 Los siete placeholders editoriales conocidos se rechazan tanto en el snapshot del publicador como
@@ -248,6 +262,11 @@ content, RFC 8785 y límites operativos.
 La copia exacta del schema y el guard equivalente del frontend se actualizan y verifican como puerta
 del Corte 4; este corte backend por sí solo no declara cerrada esa paridad entre repositorios.
 
+El core también replica la política de correo público del guard para los tres contactos del
+snapshot: sintaxis ASCII acotada, dominio DNS público y rechazo de IPs, hosts internos y dominios
+reservados. La comparación con `VITE_*` (`CONTACT_MISMATCH`) continúa siendo una regla exclusiva de
+deploy frontend y no forma parte del manifiesto portable.
+
 No se copian dos sobre-restricciones editoriales que no pertenecen al schema ni a V27:
 
 - un tipo documental puede aparecer más de una vez con keys/versiones y scopes compatibles; esto
@@ -256,13 +275,16 @@ No se copian dos sobre-restricciones editoriales que no pertenecen al schema ni 
   completamente huérfano, pero no se exige que su vínculo sea con `required=true`.
 
 La prueba de paridad congela estas diferencias como decisiones explícitas, de modo que un cambio de
-un solo repositorio no endurezca o relaje silenciosamente el contrato común.
+un solo repositorio no endurezca o relaje silenciosamente el contrato común. La mitad backend del
+handshake es hermética y congela 35 códigos frontend, 18 garantías de hardening adicionales y las
+dos diferencias deliberadas; nunca depende de una ruta local hacia otro checkout.
 
 ## Reglas contractuales cruzadas
 
 El validador exige, como mínimo:
 
-- revisión jurídica y contable `APPROVED`, cada una con referencia y fecha válida;
+- revisión jurídica y contable `APPROVED`, cada una con referencia sin marcadores editoriales y
+  fecha válida;
 - locale de documento igual al locale del manifiesto;
 - keys, combinaciones key+version, sources y referencias únicas;
 - toda referencia de requisito resuelta exactamente una vez;
@@ -278,6 +300,10 @@ El validador exige, como mínimo:
 - cada scope construido con exactamente los requisitos que le aplican;
 - `REGISTRO/es-AR/ADMIN_TITULAR` con cobertura obligatoria completa, acumulable entre varios
   requisitos del mismo scope.
+
+El `taxId` v1 verifica únicamente el formato congelado `NN-NNNNNNNN-N`; no prueba checksum ni
+existencia ante ARCA. La acreditación técnica no reemplaza la revisión profesional de la identidad
+del publicador.
 
 La puerta de release completo también revisa la matriz congelada en frontend: registro del titular,
 primer ingreso de `USER`, contratación PRO, atestaciones de fotos y credenciales para ambas
