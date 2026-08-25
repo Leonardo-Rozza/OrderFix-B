@@ -1,5 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetRevisionCalculator;
+
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
@@ -54,8 +56,17 @@ public class LegalDryRunDatabaseConfiguration {
     }
 
     @Bean
-    LegalDryRunPersistence legalDryRunPersistence(JdbcTemplate jdbcTemplate) {
-        return new LegalDryRunPersistence(jdbcTemplate);
+    LegalRequiredSetRevisionCalculator legalRequiredSetRevisionCalculator() {
+        return new LegalRequiredSetRevisionCalculator();
+    }
+
+    @Bean
+    LegalDryRunPersistence legalDryRunPersistence(
+            JdbcTemplate jdbcTemplate,
+            LegalRequiredSetRevisionCalculator legalRequiredSetRevisionCalculator) {
+        return new LegalDryRunPersistence(
+                jdbcTemplate,
+                legalRequiredSetRevisionCalculator);
     }
 
     @Bean

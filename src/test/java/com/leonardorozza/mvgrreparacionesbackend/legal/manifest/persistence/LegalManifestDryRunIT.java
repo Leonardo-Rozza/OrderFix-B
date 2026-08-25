@@ -9,7 +9,15 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection.DocumentProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection.RequirementProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetRevisionCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService.DryRunResult;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.LocaleLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoActoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoDocumentoLegal;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -34,8 +42,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeSet;
@@ -142,6 +153,46 @@ class LegalManifestDryRunIT {
         assertThat(after.called()).isTrue();
         assertThat(after.lastValue()).isGreaterThanOrEqualTo(before.lastValue());
         assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
+    }
+
+    @Test
+    void requiredSetRevisionsAreReconstructedFromPostgresAndTheTransactionRollsBack() {
+        Map<String, Long> baseline = requiredTableCounts(jdbc);
+        Map<String, Long> allLegalBaseline = tableCounts(jdbc, true);
+        LegalDryRunPersistence persistence = v27Context.getBean(LegalDryRunPersistence.class);
+        LegalRequiredSetRevisionCalculator calculator =
+                v27Context.getBean(LegalRequiredSetRevisionCalculator.class);
+        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
+
+        List<ScopeRevisionEvidence> evidence = Objects.requireNonNull(
+                transaction.execute(status -> {
+                    try {
+                        persistence.configureTransaction();
+                        persistence.stageAndValidate(goldenRelease);
+                        UUID publicationId = Objects.requireNonNull(jdbc.queryForObject("""
+                                SELECT id
+                                  FROM legal_publicaciones
+                                 WHERE publication_external_id = ?
+                                """, UUID.class,
+                                goldenRelease.plan().manifest().publicationId()));
+                        assertImportedVersionsRemainDraft(publicationId);
+                        return reconstructScopeRevisions(publicationId, calculator);
+                    } finally {
+                        status.setRollbackOnly();
+                    }
+                }),
+                "required-set revision evidence");
+
+        assertThat(evidence).hasSize(8);
+        assertThat(evidence)
+                .extracting(ScopeRevisionEvidence::scopeIdentity)
+                .doesNotHaveDuplicates();
+        assertThat(evidence).allSatisfy(scope ->
+                assertThat(scope.calculatedRevision())
+                        .as(scope.scopeIdentity())
+                        .isEqualTo(scope.storedRevision()));
+        assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
+        assertThat(tableCounts(jdbc, true)).isEqualTo(allLegalBaseline);
     }
 
     @Test
@@ -269,6 +320,68 @@ class LegalManifestDryRunIT {
         assertThat(result.newRequirementVersions()).isZero();
         assertThat(result.reusedRequirementVersions()).isEqualTo(6);
         assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
+    }
+
+    @Test
+    void reusedHistoricalVersionsKeepTheirIdsOrdinalsAndScopeRevisions()
+            throws Exception {
+        commitValidatedRelease(goldenRelease);
+        UUID seededPublicationId = publicationId(
+                goldenRelease.plan().manifest().publicationId());
+        HistoricalVersionGraph seededGraph = captureVersionGraph(seededPublicationId);
+        LegalRequiredSetRevisionCalculator calculator =
+                v27Context.getBean(LegalRequiredSetRevisionCalculator.class);
+        List<ScopeRevisionEvidence> seededRevisions = reconstructScopeRevisions(
+                seededPublicationId,
+                calculator);
+        ValidatedRelease incoming = copyAndValidateGolden(
+                "release-reuse-revisions-v1",
+                ReleaseMutation.NONE);
+        Map<String, Long> baseline = requiredTableCounts(jdbc);
+        Map<String, Long> allLegalBaseline = tableCounts(jdbc, true);
+        LegalDryRunPersistence persistence = v27Context.getBean(LegalDryRunPersistence.class);
+        TransactionTemplate transaction = v27Context.getBean(TransactionTemplate.class);
+
+        HistoricalReuseEvidence evidence = Objects.requireNonNull(
+                transaction.execute(status -> {
+                    try {
+                        persistence.configureTransaction();
+                        DryRunResult result = persistence.stageAndValidate(incoming);
+                        UUID incomingPublicationId = publicationId(
+                                incoming.plan().manifest().publicationId());
+                        return new HistoricalReuseEvidence(
+                                result,
+                                captureVersionGraph(incomingPublicationId),
+                                reconstructScopeRevisions(incomingPublicationId, calculator));
+                    } finally {
+                        status.setRollbackOnly();
+                    }
+                }),
+                "historical reuse evidence");
+
+        assertThat(evidence.result().newDocumentVersions()).isZero();
+        assertThat(evidence.result().reusedDocumentVersions()).isEqualTo(11);
+        assertThat(evidence.result().newRequirementVersions()).isZero();
+        assertThat(evidence.result().reusedRequirementVersions()).isEqualTo(6);
+        assertThat(seededGraph.publicationDocuments()).hasSize(11);
+        assertThat(seededGraph.publicationRequirements()).hasSize(6);
+        assertThat(seededGraph.scopeMembers()).isNotEmpty();
+        assertThat(seededGraph.requirementDocuments()).isNotEmpty();
+        assertThat(evidence.graph())
+                .as("the second publication must reuse every historical UUID and ordinal")
+                .isEqualTo(seededGraph);
+        assertThat(seededRevisions).hasSize(8).allSatisfy(scope ->
+                assertThat(scope.calculatedRevision())
+                        .as(scope.scopeIdentity())
+                        .isEqualTo(scope.storedRevision()));
+        assertThat(evidence.scopeRevisions())
+                .hasSize(8)
+                .containsExactlyElementsOf(seededRevisions)
+                .allSatisfy(scope -> assertThat(scope.calculatedRevision())
+                        .as(scope.scopeIdentity())
+                        .isEqualTo(scope.storedRevision()));
+        assertThat(requiredTableCounts(jdbc)).isEqualTo(baseline);
+        assertThat(tableCounts(jdbc, true)).isEqualTo(allLegalBaseline);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -425,6 +538,243 @@ class LegalManifestDryRunIT {
         }
     }
 
+    private static List<ScopeRevisionEvidence> reconstructScopeRevisions(
+            UUID publicationId,
+            LegalRequiredSetRevisionCalculator calculator) {
+        List<PersistedScopeRow> scopes = jdbc.query("""
+                SELECT id, locale, contexto, audiencia, required_set_revision
+                  FROM legal_requisito_conjuntos
+                 WHERE publicacion_id = ?
+                 ORDER BY locale, contexto, audiencia
+                """, (resultSet, rowNumber) -> new PersistedScopeRow(
+                resultSet.getObject("id", UUID.class),
+                LocaleLegal.fromCodigo(resultSet.getString("locale")),
+                ContextoLegal.valueOf(resultSet.getString("contexto")),
+                resultSet.getString("audiencia"),
+                resultSet.getString("required_set_revision")),
+                publicationId);
+
+        List<ScopeRevisionEvidence> evidence = new ArrayList<>(scopes.size());
+        for (PersistedScopeRow scope : scopes) {
+            List<PersistedRequirementRow> persistedRequirements = jdbc.query("""
+                    SELECT m.manifest_ordinal AS member_ordinal,
+                           pr.manifest_ordinal AS publication_ordinal,
+                           rv.id AS requisito_version_id,
+                           rl.contexto,
+                           rl.tipo_acto,
+                           rv.afirmacion,
+                           rv.afirmacion_sha256,
+                           rv.requerido
+                      FROM legal_requisito_conjunto_miembros m
+                      JOIN legal_publicacion_requisitos pr
+                        ON pr.publicacion_id = m.publicacion_id
+                       AND pr.requisito_version_id = m.requisito_version_id
+                      JOIN legal_requisito_versiones rv
+                        ON rv.id = m.requisito_version_id
+                      JOIN legal_requisito_lineas rl
+                        ON rl.id = m.requisito_linea_id
+                     WHERE m.conjunto_id = ?
+                     ORDER BY m.manifest_ordinal
+                    """, (resultSet, rowNumber) -> new PersistedRequirementRow(
+                    resultSet.getInt("member_ordinal"),
+                    resultSet.getInt("publication_ordinal"),
+                    resultSet.getObject("requisito_version_id", UUID.class),
+                    ContextoLegal.valueOf(resultSet.getString("contexto")),
+                    TipoActoLegal.valueOf(resultSet.getString("tipo_acto")),
+                    resultSet.getString("afirmacion"),
+                    resultSet.getString("afirmacion_sha256"),
+                    resultSet.getBoolean("requerido")),
+                    scope.id());
+
+            List<RequirementProjection> requirements = new ArrayList<>(
+                    persistedRequirements.size());
+            for (PersistedRequirementRow requirement : persistedRequirements) {
+                assertThat(requirement.memberOrdinal())
+                        .as("member/publication ordinal for %s", requirement.versionId())
+                        .isEqualTo(requirement.publicationOrdinal());
+                requirements.add(new RequirementProjection(
+                        requirement.versionId(),
+                        requirement.context(),
+                        requirement.actType(),
+                        requirement.statement(),
+                        requirement.statementSha256(),
+                        reconstructDocuments(requirement.versionId()),
+                        requirement.required()));
+            }
+
+            LegalRequiredSetProjection projection = new LegalRequiredSetProjection(
+                    scope.context(),
+                    scope.locale(),
+                    requirements);
+            evidence.add(new ScopeRevisionEvidence(
+                    scope.context().name() + "/" + scope.audience(),
+                    scope.storedRevision(),
+                    calculator.calculate(projection)));
+        }
+        return List.copyOf(evidence);
+    }
+
+    private static UUID publicationId(String externalId) {
+        return Objects.requireNonNull(jdbc.queryForObject("""
+                SELECT id
+                  FROM legal_publicaciones
+                 WHERE publication_external_id = ?
+                """, UUID.class, externalId));
+    }
+
+    private static HistoricalVersionGraph captureVersionGraph(UUID publicationId) {
+        List<PublicationDocumentReference> publicationDocuments = jdbc.query("""
+                SELECT dl.clave,
+                       pd.documento_version_id,
+                       pd.manifest_ordinal
+                  FROM legal_publicacion_documentos pd
+                  JOIN legal_documento_versiones dv
+                    ON dv.id = pd.documento_version_id
+                  JOIN legal_documento_lineas dl
+                    ON dl.id = dv.documento_linea_id
+                 WHERE pd.publicacion_id = ?
+                 ORDER BY pd.manifest_ordinal
+                """, (resultSet, rowNumber) -> new PublicationDocumentReference(
+                resultSet.getString("clave"),
+                resultSet.getObject("documento_version_id", UUID.class),
+                resultSet.getInt("manifest_ordinal")),
+                publicationId);
+        List<PublicationRequirementReference> publicationRequirements = jdbc.query("""
+                SELECT rl.clave,
+                       pr.requisito_version_id,
+                       pr.manifest_ordinal
+                  FROM legal_publicacion_requisitos pr
+                  JOIN legal_requisito_versiones rv
+                    ON rv.id = pr.requisito_version_id
+                  JOIN legal_requisito_lineas rl
+                    ON rl.id = rv.requisito_linea_id
+                 WHERE pr.publicacion_id = ?
+                 ORDER BY pr.manifest_ordinal
+                """, (resultSet, rowNumber) -> new PublicationRequirementReference(
+                resultSet.getString("clave"),
+                resultSet.getObject("requisito_version_id", UUID.class),
+                resultSet.getInt("manifest_ordinal")),
+                publicationId);
+        List<ScopeMemberReference> scopeMembers = jdbc.query("""
+                SELECT c.locale,
+                       c.contexto,
+                       c.audiencia,
+                       rl.clave,
+                       m.requisito_version_id,
+                       m.manifest_ordinal
+                  FROM legal_requisito_conjuntos c
+                  JOIN legal_requisito_conjunto_miembros m
+                    ON m.conjunto_id = c.id
+                  JOIN legal_requisito_versiones rv
+                    ON rv.id = m.requisito_version_id
+                  JOIN legal_requisito_lineas rl
+                    ON rl.id = rv.requisito_linea_id
+                 WHERE c.publicacion_id = ?
+                 ORDER BY c.locale, c.contexto, c.audiencia, m.manifest_ordinal
+                """, (resultSet, rowNumber) -> new ScopeMemberReference(
+                resultSet.getString("locale"),
+                resultSet.getString("contexto"),
+                resultSet.getString("audiencia"),
+                resultSet.getString("clave"),
+                resultSet.getObject("requisito_version_id", UUID.class),
+                resultSet.getInt("manifest_ordinal")),
+                publicationId);
+        List<RequirementDocumentReference> requirementDocuments = jdbc.query("""
+                SELECT rl.clave AS requisito_clave,
+                       pr.requisito_version_id,
+                       rd.documento_ordinal,
+                       dl.clave AS documento_clave,
+                       rd.documento_version_id
+                  FROM legal_publicacion_requisitos pr
+                  JOIN legal_requisito_versiones rv
+                    ON rv.id = pr.requisito_version_id
+                  JOIN legal_requisito_lineas rl
+                    ON rl.id = rv.requisito_linea_id
+                  JOIN legal_requisito_documentos rd
+                    ON rd.requisito_version_id = rv.id
+                  JOIN legal_documento_versiones dv
+                    ON dv.id = rd.documento_version_id
+                  JOIN legal_documento_lineas dl
+                    ON dl.id = dv.documento_linea_id
+                 WHERE pr.publicacion_id = ?
+                 ORDER BY pr.manifest_ordinal, rd.documento_ordinal
+                """, (resultSet, rowNumber) -> new RequirementDocumentReference(
+                resultSet.getString("requisito_clave"),
+                resultSet.getObject("requisito_version_id", UUID.class),
+                resultSet.getInt("documento_ordinal"),
+                resultSet.getString("documento_clave"),
+                resultSet.getObject("documento_version_id", UUID.class)),
+                publicationId);
+        return new HistoricalVersionGraph(
+                publicationDocuments,
+                publicationRequirements,
+                scopeMembers,
+                requirementDocuments);
+    }
+
+    private static void assertImportedVersionsRemainDraft(UUID publicationId) {
+        List<String> states = jdbc.queryForList("""
+                SELECT estado
+                  FROM legal_documento_versiones
+                 WHERE publicacion_intro_id = ?
+                UNION ALL
+                SELECT estado
+                  FROM legal_requisito_versiones
+                 WHERE publicacion_intro_id = ?
+                """, String.class, publicationId, publicationId);
+
+        assertThat(states).hasSize(17).containsOnly("BORRADOR");
+    }
+
+    private static List<DocumentProjection> reconstructDocuments(UUID requirementVersionId) {
+        List<PersistedDocumentRow> rows = jdbc.query("""
+                SELECT rd.documento_ordinal,
+                       dv.id AS documento_version_id,
+                       dl.tipo,
+                       dv.version,
+                       dv.titulo,
+                       dv.contenido_markdown,
+                       dv.sha256,
+                       dv.vigente_desde,
+                       dl.locale
+                  FROM legal_requisito_documentos rd
+                  JOIN legal_documento_versiones dv
+                    ON dv.id = rd.documento_version_id
+                  JOIN legal_documento_lineas dl
+                    ON dl.id = dv.documento_linea_id
+                 WHERE rd.requisito_version_id = ?
+                 ORDER BY rd.documento_ordinal
+                """, (resultSet, rowNumber) -> new PersistedDocumentRow(
+                resultSet.getInt("documento_ordinal"),
+                resultSet.getObject("documento_version_id", UUID.class),
+                TipoDocumentoLegal.valueOf(resultSet.getString("tipo")),
+                resultSet.getString("version"),
+                resultSet.getString("titulo"),
+                resultSet.getString("contenido_markdown"),
+                resultSet.getString("sha256"),
+                resultSet.getObject("vigente_desde", OffsetDateTime.class),
+                LocaleLegal.fromCodigo(resultSet.getString("locale"))),
+                requirementVersionId);
+
+        List<DocumentProjection> documents = new ArrayList<>(rows.size());
+        for (int index = 0; index < rows.size(); index++) {
+            PersistedDocumentRow row = rows.get(index);
+            assertThat(row.ordinal())
+                    .as("document ordinal for %s", requirementVersionId)
+                    .isEqualTo(index + 1);
+            documents.add(new DocumentProjection(
+                    row.versionId(),
+                    row.type(),
+                    row.version(),
+                    row.title(),
+                    row.markdown(),
+                    row.sha256(),
+                    row.effectiveAt(),
+                    row.locale()));
+        }
+        return List.copyOf(documents);
+    }
+
     private UUID insertOpenPublication(String externalId) {
         UUID publicationId = UUID.randomUUID();
         jdbc.update("""
@@ -567,6 +917,96 @@ class LegalManifestDryRunIT {
 
     private static String quoteIdentifier(String identifier) {
         return '"' + identifier.replace("\"", "\"\"") + '"';
+    }
+
+    private record PersistedScopeRow(
+            UUID id,
+            LocaleLegal locale,
+            ContextoLegal context,
+            String audience,
+            String storedRevision
+    ) { }
+
+    private record PersistedRequirementRow(
+            int memberOrdinal,
+            int publicationOrdinal,
+            UUID versionId,
+            ContextoLegal context,
+            TipoActoLegal actType,
+            String statement,
+            String statementSha256,
+            boolean required
+    ) { }
+
+    private record PersistedDocumentRow(
+            int ordinal,
+            UUID versionId,
+            TipoDocumentoLegal type,
+            String version,
+            String title,
+            String markdown,
+            String sha256,
+            OffsetDateTime effectiveAt,
+            LocaleLegal locale
+    ) { }
+
+    private record ScopeRevisionEvidence(
+            String scopeIdentity,
+            String storedRevision,
+            String calculatedRevision
+    ) { }
+
+    private record PublicationDocumentReference(
+            String key,
+            UUID versionId,
+            int manifestOrdinal
+    ) { }
+
+    private record PublicationRequirementReference(
+            String key,
+            UUID versionId,
+            int manifestOrdinal
+    ) { }
+
+    private record ScopeMemberReference(
+            String locale,
+            String context,
+            String audience,
+            String requirementKey,
+            UUID requirementVersionId,
+            int manifestOrdinal
+    ) { }
+
+    private record RequirementDocumentReference(
+            String requirementKey,
+            UUID requirementVersionId,
+            int documentOrdinal,
+            String documentKey,
+            UUID documentVersionId
+    ) { }
+
+    private record HistoricalVersionGraph(
+            List<PublicationDocumentReference> publicationDocuments,
+            List<PublicationRequirementReference> publicationRequirements,
+            List<ScopeMemberReference> scopeMembers,
+            List<RequirementDocumentReference> requirementDocuments
+    ) {
+        private HistoricalVersionGraph {
+            publicationDocuments = List.copyOf(publicationDocuments);
+            publicationRequirements = List.copyOf(publicationRequirements);
+            scopeMembers = List.copyOf(scopeMembers);
+            requirementDocuments = List.copyOf(requirementDocuments);
+        }
+    }
+
+    private record HistoricalReuseEvidence(
+            DryRunResult result,
+            HistoricalVersionGraph graph,
+            List<ScopeRevisionEvidence> scopeRevisions
+    ) {
+        private HistoricalReuseEvidence {
+            scopeRevisions = List.copyOf(scopeRevisions);
+        }
     }
 
     @FunctionalInterface

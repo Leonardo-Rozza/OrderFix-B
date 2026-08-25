@@ -206,6 +206,58 @@ class LegalManifestContractValidatorTest {
     }
 
     @Test
+    void blocksMarkdownExpandedBeyondSixteenMiBInOneScope() throws Exception {
+        Path manifestPath = copyGoldenRelease();
+        ObjectNode manifest = readManifest(manifestPath);
+        String prefix = "# Capacidad del scope\n\n";
+        String markdown = prefix
+                + "a".repeat(LegalManifestLimits.MAX_MARKDOWN_BYTES - prefix.length() - 1)
+                + "\n";
+        assertThat(markdown.getBytes(StandardCharsets.UTF_8))
+                .hasSize(LegalManifestLimits.MAX_MARKDOWN_BYTES);
+        Files.writeString(
+                manifestPath.getParent().resolve("capacidad-scope.md"),
+                markdown,
+                StandardCharsets.UTF_8);
+
+        ObjectNode capacityDocument = document(manifest, "terminos").deepCopy();
+        capacityDocument.put("key", "capacidad-scope");
+        capacityDocument.put("source", "capacidad-scope.md");
+        capacityDocument.put("sha256", sha256(markdown));
+        capacityDocument.set("contexts", textArray("ARREPENTIMIENTO"));
+        ((ArrayNode) manifest.path("documents")).add(capacityDocument);
+
+        ArrayNode requirements = (ArrayNode) manifest.path("requirements");
+        for (int index = 0; index < 17; index++) {
+            ObjectNode capacityRequirement = requirement(
+                    manifest,
+                    "account-closure").deepCopy();
+            capacityRequirement.put("key", "scope-capacity-" + index);
+            capacityRequirement.put("context", "ARREPENTIMIENTO");
+            capacityRequirement.set("roles", textArray("USER"));
+            capacityRequirement.put("actType", "LECTURA");
+            String statement = "Declaro la lectura de capacidad número " + index + ".";
+            capacityRequirement.put("statement", statement);
+            capacityRequirement.put("statementSha256", sha256(statement));
+            capacityRequirement.set("documents", textArray("capacidad-scope"));
+            capacityRequirement.put("required", false);
+            requirements.add(capacityRequirement);
+        }
+        persist(manifestPath, manifest);
+
+        LegalManifestValidation<LegalPublicationPlan> result = validateContract(manifestPath);
+
+        assertBlockedWith(
+                result,
+                LegalManifestIssueCode.DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED);
+        assertThat(result.issues())
+                .filteredOn(issue -> issue.code()
+                        == LegalManifestIssueCode.DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED)
+                .extracting(LegalManifestIssue::location)
+                .containsExactly("scopes/ARREPENTIMIENTO/USER");
+    }
+
+    @Test
     void validatesPublisherPlaceholdersAndExactDocumentDigests() throws Exception {
         Path manifestPath = copyGoldenRelease();
         ObjectNode manifest = readManifest(manifestPath);

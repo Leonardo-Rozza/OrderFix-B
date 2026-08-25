@@ -4,6 +4,10 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestLimits;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection.DocumentProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetProjection.RequirementProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetRevisionCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1.DocumentEntry;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1.RequirementEntry;
@@ -18,16 +22,12 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,14 +41,17 @@ import java.util.UUID;
 final class LegalDryRunPersistence {
 
     private static final String DATABASE_LOCATION = "database/legal-manifest";
-    private static final byte[] SCOPE_REVISION_DOMAIN =
-            "ordenfix:legal-dry-run-scope:v1\n".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] ZERO_SEPARATOR = new byte[] {0};
 
     private final JdbcTemplate jdbc;
+    private final LegalRequiredSetRevisionCalculator requiredSetRevisionCalculator;
 
-    LegalDryRunPersistence(JdbcTemplate jdbc) {
+    LegalDryRunPersistence(
+            JdbcTemplate jdbc,
+            LegalRequiredSetRevisionCalculator requiredSetRevisionCalculator) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.requiredSetRevisionCalculator = Objects.requireNonNull(
+                requiredSetRevisionCalculator,
+                "requiredSetRevisionCalculator");
     }
 
     void configureTransaction() {
@@ -659,6 +662,8 @@ final class LegalDryRunPersistence {
                 byOrdinal.put(requirement.manifestOrdinal(), requirement));
         for (ScopePlan scope : plan.scopes()) {
             UUID snapshotId = UUID.randomUUID();
+            String requiredSetRevision = requiredSetRevisionCalculator.calculate(
+                    projectScope(scope, byOrdinal));
             jdbc.update("""
                     INSERT INTO legal_requisito_conjuntos
                         (id, publicacion_id, locale, contexto, audiencia,
@@ -666,7 +671,7 @@ final class LegalDryRunPersistence {
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, snapshotId, publicationId, scope.locale().getCodigo(),
                     scope.context().name(), scope.audience().name(),
-                    provisionalScopeRevision(plan, scope), transactionTime);
+                    requiredSetRevision, transactionTime);
             for (RequirementPlan member : scope.requirements()) {
                 ResolvedRequirement requirement = Objects.requireNonNull(
                         byOrdinal.get(member.manifestOrdinal()), "resolved scope requirement");
@@ -681,21 +686,47 @@ final class LegalDryRunPersistence {
         }
     }
 
-    private static String provisionalScopeRevision(LegalPublicationPlan plan, ScopePlan scope) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(SCOPE_REVISION_DOMAIN);
-            digest.update(plan.canonicalJson().getBytes(StandardCharsets.UTF_8));
-            digest.update(ZERO_SEPARATOR);
-            digest.update(scope.locale().getCodigo().getBytes(StandardCharsets.UTF_8));
-            digest.update(ZERO_SEPARATOR);
-            digest.update(scope.context().name().getBytes(StandardCharsets.UTF_8));
-            digest.update(ZERO_SEPARATOR);
-            digest.update(scope.audience().name().getBytes(StandardCharsets.UTF_8));
-            return "sha256:" + HexFormat.of().formatHex(digest.digest());
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 no está disponible", exception);
-        }
+    private static LegalRequiredSetProjection projectScope(
+            ScopePlan scope,
+            Map<Integer, ResolvedRequirement> requirementsByOrdinal) {
+        List<RequirementProjection> requirements = scope.requirements().stream()
+                .sorted(Comparator.comparingInt(RequirementPlan::manifestOrdinal))
+                .map(member -> Objects.requireNonNull(
+                        requirementsByOrdinal.get(member.manifestOrdinal()),
+                        "resolved scope requirement"))
+                .map(LegalDryRunPersistence::projectRequirement)
+                .toList();
+        return new LegalRequiredSetProjection(scope.context(), scope.locale(), requirements);
+    }
+
+    private static RequirementProjection projectRequirement(
+            ResolvedRequirement requirement) {
+        RequirementEntry declaration = requirement.declaration();
+        List<DocumentProjection> documents = requirement.documents().stream()
+                .map(LegalDryRunPersistence::projectDocument)
+                .toList();
+        return new RequirementProjection(
+                requirement.versionId(),
+                declaration.context(),
+                declaration.actType(),
+                declaration.statement(),
+                declaration.statementSha256(),
+                documents,
+                declaration.required());
+    }
+
+    private static DocumentProjection projectDocument(ResolvedDocument document) {
+        DocumentPlan plan = document.plan();
+        DocumentEntry declaration = plan.declaration();
+        return new DocumentProjection(
+                document.versionId(),
+                declaration.type(),
+                declaration.version(),
+                plan.title(),
+                plan.markdown(),
+                declaration.sha256(),
+                declaration.effectiveAt(),
+                declaration.locale());
     }
 
     private static String databaseReviewStatus(ReviewStatus status) {

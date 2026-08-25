@@ -104,6 +104,10 @@ final class LegalManifestContractValidator {
         }
 
         List<LegalManifestIssue> issues = new ArrayList<>();
+        validateExpandedScopeMarkdownCapacity(
+                requirements,
+                releaseDocuments.documents(),
+                issues);
         validatePublisher(manifest.publisherSnapshot(), issues);
         validateReview("review/legal", manifest.review().legal(), issues);
         validateReview("review/accounting", manifest.review().accounting(), issues);
@@ -431,6 +435,73 @@ final class LegalManifestContractValidator {
         return new RequirementValidation(Set.copyOf(referencedDocumentKeys));
     }
 
+    private static void validateExpandedScopeMarkdownCapacity(
+            List<RequirementEntry> requirements,
+            List<DocumentSource> sources,
+            List<LegalManifestIssue> issues) {
+        Map<String, List<Long>> markdownBytesByDocumentKey = new LinkedHashMap<>();
+        for (DocumentSource source : sources) {
+            markdownBytesByDocumentKey
+                    .computeIfAbsent(source.key(), ignored -> new ArrayList<>())
+                    .add((long) source.bytes().length);
+        }
+        issues.addAll(validateExpandedScopeMarkdownCapacity(
+                requirements,
+                markdownBytesByDocumentKey));
+    }
+
+    static List<LegalManifestIssue> validateExpandedScopeMarkdownCapacity(
+            List<RequirementEntry> requirements,
+            Map<String, List<Long>> markdownBytesByDocumentKey) {
+        Objects.requireNonNull(requirements, "requirements");
+        Objects.requireNonNull(markdownBytesByDocumentKey, "markdownBytesByDocumentKey");
+
+        Map<ScopeIdentity, Long> expandedBytesByScope = new LinkedHashMap<>();
+        for (RequirementEntry requirement : requirements) {
+            long requirementBytes = 0L;
+            for (String documentKey : requirement.documents()) {
+                List<Long> matchingDocuments = markdownBytesByDocumentKey.get(documentKey);
+                if (matchingDocuments == null) {
+                    continue;
+                }
+                for (Long documentBytes : matchingDocuments) {
+                    requirementBytes = safeAddMarkdownBytes(
+                            requirementBytes,
+                            Objects.requireNonNull(documentBytes, "documentBytes"));
+                }
+            }
+
+            for (AudienciaLegal audience : requirement.roles()) {
+                ScopeIdentity scope = new ScopeIdentity(requirement.context(), audience);
+                expandedBytesByScope.put(
+                        scope,
+                        safeAddMarkdownBytes(
+                                expandedBytesByScope.getOrDefault(scope, 0L),
+                                requirementBytes));
+            }
+        }
+
+        List<LegalManifestIssue> issues = new ArrayList<>();
+        for (Map.Entry<ScopeIdentity, Long> scope : expandedBytesByScope.entrySet()) {
+            if (scope.getValue() > LegalManifestLimits.MAX_EXPANDED_SCOPE_MARKDOWN_BYTES) {
+                issues.add(issue(
+                        LegalManifestIssueCode.DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED,
+                        scopeLocation(scope.getKey())));
+            }
+        }
+        return List.copyOf(issues);
+    }
+
+    private static long safeAddMarkdownBytes(long current, long increment) {
+        if (current < 0L || increment < 0L) {
+            throw new IllegalArgumentException("Los tamaños Markdown no pueden ser negativos");
+        }
+        if (current > Long.MAX_VALUE - increment) {
+            return Long.MAX_VALUE;
+        }
+        return current + increment;
+    }
+
     private static void validateRequiredDocumentTypes(
             Set<TipoDocumentoLegal> presentTypes,
             List<LegalManifestIssue> issues) {
@@ -590,6 +661,13 @@ final class LegalManifestContractValidator {
 
     private static String requirementLocation(int index) {
         return "requirements/" + index;
+    }
+
+    private static String scopeLocation(ScopeIdentity scope) {
+        return "scopes/"
+                + scope.context().name()
+                + "/"
+                + scope.audience().name();
     }
 
     private record DocumentIdentity(String key, String version) {

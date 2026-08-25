@@ -374,6 +374,33 @@ El resultado se canonicaliza con RFC 8785, se hashea sobre los bytes UTF-8 con S
 prefijo `sha256:`. Un vector golden congela la estructura exacta y una prueba reconstruye esa misma
 proyección desde las filas importadas para volver a obtener la revisión.
 
+La proyección tipada sólo contiene strings, booleanos, arrays y claves de objeto fijas. Su camino
+productivo emite directamente el orden canónico RFC 8785 hacia SHA-256, sin construir un árbol JSON,
+un documento completo intermedio ni copias de los bytes canónicos. El parser de manifiestos externos
+continúa usando la librería JCS después de `StrictJsonReader`; no aparece una entrada genérica nueva.
+El writer tipado se acredita byte a byte contra esa librería con comillas, barras, controles,
+Unicode astral y el vector golden.
+
+### Addendum de capacidad previo al Corte 1
+
+La auditoría de implementación detectó que el límite de 16 MiB sobre fuentes Markdown únicas no
+acotaba el tamaño de la respuesta expandida: hasta 256 requisitos podían repetir el contenido de un
+mismo documento en sus arrays y llevar la proyección a varios GiB antes de JCS.
+
+Se congela por eso una segunda aplicación del mismo presupuesto de 16 MiB, esta vez por scope y
+sobre la suma UTF-8 de cada aparición de `contenidoMarkdown`. Un documento compartido cuenta una
+vez por cada requisito que lo proyecta, porque el DTO prospectivo repite efectivamente ese contenido.
+Exactamente 16 MiB es válido; superarlo bloquea el manifiesto con
+`DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED` en `scopes/{CONTEXTO}/{AUDIENCIA}`.
+
+El contrato estático acredita este límite antes de construir la proyección o abrir PostgreSQL. El
+calculator lo vuelve a comprobar, sin crear copias UTF-8, como defensa de la frontera tipada. También
+reacredita los máximos de requisitos y documentos por requisito, y los records tipados acotan
+afirmación, título, versión y digests con los máximos ya congelados por schema/Markdown. Las
+cantidades se comprueban antes de ejecutar las copias defensivas de listas. No cambia el JSON ni el
+digest de ningún release aceptado: sólo rechaza una respuesta que no podría procesarse con el
+presupuesto operativo acordado.
+
 El contrato previo describe `RequisitosLegalesPendientesResponse` como posiblemente multicontexto y
 actor-específico, pero V27 guarda una revisión por scope y su trigger de aceptación compara una única
 revisión de lote contra cada scope. Esta incompatibilidad no afecta importación ni sello, pero impide

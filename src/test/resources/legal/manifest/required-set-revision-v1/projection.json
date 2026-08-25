@@ -1,0 +1,59 @@
+{
+  "contexto": "REGISTRO",
+  "locale": "es-AR",
+  "requisitos": [
+    {
+      "id": "00000000-0000-0000-0000-0000000000b2",
+      "contexto": "REGISTRO",
+      "tipoActo": "ACEPTACION",
+      "afirmacion": "Acepto los términos de OrdenFix.",
+      "afirmacionSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "documentos": [
+        {
+          "id": "10000000-0000-0000-0000-000000000002",
+          "tipo": "POLITICA_PRIVACIDAD",
+          "version": "1.0.0",
+          "titulo": "Privacidad",
+          "contenidoMarkdown": "# Privacidad\n\nDatos y derechos.\n",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "vigenteDesde": "2026-09-01T03:00:00.123456Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        },
+        {
+          "id": "10000000-0000-0000-0000-000000000001",
+          "tipo": "TERMINOS_SERVICIO",
+          "version": "1.0.0",
+          "titulo": "Términos y condiciones",
+          "contenidoMarkdown": "# Términos\n\nContenido legal.\n",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "vigenteDesde": "2026-09-01T03:00:00Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        }
+      ],
+      "requerido": true
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000000a1",
+      "contexto": "REGISTRO",
+      "tipoActo": "LECTURA",
+      "afirmacion": "Declaro haber leído el aviso.",
+      "afirmacionSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "documentos": [
+        {
+          "id": "10000000-0000-0000-0000-000000000002",
+          "tipo": "POLITICA_PRIVACIDAD",
+          "version": "1.0.0",
+          "titulo": "Privacidad",
+          "contenidoMarkdown": "# Privacidad\n\nDatos y derechos.\n",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "vigenteDesde": "2026-09-01T03:00:00.123456Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        }
+      ],
+      "requerido": false
+    }
+  ]
+}

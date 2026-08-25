@@ -212,15 +212,18 @@ class Rfc8785CanonicalizerTest {
     }
 
     @Test
-    void jcsCannotBeInvokedWithNullOrRawBytesThroughThisAdapter() {
-        assertThatThrownBy(() -> canonicalizer.canonicalize(null))
+    void jcsAcceptsOnlyTheStrictDocumentOrTypedProjectionThroughThisAdapter() {
+        assertThatThrownBy(() -> canonicalizer.canonicalize(
+                (StrictJsonReader.StrictJsonDocument) null))
                 .isInstanceOf(NullPointerException.class);
         assertThat(Modifier.isPublic(Rfc8785Canonicalizer.class.getModifiers())).isFalse();
         assertThat(Rfc8785Canonicalizer.class.getDeclaredMethods())
                 .filteredOn(method -> method.getName().equals("canonicalize"))
-                .singleElement()
-                .satisfies(method -> assertThat(method.getParameterTypes())
-                        .containsExactly(StrictJsonReader.StrictJsonDocument.class));
+                .allSatisfy(method -> assertThat(method.getParameterCount()).isOne())
+                .extracting(method -> method.getParameterTypes()[0])
+                .containsExactlyInAnyOrder(
+                        StrictJsonReader.StrictJsonDocument.class,
+                        LegalRequiredSetProjection.class);
     }
 
     private static Stream<String> compatibleOfficialVectorNames() {

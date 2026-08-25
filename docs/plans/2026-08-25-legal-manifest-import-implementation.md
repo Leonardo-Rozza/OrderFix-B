@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: aprobado para implementar; Cortes 1 a 7 pendientes
+Estado: Corte 1 completado; Cortes 2 a 7 pendientes
 
 Diseño aprobado:
 
@@ -55,6 +55,8 @@ de ese commit de planificación.
 
 ## Corte 1 — Revisión definitiva RFC 8785 por scope
 
+Estado: completado el 2026-08-25.
+
 ### Objetivo
 
 Reemplazar la revisión provisional del dry-run por la misma revisión productiva que persistirá el
@@ -89,23 +91,29 @@ Modificar:
 4. Usar UUID definitivos ya resueltos y proyectar `estado="VIGENTE"` sin modificar la fila
    `BORRADOR`.
 5. Normalizar `vigenteDesde` a `Instant` UTC, máximo seis dígitos fraccionarios.
-6. Reutilizar el adaptador RFC 8785 existente mediante una entrada interna de JSON generado; no
-   aceptar texto externo sin el parser estricto.
+6. Reutilizar el adaptador RFC 8785 existente con una entrada exclusivamente tipada que emite el
+   canónico directo a SHA-256; no materializar el scope productivo ni aceptar texto externo sin el
+   parser estricto. Acreditar su equivalencia byte a byte contra JCS.
 7. Calcular `sha256:<64-hex>` sobre los bytes UTF-8 canónicos, sin dominio provisional.
 8. Inyectar el calculator en `LegalDryRunPersistence` y eliminar
    `ordenfix:legal-dry-run-scope:v1`.
 9. Reconstruir la proyección desde PostgreSQL en el IT y exigir el mismo hash persistido.
+10. Aplicar antes de la proyección el presupuesto de 16 MiB de Markdown expandido por scope; cada
+    aparición documental cuenta y el calculator repite el guard sin asignar el JSON.
 
 ### Pruebas y puerta
 
 Cubrir:
 
 - vector golden exacto de proyección, canonical y SHA;
+- equivalencia del writer streaming con JCS para escapes, controles y Unicode astral;
 - orden de propiedades/arrays y estabilidad ante orden de entrada distinto;
 - cambio de UUID, contenido, digest, afirmación, requerido, timestamp o documento cambia el hash;
 - `BORRADOR` almacenado se proyecta como `VIGENTE`;
 - timestamp con offset equivalente produce la misma salida UTC;
 - precisión superior a microsegundos continúa bloqueada por el gate DB;
+- exactamente 16 MiB expandidos pasa, 16 MiB más una aparición bloquea antes de JCS y una suma
+  artificial que desborda `long` continúa fallando cerrada;
 - 8 scopes golden tienen revisiones reproducibles y el dry-run sigue rollback-only.
 
 ```bash
@@ -113,6 +121,20 @@ Cubrir:
 ./mvnw -Dit.test=LegalManifestDryRunIT verify
 git diff --check
 ```
+
+### Evidencia del Corte 1
+
+- golden canónico fijado en
+  `sha256:e5dbad24bbcbdb35bbd0f76fe4969d23d298db086910d8593fb6576d0550aa5c`;
+- writer tipado equivalente byte a byte con JCS para escapes, controles y Unicode astral;
+- caso máximo de 16 MiB Markdown —aproximadamente 32 MiB escapados— calculado con `-Xmx128m`
+  sin materializar el JSON y sin `OutOfMemoryError`;
+- 8 scopes frescos reconstruidos desde PostgreSQL y 8 scopes con versiones históricas reutilizadas,
+  conservando UUID, `manifest_ordinal` y `documento_ordinal`;
+- 17 versiones nuevas acreditadas en `BORRADOR`, aunque el contrato canónico proyecta `VIGENTE`;
+- transacciones de evidencia marcadas rollback-only y cero delta residual en tablas legales;
+- reportes v1 sin campos nuevos y parser externo todavía confinado a `StrictJsonReader` más JCS.
+- verificación completa: 576 pruebas unitarias y 16 pruebas de integración, todas sin fallos.
 
 Commit: `feat(legal): calcula revision definitiva de requisitos`.
 

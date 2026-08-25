@@ -19,6 +19,8 @@ public final class LegalManifestLimits {
     public static final int MAX_DOCUMENTS_PER_REQUIREMENT = 16;
     public static final int MAX_MARKDOWN_BYTES = 1_048_576;
     public static final int MAX_TOTAL_MARKDOWN_BYTES = 16_777_216;
+    public static final long MAX_EXPANDED_SCOPE_MARKDOWN_BYTES =
+            MAX_TOTAL_MARKDOWN_BYTES;
     public static final int MAX_EXPOSED_ISSUES = 200;
 
     private LegalManifestLimits() {
