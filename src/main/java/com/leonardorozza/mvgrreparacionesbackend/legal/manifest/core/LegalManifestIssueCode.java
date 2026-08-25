@@ -210,7 +210,34 @@ public enum LegalManifestIssueCode {
             "Falta un requisito obligatorio para un scope legal."),
     REQUIRED_REQUIREMENT_DOCUMENT_MISSING(
             LegalManifestStatus.BLOCKED,
-            "Un scope obligatorio no cubre todos sus tipos documentales.");
+            "Un scope obligatorio no cubre todos sus tipos documentales."),
+    DB_PERSISTED_CONFLICT(
+            LegalManifestStatus.BLOCKED,
+            "El release entra en conflicto con una identidad legal ya persistida."),
+    DB_CONSTRAINT(
+            LegalManifestStatus.BLOCKED,
+            "El grafo legal provisional no cumple una restricción de persistencia."),
+    DB_ISOLATION(
+            LegalManifestStatus.ERROR,
+            "La base no permitió ejecutar el protocolo legal con aislamiento READ COMMITTED."),
+    DB_LOCK_TIMEOUT(
+            LegalManifestStatus.ERROR,
+            "La simulación legal agotó el tiempo de espera de un lock."),
+    DB_STATEMENT_TIMEOUT(
+            LegalManifestStatus.ERROR,
+            "La simulación legal agotó el tiempo máximo de una operación SQL."),
+    DB_CONNECTION(
+            LegalManifestStatus.ERROR,
+            "No se pudo mantener una conexión válida con la base para la simulación legal."),
+    DB_CONCURRENCY(
+            LegalManifestStatus.ERROR,
+            "La simulación legal no pudo completarse por un conflicto transaccional concurrente."),
+    DB_SCHEMA_INCOMPATIBLE(
+            LegalManifestStatus.ERROR,
+            "La base no posee el schema legal V27 compatible requerido por el dry-run."),
+    DB_OPERATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la operación de base del dry-run legal.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;
