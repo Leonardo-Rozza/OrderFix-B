@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-24
 
-Estado: en ejecución; Cortes 1 a 4 backend cerrados y mirror frontend pendiente
+Estado: en ejecución; Cortes 1 a 4 y mirror frontend cerrados; Cortes 5 a 7 pendientes
 
 Diseño aprobado:
 
@@ -334,7 +334,7 @@ monolítico.
 
 Cubrir cada fila de matriz, agregación entre requisitos, roles múltiples, docs opcionales, docs
 huérfanos, múltiples docs del mismo tipo, referencias/contexts incompatibles, 11 tipos presentes y
-paridad/diferencias deliberadas con los 35 códigos legales del guard frontend.
+paridad con los 35 códigos legales del guard frontend.
 
 La fixture golden congela además estos fingerprints reproducibles:
 
@@ -347,9 +347,10 @@ Markdown total: 672 bytes
 ```
 
 La prueba backend de paridad es hermética: no busca un checkout hermano. Congela el schema, enums,
-matriz, placeholders, vectores Markdown y los 35 códigos del guard; también registra 18 garantías
-adicionales del backend y las dos diferencias deliberadas (tipos repetidos y binding sólo opcional).
-El espejo frontend se actualiza en un commit propio antes de declarar cerrada la paridad entre
+matriz, placeholders, vectores Markdown y los 35 códigos del guard; también registra 14 garantías
+adicionales del backend y un código legacy reservado sin emisión. El espejo frontend retiró los dos
+sobrebloqueos de tipos repetidos y binding sólo opcional en
+`d38e276 fix(legal): alinea guard con contrato backend v1`; la paridad estática queda cerrada entre
 repositorios.
 
 Puerta backend ejecutada con Java 21 después de la auditoría independiente: 91 pruebas enfocadas y
@@ -542,15 +543,16 @@ físicos posibles (WAL/locks/secuencias), matriz, SHA del schema y pasos reprodu
 
 ### Frontend
 
-Modificar sólo en commit propio:
+El mirror funcional ya quedó completado en un commit propio (`d38e276`) sobre:
 
 - `scripts/lib/public-release-validation.mjs` o su test para congelar el SHA del schema;
 - `scripts/check-public-release.test.mjs` para acreditar drift;
 - `docs/plans/2026-08-23-lanzamiento-publico-confianza-cuenta-plan.md`;
 - `docs/legal/README.md`.
 
-El guard frontend conserva sus restricciones propias. No se cambia a los exit codes del CLI ni se
-conecta todavía al backend.
+En el Corte 7 sólo se reejecuta la regresión cross-repo y se actualiza el cierre documental si JDBC
+o la CLI prueban una diferencia nueva. No se cambia a los exit codes del CLI ni se conecta todavía
+el frontend al backend.
 
 ### Verificación final
 
@@ -587,8 +589,8 @@ Commits de cierre sugeridos:
 
 - backend: `test(legal): endurece CLI y rollback del dry-run`;
 - backend: `docs(legal): cierra fase 2.3A`;
-- frontend: `test(legal): congela paridad del schema v1`;
-- frontend: `docs(plan): registra validador backend 2.3A`.
+- frontend: `d38e276 fix(legal): alinea guard con contrato backend v1`;
+- frontend: `docs(plan): registra paridad estatica del manifiesto v1`.
 
 ## Criterio de salida
 

@@ -28,9 +28,13 @@ import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.Lega
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.DOCUMENT_SYMLINK_FORBIDDEN;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_EDITORIAL_MARKER_FOUND;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_PLACEHOLDER_FOUND;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_BOM_FORBIDDEN;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_CONTROL_FORBIDDEN;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_CR_FORBIDDEN;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_DIGEST_MISMATCH;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_NFC_REQUIRED;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_SURROGATE_INVALID;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_UNICODE_NONCHARACTER_FORBIDDEN;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.LEGAL_TEXT_UTF8_INVALID;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.MANIFEST_CONTACTS_INVALID;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode.MANIFEST_DUPLICATE_DOCUMENT;
@@ -138,11 +142,7 @@ class LegalManifestFrontendParityTest {
             LegalManifestIssueCode.MANIFEST_FILE_CHANGED,
             LegalManifestIssueCode.DOCUMENT_FILE_CHANGED,
             LegalManifestIssueCode.DOCUMENT_SIZE_LIMIT_EXCEEDED,
-            LegalManifestIssueCode.DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED,
-            LegalManifestIssueCode.LEGAL_TEXT_BOM_FORBIDDEN,
-            LegalManifestIssueCode.LEGAL_TEXT_CONTROL_FORBIDDEN,
-            LegalManifestIssueCode.LEGAL_TEXT_SURROGATE_INVALID,
-            LegalManifestIssueCode.LEGAL_TEXT_UNICODE_NONCHARACTER_FORBIDDEN
+            LegalManifestIssueCode.DOCUMENT_TOTAL_SIZE_LIMIT_EXCEEDED
     );
 
     private static final Map<String, IssueParity> ISSUE_PARITY = Map.ofEntries(
@@ -150,7 +150,10 @@ class LegalManifestFrontendParityTest {
             entry("EDITORIAL_MARKER_FOUND", mapped(LEGAL_EDITORIAL_MARKER_FOUND)),
             entry("DOCUMENT_UTF8_REQUIRED", mapped(LEGAL_TEXT_UTF8_INVALID)),
             entry("DOCUMENT_CANONICAL_TEXT_REQUIRED",
-                    split(LEGAL_TEXT_CR_FORBIDDEN, LEGAL_TEXT_NFC_REQUIRED)),
+                    split(LEGAL_TEXT_BOM_FORBIDDEN, LEGAL_TEXT_CR_FORBIDDEN,
+                            LEGAL_TEXT_CONTROL_FORBIDDEN, LEGAL_TEXT_NFC_REQUIRED,
+                            LEGAL_TEXT_SURROGATE_INVALID,
+                            LEGAL_TEXT_UNICODE_NONCHARACTER_FORBIDDEN)),
             entry("MANIFEST_SCHEMA_UNAVAILABLE", mapped(MANIFEST_SCHEMA_UNAVAILABLE)),
             entry("MANIFEST_SCHEMA_INVALID", mapped(MANIFEST_SCHEMA_INVALID)),
             entry("MANIFEST_PUBLISHER_INVALID", mapped(MANIFEST_SCHEMA_INVALID)),
@@ -162,7 +165,7 @@ class LegalManifestFrontendParityTest {
                             DOCUMENT_CONTEXT_DUPLICATE)),
             entry("MANIFEST_DUPLICATE_DOCUMENT",
                     split(MANIFEST_DUPLICATE_DOCUMENT, REQUIREMENT_DOCUMENT_AMBIGUOUS)),
-            entry("MANIFEST_DUPLICATE_DOCUMENT_TYPE", deliberate()),
+            entry("MANIFEST_DUPLICATE_DOCUMENT_TYPE", reserved()),
             entry("MANIFEST_DUPLICATE_DOCUMENT_SOURCE", mapped(DOCUMENT_SOURCE_DUPLICATE)),
             entry("DOCUMENT_PATH_INVALID",
                     split(DOCUMENT_SOURCE_INVALID, DOCUMENT_NOT_REGULAR,
@@ -180,15 +183,17 @@ class LegalManifestFrontendParityTest {
                             REQUIREMENT_DOCUMENT_DUPLICATE)),
             entry("MANIFEST_DUPLICATE_REQUIREMENT", mapped(MANIFEST_DUPLICATE_REQUIREMENT)),
             entry("REQUIREMENT_CANONICAL_TEXT_REQUIRED",
-                    split(LEGAL_TEXT_CR_FORBIDDEN, LEGAL_TEXT_NFC_REQUIRED)),
+                    split(LEGAL_TEXT_BOM_FORBIDDEN, LEGAL_TEXT_CR_FORBIDDEN,
+                            LEGAL_TEXT_CONTROL_FORBIDDEN, LEGAL_TEXT_NFC_REQUIRED,
+                            LEGAL_TEXT_SURROGATE_INVALID,
+                            LEGAL_TEXT_UNICODE_NONCHARACTER_FORBIDDEN)),
             entry("REQUIREMENT_DIGEST_MISMATCH", mapped(LEGAL_TEXT_DIGEST_MISMATCH)),
             entry("REQUIREMENT_DOCUMENT_UNKNOWN", mapped(REQUIREMENT_DOCUMENT_UNKNOWN)),
             entry("REQUIREMENT_CONTEXT_MISMATCH", mapped(REQUIREMENT_CONTEXT_MISMATCH)),
             entry("REQUIRED_REQUIREMENT_MISSING", mapped(REQUIRED_REQUIREMENT_MISSING)),
             entry("REQUIRED_REQUIREMENT_DOCUMENT_MISSING",
                     mapped(REQUIRED_REQUIREMENT_DOCUMENT_MISSING)),
-            entry("REQUIRED_DOCUMENT_UNBOUND",
-                    deliberate(REQUIRED_DOCUMENT_UNBOUND)),
+            entry("REQUIRED_DOCUMENT_UNBOUND", mapped(REQUIRED_DOCUMENT_UNBOUND)),
             entry("MANIFEST_NOT_CONFIGURED", adapted(MANIFEST_PATH_REQUIRED)),
             entry("MANIFEST_PATH_INVALID",
                     adapted(MANIFEST_FILENAME_INVALID, RELEASE_ROOT_INVALID,
@@ -344,30 +349,27 @@ class LegalManifestFrontendParityTest {
     }
 
     @Test
-    void accountsForAllThirtyFiveFrontendLegalIssueCodesAndOnlyTwoDeliberateDifferences() {
+    void accountsForAllThirtyFiveFrontendCodesAndTheSingleReservedLegacyCode() {
         assertThat(FRONTEND_LEGAL_ISSUE_CODES).hasSize(35).doesNotHaveDuplicates();
         assertThat(FRONTEND_LEGAL_ISSUE_CODES).doesNotContain("CONTACT_MISMATCH");
         assertThat(ISSUE_PARITY.keySet())
                 .containsExactlyInAnyOrderElementsOf(FRONTEND_LEGAL_ISSUE_CODES);
         assertThat(ISSUE_PARITY.values())
                 .allSatisfy(parity -> {
-                    if (parity.disposition() != Disposition.DELIBERATE_DIFFERENCE) {
+                    if (parity.disposition() != Disposition.LEGACY_RESERVED) {
                         assertThat(parity.backendCodes()).isNotEmpty();
                     }
                 });
         assertThat(ISSUE_PARITY.entrySet().stream()
                 .filter(entry -> entry.getValue().disposition()
-                        == Disposition.DELIBERATE_DIFFERENCE)
+                        == Disposition.LEGACY_RESERVED)
                 .map(Map.Entry::getKey))
-                .containsExactlyInAnyOrder(
-                        "MANIFEST_DUPLICATE_DOCUMENT_TYPE",
-                        "REQUIRED_DOCUMENT_UNBOUND"
-                );
+                .containsExactly("MANIFEST_DUPLICATE_DOCUMENT_TYPE");
     }
 
     @Test
     void freezesTheDocumentedBackendOnlyHardeningAsBlockingGuarantees() {
-        assertThat(BACKEND_ADDITIONAL_GUARANTEE_CODES).hasSize(18);
+        assertThat(BACKEND_ADDITIONAL_GUARANTEE_CODES).hasSize(14);
         assertThat(BACKEND_ADDITIONAL_GUARANTEE_CODES)
                 .allSatisfy(code -> assertThat(code.severity())
                         .isEqualTo(LegalManifestStatus.BLOCKED));
@@ -423,8 +425,8 @@ class LegalManifestFrontendParityTest {
         return parity(Disposition.ENTRYPOINT_ADAPTATION, backendCodes);
     }
 
-    private static IssueParity deliberate(LegalManifestIssueCode... backendCodes) {
-        return parity(Disposition.DELIBERATE_DIFFERENCE, backendCodes);
+    private static IssueParity reserved() {
+        return parity(Disposition.LEGACY_RESERVED);
     }
 
     private static IssueParity parity(
@@ -438,11 +440,8 @@ class LegalManifestFrontendParityTest {
         SHARED_RULE,
         BACKEND_SPLITS_FRONTEND_CODE,
         ENTRYPOINT_ADAPTATION,
-        /**
-         * Exactly two approved differences: repeated document types are valid, and a document
-         * referenced only by optional requirements is bound rather than orphaned.
-         */
-        DELIBERATE_DIFFERENCE
+        /** Reserved frontend code retained for compatibility but no longer emitted. */
+        LEGACY_RESERVED
     }
 
     private record IssueParity(

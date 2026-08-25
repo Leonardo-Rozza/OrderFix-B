@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-24
 
-Estado: diseño aprobado; implementación en curso (Cortes 1 a 4 backend cerrados; mirror frontend
-pendiente)
+Estado: diseño aprobado; implementación en curso (Cortes 1 a 4 y mirror frontend cerrados; Cortes
+5 a 7 pendientes)
 
 Fuentes normativas:
 
@@ -252,32 +252,34 @@ Todo el Markdown, no sólo el H1, rechaza HTML crudo y destinos de enlace con es
 `javascript:`, `vbscript:` o `data:` después de decodificar las entidades admitidas y remover
 controles ASCII. Los autolinks seguros `https:` y `mailto:` no se consideran HTML crudo.
 
-## Paridad deliberada con el guard frontend
+## Paridad con el guard frontend
 
-El schema, sus enums, la matriz mínima de cobertura, placeholders, marcadores editoriales y reglas
-de Markdown se mantienen coordinados entre repositorios. El backend agrega garantías que el parser
-frontend actual todavía no acredita: UTF-8/I-JSON estrictos, BOM, nombres JSON duplicados, trailing
-content, RFC 8785 y límites operativos.
+El schema, sus enums, la matriz mínima de cobertura, placeholders, marcadores editoriales, texto
+canónico y reglas de Markdown se mantienen coordinados entre repositorios. El backend agrega
+garantías autoritativas que el guard frontend no acredita: lectura estricta del manifiesto
+UTF-8/I-JSON, nombres JSON duplicados, trailing content, RFC 8785, límites operativos y detección de
+cambios de archivos entre lecturas.
 
-La copia exacta del schema y el guard equivalente del frontend se actualizan y verifican como puerta
-del Corte 4; este corte backend por sí solo no declara cerrada esa paridad entre repositorios.
+La copia exacta del schema y el guard equivalente del frontend quedaron actualizados y verificados
+en `d38e276 fix(legal): alinea guard con contrato backend v1`. La paridad estática del Corte 4 está
+cerrada entre repositorios; no implica que el dry-run JDBC ni el importador estén terminados.
 
 El core también replica la política de correo público del guard para los tres contactos del
 snapshot: sintaxis ASCII acotada, dominio DNS público y rechazo de IPs, hosts internos y dominios
 reservados. La comparación con `VITE_*` (`CONTACT_MISMATCH`) continúa siendo una regla exclusiva de
 deploy frontend y no forma parte del manifiesto portable.
 
-No se copian dos sobre-restricciones editoriales que no pertenecen al schema ni a V27:
+El mirror frontend retiró dos sobre-restricciones que no pertenecen al schema ni a V27:
 
 - un tipo documental puede aparecer más de una vez con keys/versiones y scopes compatibles; esto
   permite split/merge o versiones paralelas sin perder la identidad estable por key;
 - un documento puede estar vinculado sólo a requisitos opcionales. Sí se rechaza un documento
   completamente huérfano, pero no se exige que su vínculo sea con `required=true`.
 
-La prueba de paridad congela estas diferencias como decisiones explícitas, de modo que un cambio de
-un solo repositorio no endurezca o relaje silenciosamente el contrato común. La mitad backend del
-handshake es hermética y congela 35 códigos frontend, 18 garantías de hardening adicionales y las
-dos diferencias deliberadas; nunca depende de una ruta local hacia otro checkout.
+Ambos repositorios aceptan ahora esos dos casos. La mitad backend del handshake es hermética y
+congela 35 códigos frontend, 14 garantías de hardening adicionales y un único código legacy
+reservado (`MANIFEST_DUPLICATE_DOCUMENT_TYPE`), que el frontend conserva por compatibilidad pero ya
+no emite. La prueba nunca depende de una ruta local hacia otro checkout.
 
 ## Reglas contractuales cruzadas
 
