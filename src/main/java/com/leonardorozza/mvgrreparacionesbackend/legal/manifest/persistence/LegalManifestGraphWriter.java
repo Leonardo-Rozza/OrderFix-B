@@ -144,6 +144,10 @@ final class LegalManifestGraphWriter {
                 plan.requirementCount() - newRequirementVersions);
     }
 
+    boolean usesJdbc(JdbcTemplate candidate) {
+        return jdbc == candidate;
+    }
+
     private PublicationSealRow readSealedPublication(UUID publicationId) {
         PublicationSealRow publication = querySingle("""
                 SELECT estado_construccion, importado_en, sellado_en

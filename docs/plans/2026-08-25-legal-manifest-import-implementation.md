@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: Cortes 1 y 2 completados; Cortes 3 a 7 pendientes
+Estado: Cortes 1 a 3 completados; Cortes 4 a 7 pendientes
 
 Diseño aprobado:
 
@@ -48,7 +48,8 @@ de ese commit de planificación.
 - Replay exacto: cero escrituras y cero avance de secuencias; compara sólo el grafo inmutable de
   origen y no exige estado editorial `BORRADOR`.
 - Idempotencia: `publication_external_id` más cabecera/canónico/digest/grafo, sin ledger HTTP.
-- Reporte import v2: tri-state `persisted`; `UNKNOWN` sólo ante commit realmente ambiguo.
+- Reporte import v2: tri-state `persisted`; `UNKNOWN` sólo ante una finalización DB realmente
+  ambigua.
 - Credenciales: sólo `ORDENFIX_LEGAL_IMPORT_DB_*`, nunca argumentos ni system properties JVM.
 - Permisos: rol no owner, sin promoción y con grants técnicos de row lock limitados por columna.
 - Operación: interna de plataforma, sin autorización ADMIN/USER y sin superficie web.
@@ -228,6 +229,8 @@ Commit: `refactor(legal): comparte gate y writer del manifiesto`.
 
 ## Corte 3 — Servicio idempotente y frontera de commit
 
+Estado: completado el 2026-08-25.
+
 ### Objetivo
 
 Implementar la semántica de importación sin exponer todavía el comando ni abrir un contexto DB de
@@ -277,13 +280,15 @@ Crear pruebas:
 6. No invocar writer ni `nextval` en replay. Medir antes/después las seis secuencias con observer de
    test.
 7. Registrar mediante `TransactionSynchronization` las fases: callback iniciado, receipt entregado,
-   commit intentado, `COMMITTED`, `ROLLED_BACK` o `UNKNOWN`.
+   frontera conservadora `beforeCommit`, `COMMITTED`, `ROLLED_BACK` o `UNKNOWN`. No llamar
+   «commit intentado» a `beforeCommit`: Spring lo ejecuta antes de `Connection.commit()`.
 8. Congelar la matriz por fase: antes de `beforeCommit`, incluido un receipt entregado, el resultado
-   es `persisted=false/import:null`; `commit` intentado sin completion es el único
-   `persisted=null/UNKNOWN`; rollback confirmado es false y commit confirmado es true.
+   es `persisted=false/import:null`; una excepción tras esa frontera sin completion o cualquier
+   `STATUS_UNKNOWN` produce `persisted=null/UNKNOWN`; rollback confirmado es false y commit
+   confirmado es true.
 9. Sólo devolver `persisted=true` después de retorno normal del transaction manager o replay
-   acreditado. Una excepción con rollback confirmado produce false; commit intentado sin outcome
-   produce unknown.
+   acreditado. Una excepción con rollback confirmado produce false; frontera de commit sin
+   completion o cualquier `STATUS_UNKNOWN` produce unknown.
 10. Mantener el receipt fuera de factories capaces de fabricar combinaciones inválidas.
 11. No hacer retry automático. El caller reconcilia repitiendo exactamente el release.
 
@@ -295,16 +300,63 @@ Crear pruebas:
 - mismo ID con contenido distinto bloquea;
 - fila `ABIERTO` previa queda intacta y falla;
 - corrupción artificial del grafo no se acepta como replay;
-- estados posteriores simulados no invalidan el grafo inmutable;
+- estados editoriales posteriores aplicados por V27 no invalidan el grafo inmutable;
 - transaction manager instrumentado cubre cada marcador monótono, incluido receipt previo a
   `beforeCommit`, commit, rollback y `STATUS_UNKNOWN`;
 - ningún intento nuevo deja una publicación `ABIERTO` después de rollback.
+
+### Addendum técnico aprobado durante la implementación
+
+La verificación del source de Spring Framework 7.0.7 mostró que `JdbcTransactionManager` puede
+traducir un `SQLException` de commit a `DataAccessException`; el manejador superior intenta rollback
+y podría publicar `STATUS_ROLLED_BACK` después de un commit ambiguo. El importador rechaza esa
+configuración y exige `DataSourceTransactionManager` exacto con
+`rollbackOnCommitFailure=false`. El dry-run existente conserva su manager porque nunca confirma
+escrituras. El Corte 4 debe ensamblar el contexto importador con este manager seguro.
+
+El gate exige además `PROPAGATION_REQUIRES_NEW`, `READ_COMMITTED`, timeout productivo y
+`readOnly=false`. El servicio acredita por identidad que gate, writer y replay verifier usan la
+misma instancia de `JdbcTemplate`, cuyo `DataSource` coincide con el manager. Esto evita devolver
+éxito antes del commit de una transacción exterior o ejecutar JDBC fuera de la completion
+observada. En el Corte 4 los preflights reales deberán quedar sujetos a la misma instancia.
+
+También se amplía la regla conservadora: cualquier `STATUS_UNKNOWN`, incluido un fallo de rollback,
+se informa como `persisted=null/UNKNOWN` y oculta el receipt. No hay retry automático; repetir el
+mismo release exacto es la reconciliación idempotente.
 
 ```bash
 ./mvnw -Dtest=LegalManifestImportServiceTest,LegalImportTransactionStateTest test
 ./mvnw -Dit.test=LegalManifestImportIT verify
 git diff --check
 ```
+
+### Evidencia del Corte 3
+
+- resultado público cerrado por construcción: `IMPORTED`, `ALREADY_IMPORTED` o `UNKNOWN`, con
+  `persisted=true/false/null`, receipt mínimo sólo cuando hay confirmación y una única issue segura
+  en fallos conocidos;
+- import fresco confirmado sobre PostgreSQL 16.14 con las 12 tablas pobladas, publicación
+  `SELLADO`, versiones nuevas `BORRADOR` y ninguna fila `ABIERTO`;
+- replay exacto con mismo UUID/timestamps, cero delta en las 12 tablas y cero avance de las seis
+  secuencias identity observadas;
+- conflicto de canónico, corrupción inmutable y publicación previa `ABIERTO` bloqueados sin
+  mutación ni intento de reparación;
+- replay posterior a estados reales `VIGENTE`, `REEMPLAZADA` y `RETIRADA`, con slot documental y
+  puntero de conjunto actual presentes, conserva tanto el grafo como el estado editorial;
+- una excepción inyectada después de ejecutar el writer real revierte las 12 tablas y deja cero
+  publicaciones `ABIERTO`;
+- pruebas con conexiones instrumentadas acreditan commit y rollback fallidos: cualquier
+  `STATUS_UNKNOWN` oculta el receipt y produce `persisted=null`, sin retry automático;
+- puerta focalizada: 639 pruebas unitarias y 7 pruebas PostgreSQL del importador; verificación
+  completa: las mismas 639 unitarias y 67 pruebas de integración sobre PostgreSQL 16.14, todas sin
+  fallos;
+- sin migración, bean productivo, CLI, endpoint, cambio frontend, importación real, deploy ni push.
+
+Riesgos no bloqueantes diferidos al hardening del Corte 6: acotar las lecturas de replay a la
+cardinalidad esperada más una fila frente a una base deliberadamente corrupta, y repetir en
+PostgreSQL el replay de un segundo release que reutiliza líneas/versiones históricas. La rama de
+reutilización ya está cubierta unitariamente; no se interpreta esta cobertura parcial como la
+acreditación de procesos reales prevista para ese corte.
 
 Commit: `feat(legal): importa manifiestos de forma idempotente`.
 
@@ -343,7 +395,7 @@ Modificar:
 ### Implementación
 
 1. Configuración lite, explícita y no escaneable: DataSource, JdbcTemplate,
-   `JdbcTransactionManager`, gate, verifier, writer e import service. Sin JPA, Flyway, MVC,
+   `DataSourceTransactionManager`, gate, verifier, writer e import service. Sin JPA, Flyway, MVC,
    Security, Mail, Actuator, scheduling, runners ni app principal.
 2. Congelar en `LegalV27ImportInventory`:
    - 12 tablas importables;
@@ -456,8 +508,9 @@ Crear/modificar pruebas:
 - property JVM datasource bloqueada y nunca reflejada;
 - variables import-specific llegan; variables Spring hostiles no;
 - excepciones antes de DB, callback, rollback, commit incierto, post-commit, serialización y stdout;
-- receipt entregado sin `beforeCommit` produce ERROR/false/null; sólo commit intentado sin outcome
-  produce ERROR/null/UNKNOWN;
+- receipt entregado seguido de rollback confirmado produce ERROR/false/null, aunque no haya llegado
+  a `beforeCommit`; frontera de commit sin completion o cualquier `STATUS_UNKNOWN` produce
+  ERROR/null/UNKNOWN;
 - salidas v1 de validate/dry-run byte-identical a las fixtures previas.
 
 ```bash
@@ -493,7 +546,8 @@ Crear/modificar pruebas:
 2. Retener el advisory lock más allá de un presupuesto reducido sólo por constructor de test:
    segundo proceso `ERROR/false`; repetición posterior `ALREADY_IMPORTED`.
 3. Publicaciones distintas con identidades compatibles se serializan y reutilizan; incompatibles
-   confirman como máximo una.
+   confirman como máximo una. Repetir además el segundo release compatible y acreditar su replay
+   PostgreSQL con los mismos conteos internos de líneas/versiones nuevas y reutilizadas.
 4. Dry-run/import cooperativos no observan grafo parcial y respetan el mismo lock.
 5. Instalar un writer de test no cooperativo que fuerza timeout/deadlock; mapear y revertir sin
    afirmar que el lock global controla writers externos.
@@ -517,6 +571,9 @@ Crear/modificar pruebas:
     import fresco debe terminar antes de 70 s y ninguna sentencia superar 30 s, dejando margen sobre
     el timeout total de 75 s. Si no cumple, agrupar inserts JDBC por tabla/ordinal en este mismo
     corte; no relajar locks, constraints, límites ni timeouts.
+14. Acotar cada lectura multirrow del replay a la cardinalidad acreditada por el release más una
+    fila. Una fixture PostgreSQL deliberadamente sobredimensionada debe bloquear sin materializar la
+    relación corrupta completa en memoria.
 
 ### Puerta
 

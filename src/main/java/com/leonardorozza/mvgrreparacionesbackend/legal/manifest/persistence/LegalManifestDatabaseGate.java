@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -46,6 +48,35 @@ final class LegalManifestDatabaseGate {
             setLocalTimeout("lock_timeout", budgets.graphLockTimeoutSeconds());
             return protectedCallback.doInTransaction(status);
         });
+    }
+
+    /**
+     * Fails closed unless commit SQLExceptions remain transaction failures with an UNKNOWN
+     * completion. {@code JdbcTransactionManager} translates those exceptions to
+     * {@code DataAccessException}; Spring can then attempt a rollback and report a false
+     * ROLLED_BACK outcome after the server already committed.
+     */
+    void requireCommitOutcomeSafe() {
+        Object transactionManager = transactionTemplate.getTransactionManager();
+        if (transactionManager == null
+                || transactionManager.getClass() != DataSourceTransactionManager.class
+                || ((DataSourceTransactionManager) transactionManager)
+                        .isRollbackOnCommitFailure()
+                || ((DataSourceTransactionManager) transactionManager).getDataSource()
+                        != jdbc.getDataSource()
+                || transactionTemplate.getPropagationBehavior()
+                        != TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                || transactionTemplate.getIsolationLevel()
+                        != TransactionDefinition.ISOLATION_READ_COMMITTED
+                || transactionTemplate.getTimeout() != budgets.transactionTimeoutSeconds()
+                || transactionTemplate.isReadOnly()) {
+            throw new IllegalArgumentException(
+                    "El importador legal requiere una frontera de commit acreditable");
+        }
+    }
+
+    boolean usesJdbc(JdbcTemplate candidate) {
+        return jdbc == candidate;
     }
 
     private void setLocalTimeout(String setting, int seconds) {

@@ -3,10 +3,14 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -94,6 +98,105 @@ class LegalManifestDatabaseGateTest {
                 List.of());
 
         assertThatThrownBy(() -> gate.execute(callback)).isSameAs(failure);
+    }
+
+    @Test
+    void acceptsTheCommitOutcomeSafeManagerRequiredByImport() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(
+                dataSource);
+        TransactionTemplate transaction = safeImportTransaction(manager);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                new JdbcTemplate(dataSource),
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        gate.requireCommitOutcomeSafe();
+    }
+
+    @Test
+    void rejectsManagersThatCanMisclassifyAnAmbiguousCommit() {
+        DataSource dataSource = mock(DataSource.class);
+        JdbcTransactionManager translatedCommitFailures = new JdbcTransactionManager(dataSource);
+        DataSourceTransactionManager rollbackAfterCommitFailure =
+                new DataSourceTransactionManager(dataSource);
+        rollbackAfterCommitFailure.setRollbackOnCommitFailure(true);
+
+        assertThatThrownBy(() -> gateFor(translatedCommitFailures)
+                .requireCommitOutcomeSafe())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> gateFor(rollbackAfterCommitFailure)
+                .requireCommitOutcomeSafe())
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsAJoiningOrMisconfiguredTransactionTemplate() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate joining = safeImportTransaction(manager);
+        joining.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+        TransactionTemplate wrongIsolation = safeImportTransaction(manager);
+        wrongIsolation.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
+        TransactionTemplate readOnly = safeImportTransaction(manager);
+        readOnly.setReadOnly(true);
+        TransactionTemplate wrongTimeout = safeImportTransaction(manager);
+        wrongTimeout.setTimeout(74);
+
+        assertUnsafeTemplate(joining, dataSource);
+        assertUnsafeTemplate(wrongIsolation, dataSource);
+        assertUnsafeTemplate(readOnly, dataSource);
+        assertUnsafeTemplate(wrongTimeout, dataSource);
+    }
+
+    @Test
+    void rejectsAJdbcTemplateBoundToAnotherDataSource() {
+        DataSource transactionDataSource = mock(DataSource.class);
+        DataSource jdbcDataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager =
+                new DataSourceTransactionManager(transactionDataSource);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                safeImportTransaction(manager),
+                new JdbcTemplate(jdbcDataSource),
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(gate::requireCommitOutcomeSafe)
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static void assertUnsafeTemplate(
+            TransactionTemplate transaction,
+            DataSource dataSource) {
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                new JdbcTemplate(dataSource),
+                LegalDatabaseBudgets.production(),
+                List.of());
+        assertThatThrownBy(gate::requireCommitOutcomeSafe)
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static LegalManifestDatabaseGate gateFor(
+            DataSourceTransactionManager transactionManager) {
+        DataSource dataSource = transactionManager.getDataSource();
+        return new LegalManifestDatabaseGate(
+                safeImportTransaction(transactionManager),
+                new JdbcTemplate(dataSource),
+                LegalDatabaseBudgets.production(),
+                List.of());
+    }
+
+    private static TransactionTemplate safeImportTransaction(
+            DataSourceTransactionManager transactionManager) {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(
+                LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        transaction.setReadOnly(false);
+        return transaction;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

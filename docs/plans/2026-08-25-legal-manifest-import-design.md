@@ -120,6 +120,40 @@ consulta la identidad natural y resuelve allí mismo entre replay, conflicto o c
 de creación llama al writer. De esta manera, un replay nunca necesita ejecutar un componente que
 inserta o avanza secuencias.
 
+### Addendum de frontera transaccional — Corte 3
+
+La auditoría contra Spring Framework 7.0.7 corrigió una precisión del diseño antes de habilitar el
+importador. `TransactionSynchronization.beforeCommit` acredita que Spring ingresó en el camino de
+commit, pero ocurre antes de `Connection.commit()` y por lo tanto no demuestra que ese método haya
+sido invocado. Se conserva como una frontera conservadora, nunca como una confirmación.
+
+El contexto de importación debe construir exactamente un `DataSourceTransactionManager`, con
+`rollbackOnCommitFailure=false`; no puede usar `JdbcTransactionManager`. Este último puede traducir
+un `SQLException` de commit a `DataAccessException`, provocar un rollback posterior y terminar con
+`STATUS_ROLLED_BACK` aunque el servidor ya hubiera confirmado. La configuración se valida antes de
+leer el agregado y el Corte 4 debe congelarla en su contexto restringido.
+
+La frontera tampoco puede participar de una transacción exterior: debe usar exactamente
+`PROPAGATION_REQUIRES_NEW`, `READ_COMMITTED`, timeout total productivo y `readOnly=false`. Gate,
+servicio, writer y replay verifier deben compartir la misma instancia de `JdbcTemplate` y el mismo
+`DataSource` administrado por ese transaction manager; de otro modo una operación podría escapar de
+la completion observada. En el Corte 4 la misma acreditación se extiende a los preflights reales de
+schema y privilegios.
+
+La certeza final queda definida así:
+
+- retorno normal del transaction manager o `STATUS_COMMITTED`, con receipt interno completo:
+  `persisted=true`;
+- `STATUS_ROLLED_BACK` bajo la frontera acreditada: `persisted=false`;
+- cualquier `STATUS_UNKNOWN`, o una excepción después de entrar al camino de commit sin completion
+  autoritativa: `persisted=null/outcome=UNKNOWN`;
+- un fallo anterior al callback protegido: `persisted=false`, porque los preflights y locks no
+  escriben el agregado.
+
+La regla de `STATUS_UNKNOWN` también cubre fallos de rollback. Restaurar `autoCommit` después de una
+conexión dañada puede dejar el resultado indeterminado; por eso el importador nunca degrada esa
+señal a un rollback conocido ni expone el receipt tentativo.
+
 El verificador de importación es más estricto que la comprobación provisional de 2.3A. Congela como
 fixture versionado:
 
@@ -449,8 +483,9 @@ es microsegundos; nunca se emite un offset alternativo ni una precisión inventa
 Semántica de `persisted`:
 
 - `true`: el resultado sellado existe, creado ahora o acreditado por replay;
-- `false`: se sabe que este intento no confirmó el resultado solicitado;
-- `null`: el commit fue intentado y no pudo acreditarse ni commit ni rollback.
+- `false`: el transaction manager confirmó rollback, o el callback protegido nunca comenzó;
+- `null`: la finalización quedó indeterminada tras iniciar el callback, o se alcanzó la frontera de
+  commit sin una completion autoritativa.
 
 Las únicas combinaciones válidas son:
 
@@ -467,12 +502,13 @@ después de un commit, el proceso puede terminar con exit `3` sin un envelope co
 comando es el mecanismo de reconciliación.
 
 La CLI conserva hasta el último boundary un estado monótono de ejecución: comando crudo reconocido,
-DB abierta, callback iniciado, callback entregó receipt, commit intentado y commit confirmado. Desde
-que `rawArguments[0]` reconoce exactamente `import`, todo catch externo selecciona formato v2: antes
-de intentar commit emite `ERROR/persisted=false/import:null`; después de un commit intentado pero
-indeterminado emite `ERROR/persisted=null/UNKNOWN`; después de commit confirmado conserva el receipt
-y `persisted=true`. Nunca vuelve al `EMERGENCY_REPORT` v1. Si incluso el serializador v2 mínimo o
-stdout fallan, no se inventa otro envelope.
+DB abierta, callback iniciado, callback entregó receipt, frontera `beforeCommit` alcanzada y commit
+confirmado. Desde que `rawArguments[0]` reconoce exactamente `import`, todo catch externo selecciona
+formato v2: un rollback confirmado o un fallo anterior al callback emite
+`ERROR/persisted=false/import:null`; una completion `UNKNOWN`, o la frontera de commit sin completion,
+emite `ERROR/persisted=null/UNKNOWN`; después de commit confirmado conserva el receipt y
+`persisted=true`. Nunca vuelve al `EMERGENCY_REPORT` v1. Si incluso el serializador v2 mínimo o stdout
+fallan, no se inventa otro envelope.
 
 Exit codes:
 
@@ -489,9 +525,9 @@ límite de 200 issues y `omittedIssueCount`.
 - Fallo estático o confirmación distinta: `BLOCKED`, `persisted=false`, sin DB.
 - Conflicto persistido: `BLOCKED`, `persisted=false`, rollback.
 - V27 o privilegios incompatibles: `ERROR`, `persisted=false`, sin escrituras.
-- Lock/timeout/fallo dentro del callback: `ERROR`, `persisted=false`, rollback.
-- Excepción después de que el callback entregó el receipt y el commit fue intentado, sin confirmación
-  de commit o rollback:
+- Lock/timeout/fallo dentro del callback con rollback confirmado: `ERROR`, `persisted=false`.
+- Excepción después de que el callback entregó el receipt y alcanzó la frontera de commit, sin
+  completion autoritativa, o cualquier `STATUS_UNKNOWN` tras iniciar el callback:
   `ERROR`, `persisted=null`, `outcome=UNKNOWN`.
 - Fallo de serialización o cierre de contexto después de commit confirmado: conservar
   `PASS/persisted=true` y el receipt; nunca degradarlo a `false`.

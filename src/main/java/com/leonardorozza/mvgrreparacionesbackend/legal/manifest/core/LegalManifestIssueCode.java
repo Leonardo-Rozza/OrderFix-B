@@ -243,7 +243,40 @@ public enum LegalManifestIssueCode {
             "La base no posee el schema legal V27 compatible requerido por el dry-run."),
     DB_OPERATION_FAILED(
             LegalManifestStatus.ERROR,
-            "No se pudo completar la operación de base del dry-run legal.");
+            "No se pudo completar la operación de base del dry-run legal."),
+    IMPORT_DB_SCHEMA_INCOMPATIBLE(
+            LegalManifestStatus.ERROR,
+            "La base no posee el schema legal V27 exacto requerido por la importación."),
+    IMPORT_DB_PERSISTED_CONFLICT(
+            LegalManifestStatus.BLOCKED,
+            "El release entra en conflicto con una identidad legal ya persistida."),
+    IMPORT_DB_CONSTRAINT(
+            LegalManifestStatus.BLOCKED,
+            "El grafo legal no cumple una restricción de persistencia."),
+    IMPORT_DB_PUBLICATION_OPEN(
+            LegalManifestStatus.ERROR,
+            "La publicación persistida permanece abierta y requiere intervención manual."),
+    IMPORT_DB_ISOLATION(
+            LegalManifestStatus.ERROR,
+            "La base no permitió importar con aislamiento READ COMMITTED."),
+    IMPORT_DB_LOCK_TIMEOUT(
+            LegalManifestStatus.ERROR,
+            "La importación legal agotó el tiempo de espera de un lock."),
+    IMPORT_DB_STATEMENT_TIMEOUT(
+            LegalManifestStatus.ERROR,
+            "La importación legal agotó el tiempo máximo de una operación SQL."),
+    IMPORT_DB_CONNECTION(
+            LegalManifestStatus.ERROR,
+            "No se pudo mantener una conexión válida durante la importación legal."),
+    IMPORT_DB_CONCURRENCY(
+            LegalManifestStatus.ERROR,
+            "La importación legal no pudo completarse por un conflicto transaccional concurrente."),
+    IMPORT_DB_OPERATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la operación de base de la importación legal."),
+    IMPORT_DB_COMMIT_UNKNOWN(
+            LegalManifestStatus.ERROR,
+            "No se pudo determinar si la importación legal fue confirmada.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;
