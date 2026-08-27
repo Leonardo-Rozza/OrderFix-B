@@ -2,12 +2,13 @@
 
 Fecha: 2026-08-25
 
-Estado: Cortes 1 a 4 completados; Cortes 5 a 7 pendientes
+Estado: Cortes 1 a 5 completados; Cortes 6 a 7 pendientes
 
 Diseño aprobado:
 
 - `docs/plans/2026-08-25-legal-manifest-import-design.md`;
 - commit local backend `a8cc352`;
+- precisión posterior del contrato CLI en `cf2aaaf`;
 - continuidad de la Fase 2.3A cerrada en `ec794cb` y del mirror frontend en `19b4953`.
 
 Este plan agrega una importación interna, idempotente y transaccional al jar legal existente. No
@@ -477,6 +478,8 @@ Commit: `feat(legal): restringe acceso DB del importador`.
 
 ## Corte 5 — Comando import, confirmaciones y reporte v2
 
+Estado: completado el 2026-08-27.
+
 ### Objetivo
 
 Exponer la capacidad sólo en el jar legal interno, con confirmaciones ligadas al release, secretos
@@ -497,15 +500,19 @@ Modificar:
 - `LegalManifestArguments.java`;
 - `LegalManifestCli.java`;
 - `LegalManifestIssueCode.java`;
+- `LegalManifestImportService.java` para emitir la señal del callback transaccional real;
 - `pom.xml` sólo si la inspección del jar necesita actualizarse.
 
 Crear/modificar pruebas:
 
 - `LegalManifestArgumentsTest.java`;
+- `LegalManifestImportConfirmationTest.java`;
 - `LegalImportEnvironmentTest.java`;
 - `LegalManifestImportReportTest.java`;
 - `LegalManifestImportReportWriterTest.java`;
+- `LegalManifestCliExecutionStateTest.java`;
 - `LegalManifestCliTest.java`;
+- `LegalManifestImportServiceTest.java`;
 - regresiones exactas de `LegalManifestReportTest` y `LegalManifestReportWriterTest`.
 
 ### Implementación
@@ -550,9 +557,36 @@ Crear/modificar pruebas:
 - salidas v1 de validate/dry-run byte-identical a las fixtures previas.
 
 ```bash
-./mvnw -Dtest=LegalManifestArgumentsTest,LegalImportEnvironmentTest,LegalManifestImportReportTest,LegalManifestImportReportWriterTest,LegalManifestCliTest,LegalManifestReportTest,LegalManifestReportWriterTest test
+./mvnw -Dtest=LegalManifestArgumentsTest,LegalManifestImportConfirmationTest,LegalImportEnvironmentTest,LegalManifestImportReportTest,LegalManifestImportReportWriterTest,LegalManifestCliExecutionStateTest,LegalManifestCliTest,LegalManifestImportServiceTest,LegalManifestReportTest,LegalManifestReportWriterTest test
 git diff --check
 ```
+
+### Evidencia del Corte 5
+
+- parser cerrado con los tres flags `--nombre=valor` exactos, aceptados en cualquier orden y una
+  sola vez; no existen alias, prompt, `--force`, password ni properties Spring por argumentos;
+- bundle validado completamente antes de comparar publication ID/SHA-256; confirmaciones resueltas
+  antes del opt-in literal `ORDENFIX_LEGAL_IMPORT_ENABLED=true`, la configuración y la apertura DB;
+- sólo las cuatro variables `ORDENFIX_LEGAL_IMPORT_DB_*` llegan al property source interno; una
+  property JVM `spring.datasource.*` bloquea sin leer ni reflejar su valor, y el contexto hijo
+  descarta system properties, system environment y Config Data hostil;
+- reporte v2 separado, con orden y matriz `PASS/true`, `BLOCKED/false`, `ERROR/false` y
+  `ERROR/null/UNKNOWN` cerrados por construcción; reconocer el comando crudo garantiza fallbacks v2
+  mientras `validate` y `dry-run` conservan el modelo/writer v1 sin cambios;
+- observer emitido dentro de la sincronización transaccional activa y antes de la primera lectura
+  SQL: los fallos previos al callback permanecen `false`, un rollback confirmado oculta incluso un
+  receipt ya entregado y sólo una frontera realmente indeterminada produce `UNKNOWN`;
+- resultado/receipt confirmado conservado ante fallo posterior de cierre o serialización; stdout
+  roto devuelve exit `3` sin inventar un segundo canal;
+- test unitario de contexto real con H2 acredita un único DataSource, servicio importador aislado,
+  ausencia de dry-run/Flyway, rechazo de configuración Spring hostil y cierre del pool. Esto no se
+  presenta como acreditación PostgreSQL ni como prueba del jar en otro proceso;
+- puerta focalizada con JDK 21: 142 pruebas; suite unitaria completa: 729 pruebas; ambas con cero
+  fallos, errores u omitidas. `compile` pasó y `package -DskipTests` construyó los jars normal y
+  `legal-cli`; `git diff --check` quedó limpio;
+- no hubo migración, endpoint, cambio frontend, credenciales reales, importación de contenido real,
+  PostgreSQL/proceso real, deploy, push ni cambio de `BACKEND-HANDOFF 1`. Concurrencia, canaries en
+  otra JVM, stdout real, rol restringido, capacidad e inspección de jars permanecen en el Corte 6.
 
 Commit: `feat(legal): expone import seguro en CLI aislada`.
 

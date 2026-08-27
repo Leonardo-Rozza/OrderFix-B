@@ -1,7 +1,8 @@
 # Runbook PostgreSQL del importador legal V27
 
-Estado: operativo para el contexto DB del Corte 4. El comando `import` se habilita recién en el
-Corte 5.
+Estado: contexto DB y comando CLI implementados hasta el Corte 5. La acreditación mediante
+PostgreSQL y procesos del jar real corresponde al Corte 6; el cierre operativo final corresponde al
+Corte 7.
 
 ## Propósito y límites
 
@@ -294,6 +295,43 @@ locks de fila usados por el protocolo. Los triggers V27 rechazan cualquier updat
 `SET id = id`; la prueba PostgreSQL del importador lo acredita. No agregue un grant de tabla
 `UPDATE`.
 
+## Contrato de ejecución del comando
+
+El proceso acepta únicamente estas variables. El driver es opcional; las otras cuatro deben estar
+presentes y la habilitación debe ser exactamente `true`:
+
+```text
+ORDENFIX_LEGAL_IMPORT_ENABLED=true
+ORDENFIX_LEGAL_IMPORT_DB_URL=<jdbc-url>
+ORDENFIX_LEGAL_IMPORT_DB_USERNAME=<rol-importador>
+ORDENFIX_LEGAL_IMPORT_DB_PASSWORD=<secreto>
+ORDENFIX_LEGAL_IMPORT_DB_DRIVER_CLASS_NAME=<driver-opcional>
+```
+
+Obtenga el password desde el gestor de secretos y entréguelo sólo como variable del proceso. No lo
+pase por argumentos, archivos versionados, propiedades `-D` ni logs. Cualquier system property JVM
+con prefijo `spring.datasource.*` bloquea el comando aunque también existan variables válidas.
+
+La invocación usa exactamente tres flags con forma `--nombre=valor`, en cualquier orden después de
+`import` y una sola vez cada uno:
+
+```bash
+java -jar mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar import \
+  --manifest=/ruta/aprobada/publication-manifest.json \
+  --confirm-publication-id=<publication-id-exacto> \
+  --confirm-manifest-sha256=<64-hex-jcs-exacto>
+```
+
+No continúe si el publication ID o el SHA-256 no coinciden exactamente con el release revisado. El
+proceso devuelve `0` para PASS, `2` para BLOCKED y `3` para ERROR. Si el reporte trae
+`persisted=null` y `outcome=UNKNOWN`, no afirme rollback ni repita con otro release: resuelva la
+causa y reejecute el mismo bundle y las mismas confirmaciones para reconciliar de forma idempotente
+como `ALREADY_IMPORTED` o recibir un fallo conocido.
+
+`JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` son interpretadas por la JVM antes de
+`main`; la limpieza efectiva de esas variables en el launcher operativo se acredita recién en el
+Corte 6. Hasta entonces este comando no constituye autorización para una importación productiva.
+
 ## Verificación posterior
 
 Abra una conexión nueva usando la credencial importadora obtenida del gestor de secretos. No pase el
@@ -307,6 +345,10 @@ password por argumentos del proceso ni lo guarde en este archivo.
    `ALREADY_IMPORTED` con el mismo receipt.
 5. Con una conexión observer/owner, confirme que no quedaron publicaciones `ABIERTO` ni escrituras
    en transiciones, slots, reemplazos, aceptaciones, metadata o idempotencia.
+
+Estos pasos describen el procedimiento operativo objetivo. El Corte 5 no los ejecutó contra
+PostgreSQL ni con credenciales reales; esa evidencia de proceso, replay, concurrencia, pérdida de
+stdout y canaries corresponde al Corte 6.
 
 Si cualquiera de los verifiers devuelve `IMPORT_DB_SCHEMA_INCOMPATIBLE` o
 `IMPORT_DB_PRIVILEGES_INCOMPATIBLE`, detenga la importación. No repare grants, historial Flyway ni
@@ -324,6 +366,10 @@ Archive fuera de V27, con acceso restringido:
 - outcome, UUID, tiempos y receipt del import/replay;
 - salida sanitizada de ambos verifiers y logs PostgreSQL relevantes;
 - referencia al cambio que aplicó revocaciones/grants y a la revisión profesional del release.
+
+El receipt, los logs PostgreSQL y los resultados reales se archivan sólo cuando la acreditación del
+Corte 6 o una operación posterior expresamente autorizada haya sido ejecutada; no se fabrican a
+partir de las pruebas unitarias del Corte 5.
 
 No trate el receipt como comprobante fiscal ni como aceptación del cliente. Es evidencia técnica de
 que el grafo editorial exacto fue sellado o reconciliado.

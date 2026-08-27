@@ -56,7 +56,20 @@ public final class LegalManifestImportService {
 
     /** Executes one non-retrying import attempt for the opaque validator-issued release. */
     public LegalManifestImportResult importManifest(ValidatedRelease release) {
+        return importManifest(release, () -> { });
+    }
+
+    /**
+     * Executes one import while exposing only the moment its protected transaction callback
+     * actually starts. The observer cannot inspect mutable transaction state or tentative receipts.
+     */
+    public LegalManifestImportResult importManifest(
+            ValidatedRelease release,
+            ImportExecutionObserver executionObserver) {
         Objects.requireNonNull(release, "release");
+        ImportExecutionObserver requiredObserver = Objects.requireNonNull(
+                executionObserver,
+                "executionObserver");
         LegalImportTransactionState<ImportEvidence> transactionState =
                 new LegalImportTransactionState<>();
         try {
@@ -64,13 +77,14 @@ public final class LegalManifestImportService {
             requireSharedJdbcSession();
             databaseGate.execute(status -> {
                 transactionState.callbackStarted();
+                requiredObserver.callbackStarted();
                 ImportEvidence evidence = resolveUnderEditorialLock(release);
                 transactionState.receiptDelivered(evidence);
                 return evidence;
             });
             transactionState.transactionReturnedNormally();
             return confirmedResult(transactionState.snapshot());
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | LinkageError failure) {
             LegalImportTransactionState.Snapshot<ImportEvidence> snapshot =
                     transactionState.snapshot();
             if (snapshot.persistence() == Persistence.PERSISTED) {
@@ -82,6 +96,13 @@ public final class LegalManifestImportService {
                     ? LegalManifestImportResult.unknown()
                     : LegalManifestImportResult.failure(issue);
         }
+    }
+
+    /** Minimal phase signal used by the CLI without exposing receipt or commit internals. */
+    @FunctionalInterface
+    public interface ImportExecutionObserver {
+
+        void callbackStarted();
     }
 
     private void requireSharedJdbcSession() {

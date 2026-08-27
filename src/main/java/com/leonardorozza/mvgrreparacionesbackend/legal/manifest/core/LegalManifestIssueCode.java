@@ -70,9 +70,24 @@ public enum LegalManifestIssueCode {
     CLI_OPERATION_FAILED(
             LegalManifestStatus.ERROR,
             "No se pudo completar el comando legal."),
+    IMPORT_CLI_OPERATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar el comando de importación legal."),
     MANIFEST_PATH_REQUIRED(
             LegalManifestStatus.BLOCKED,
             "Se requiere la ruta local del manifiesto."),
+    IMPORT_CONFIRMATION_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "Las confirmaciones no coinciden con el release legal validado."),
+    IMPORT_DISABLED(
+            LegalManifestStatus.ERROR,
+            "La importación legal no está habilitada en el entorno operativo."),
+    IMPORT_DB_CONFIGURATION_INVALID(
+            LegalManifestStatus.ERROR,
+            "La configuración de base para la importación legal no es válida."),
+    IMPORT_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN(
+            LegalManifestStatus.ERROR,
+            "La importación legal no admite propiedades JVM de datasource."),
     MANIFEST_FILENAME_INVALID(
             LegalManifestStatus.BLOCKED,
             "El manifiesto debe llamarse publication-manifest.json."),

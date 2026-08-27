@@ -9,6 +9,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -23,12 +24,15 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -212,6 +216,101 @@ class LegalManifestImportServiceTest {
         verify(fixture.jdbc(), never()).query(anyString(), any(RowMapper.class), any());
     }
 
+    @Test
+    void observerIsNotCalledWhenALinkageErrorEscapesBeforeTheCallback() {
+        Fixture fixture = fixture();
+        AtomicBoolean callbackStarted = new AtomicBoolean();
+        doThrow(new LinkageError("transaction infrastructure unavailable"))
+                .when(fixture.gate()).requireCommitOutcomeSafe();
+
+        LegalManifestImportResult result = fixture.service().importManifest(
+                goldenRelease,
+                () -> callbackStarted.set(true));
+
+        assertKnownFailure(
+                result,
+                LegalManifestStatus.ERROR,
+                LegalManifestIssueCode.IMPORT_DB_OPERATION_FAILED);
+        assertThat(callbackStarted).isFalse();
+        verify(fixture.gate(), never()).execute(any());
+    }
+
+    @Test
+    void observerIsCalledOnlyWhenTheProtectedTransactionCallbackStarts() {
+        Fixture fixture = fixture();
+        LegalManifestImportService.ImportExecutionObserver observer =
+                mock(LegalManifestImportService.ImportExecutionObserver.class);
+        doAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            assertThat(TransactionSynchronizationManager.isSynchronizationActive()).isTrue();
+            return null;
+        }).when(observer).callbackStarted();
+        executeAndComplete(fixture.gate(), TransactionSynchronization.STATUS_COMMITTED, null);
+        stubLookup(fixture.jdbc(), List.of());
+        LegalManifestGraphReceipt receipt = receipt();
+        when(fixture.writer().writeNew(goldenRelease)).thenReturn(receipt);
+
+        LegalManifestImportResult result = fixture.service().importManifest(
+                goldenRelease,
+                observer);
+
+        assertConfirmed(result, LegalManifestImportResult.Outcome.IMPORTED, receipt);
+        InOrder callbackBeforeDatabaseRead = inOrder(observer, fixture.jdbc());
+        callbackBeforeDatabaseRead.verify(observer).callbackStarted();
+        callbackBeforeDatabaseRead.verify(fixture.jdbc()).query(
+                anyString(),
+                any(RowMapper.class),
+                eq(goldenRelease.plan().manifest().publicationId()));
+    }
+
+    @Test
+    void linkageErrorAfterCommittedCompletionStillReturnsConfirmedSuccess() {
+        Fixture fixture = fixture();
+        executeAndComplete(
+                fixture.gate(),
+                TransactionSynchronization.STATUS_COMMITTED,
+                new LinkageError("driver cleanup failed"));
+        stubLookup(fixture.jdbc(), List.of());
+        LegalManifestGraphReceipt receipt = receipt();
+        when(fixture.writer().writeNew(goldenRelease)).thenReturn(receipt);
+
+        LegalManifestImportResult result = fixture.service().importManifest(goldenRelease);
+
+        assertConfirmed(result, LegalManifestImportResult.Outcome.IMPORTED, receipt);
+    }
+
+    @Test
+    void linkageErrorInsideCallbackWithConfirmedRollbackReturnsKnownFalse() {
+        Fixture fixture = fixture();
+        executeAndRollbackOnFailure(fixture.gate());
+        stubLookup(fixture.jdbc(), List.of());
+        when(fixture.writer().writeNew(goldenRelease))
+                .thenThrow(new LinkageError("driver linkage failed"));
+
+        LegalManifestImportResult result = fixture.service().importManifest(goldenRelease);
+
+        assertKnownFailure(
+                result,
+                LegalManifestStatus.ERROR,
+                LegalManifestIssueCode.IMPORT_DB_OPERATION_FAILED);
+    }
+
+    @Test
+    void receiptFollowedByRollbackBeforeCommitBoundaryReturnsKnownFalse() {
+        Fixture fixture = fixture();
+        executeAndRollbackAfterCallback(fixture.gate());
+        stubLookup(fixture.jdbc(), List.of());
+        when(fixture.writer().writeNew(goldenRelease)).thenReturn(receipt());
+
+        LegalManifestImportResult result = fixture.service().importManifest(goldenRelease);
+
+        assertKnownFailure(
+                result,
+                LegalManifestStatus.ERROR,
+                LegalManifestIssueCode.IMPORT_DB_OPERATION_FAILED);
+        verify(fixture.writer()).writeNew(goldenRelease);
+    }
+
     private static Fixture fixture() {
         LegalManifestDatabaseGate gate = mock(LegalManifestDatabaseGate.class);
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -233,7 +332,7 @@ class LegalManifestImportServiceTest {
     private static void executeAndComplete(
             LegalManifestDatabaseGate gate,
             int completion,
-            RuntimeException terminalFailure) {
+            Throwable terminalFailure) {
         when(gate.execute(any())).thenAnswer(invocation -> {
             TransactionCallback callback = invocation.getArgument(0);
             beginSynchronizedTransaction();
@@ -260,11 +359,28 @@ class LegalManifestImportServiceTest {
             beginSynchronizedTransaction();
             try {
                 return callback.doInTransaction(new SimpleTransactionStatus());
-            } catch (RuntimeException failure) {
+            } catch (RuntimeException | LinkageError failure) {
                 TransactionSynchronizationManager.getSynchronizations()
                         .forEach(sync -> sync.afterCompletion(
                                 TransactionSynchronization.STATUS_ROLLED_BACK));
                 throw failure;
+            } finally {
+                TransactionSynchronizationManager.clear();
+            }
+        });
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void executeAndRollbackAfterCallback(LegalManifestDatabaseGate gate) {
+        when(gate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback callback = invocation.getArgument(0);
+            beginSynchronizedTransaction();
+            try {
+                callback.doInTransaction(new SimpleTransactionStatus());
+                TransactionSynchronizationManager.getSynchronizations()
+                        .forEach(sync -> sync.afterCompletion(
+                                TransactionSynchronization.STATUS_ROLLED_BACK));
+                throw new IllegalStateException("rollback before commit boundary");
             } finally {
                 TransactionSynchronizationManager.clear();
             }
