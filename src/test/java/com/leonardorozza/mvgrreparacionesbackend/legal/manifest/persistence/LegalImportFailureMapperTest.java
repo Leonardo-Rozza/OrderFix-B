@@ -8,6 +8,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.sql.SQLException;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +45,34 @@ class LegalImportFailureMapperTest {
         assertThat(issue.code())
                 .isEqualTo(LegalManifestIssueCode.IMPORT_DB_PUBLICATION_OPEN);
         assertThat(issue.location()).isEqualTo("database/publication");
+    }
+
+    @Test
+    void privilegeMismatchKeepsItsDedicatedSafeImportIssue() {
+        LegalManifestIssue issue = mapper.map(
+                new LegalImportOperationalException(
+                        LegalManifestIssueCode.IMPORT_DB_PRIVILEGES_INCOMPATIBLE,
+                        "database/privileges"),
+                false);
+
+        assertThat(issue.code()).isEqualTo(
+                LegalManifestIssueCode.IMPORT_DB_PRIVILEGES_INCOMPATIBLE);
+        assertThat(issue.location()).isEqualTo("database/privileges");
+        assertThat(issue.message()).isEqualTo(
+                LegalManifestIssueCode.IMPORT_DB_PRIVILEGES_INCOMPATIBLE.safeMessage());
+    }
+
+    @Test
+    void permissionDeniedSqlStateMapsToTheContextualPrivilegeIssue() {
+        SQLException head = new SQLException("detalle interno", "ZZZZZ");
+        head.setNextException(new SQLException("permission denied", "42501"));
+
+        LegalManifestIssue issue = mapper.map(new IllegalStateException(head), false);
+
+        assertThat(issue.code()).isEqualTo(
+                LegalManifestIssueCode.IMPORT_DB_PRIVILEGES_INCOMPATIBLE);
+        assertThat(issue.location()).isEqualTo(LegalImportPrivilegeVerifier.ISSUE_LOCATION);
+        assertThat(issue.message()).doesNotContain("permission", "interno");
     }
 
     @ParameterizedTest(name = "{0} -> {1}")

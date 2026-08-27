@@ -438,6 +438,41 @@ Modificar:
 git diff --check
 ```
 
+### Cierre ejecutado — 26 de agosto de 2026
+
+- configuración importadora lite, explícita y no escaneable, con una única frontera
+  `DataSource`/`JdbcTemplate`, `DataSourceTransactionManager` exacto y acreditación por identidad de
+  los dos preflights en orden schema → privilegios;
+- guard cruzado entre contextos import/dry-run: registrarlos juntos falla durante el refresh; el
+  contexto normal no descubre ninguno aun con flags hostiles;
+- inventario V27 congelado sobre PostgreSQL 16.15: checksum Flyway `1575269868`, 12 tablas/93
+  columnas/97 constraints —incluidos 76 triggers internos—, 29 triggers de negocio, seis sequences
+  identity y digest de las 17 funciones alcanzables;
+- huellas SHA-256: tablas
+  `d3b0a50cb6cbdf0a0a8eab97bd10ae0e1f8e605ce009c6083ae77e1827257ad9`, columnas
+  `71ce2628bcac127f8798bbd5098563c8bd3a43c8fc505bd7794dfaa726ae96a7`, constraints
+  `359366a916255d91e4de547eb4476d236b307c984495490071f1b54920936475`, triggers
+  `e85176c8a84aa7cbf52b5051b8a73981529e29955cf5a49127e20f7cbe3205e3` y sequences
+  `308609421640e4120de7cf8621a605b541287c0808e9b44ca0f64f782df2874e`;
+- schema verifier cerrado ante versión distinta de PostgreSQL 16, `search_path` configurado con
+  entradas ocultas/inexistentes, drift de tabla/columna/sequence/checksum/función/trigger/constraint,
+  función de trigger homónima en otro schema o trigger FK interno deshabilitado;
+- perfil efectivo exacto del rol: identidad/flags, memberships recibidas y delegadas, ownership,
+  todas las bases del clúster, schemas, tablas/columnas, sequences, 47 funciones V27, grant options,
+  large objects y ACL explícitas de parámetros como `session_replication_role`;
+- el rol mínimo importa y reanuda el mismo release con receipt estable; no puede escribir Flyway,
+  promover IDs, insertar transición/puntero/aceptación, borrar ni obtener capacidades por `PUBLIC`;
+- SQLSTATE `42501` se traduce en el adapter v2 a
+  `IMPORT_DB_PRIVILEGES_INCOMPATIBLE`; los códigos y mensajes v1 del dry-run permanecen intactos y
+  no existe reparación ni retry automático;
+- runbook operativo con 47 revocaciones explícitas de `PUBLIC EXECUTE`, allowlist de 17 funciones,
+  seis sequences, columnas técnicas mínimas, impactos globales, evidencia externa y cero secretos;
+- puerta local: 643 pruebas unitarias y 24 pruebas focalizadas sobre PostgreSQL 16.15, todas sin
+  fallos; `git diff --check` limpio. La suite histórica completa de Testcontainers no se volvió a
+  ejecutar en esta máquina porque no dispone de daemon Docker; su última base acreditada del Corte
+  3 fue 67 IT sobre PostgreSQL 16.14. No se presenta esa base previa como ejecución de este corte;
+- sin comando import, credenciales reales, migración nueva, cambio frontend, deploy ni push.
+
 Commit: `feat(legal): restringe acceso DB del importador`.
 
 ## Corte 5 — Comando import, confirmaciones y reporte v2

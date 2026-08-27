@@ -99,9 +99,7 @@ class LegalManifestImportIT {
                 transaction,
                 jdbc,
                 LegalDatabaseBudgets.production(),
-                List.of(
-                        new LegalV27SchemaVerifier(jdbc),
-                        () -> { /* Corte 4 reemplaza este doble por el verifier de privilegios. */ }));
+                List.of(new LegalV27SchemaVerifier(jdbc)));
         replayVerifier = new LegalManifestReplayVerifier(jdbc, revisionCalculator);
         importService = new LegalManifestImportService(
                 databaseGate,

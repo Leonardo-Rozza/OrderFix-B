@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -163,6 +164,65 @@ class LegalManifestDatabaseGateTest {
                 List.of());
 
         assertThatThrownBy(gate::requireCommitOutcomeSafe)
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void acceptsExactlyTheOrderedImportPreflightsOnTheSharedJdbcSession() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+
+        assertThatCode(() -> gate.requireExactImportPreflights(
+                jdbc,
+                schema,
+                privileges)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsMissingExtraReorderedOrForeignImportPreflights() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        JdbcTemplate foreignJdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight extra = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema)).requireExactImportPreflights(
+                        jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges, extra)).requireExactImportPreflights(
+                        jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(privileges, schema)).requireExactImportPreflights(
+                        jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges)).requireExactImportPreflights(
+                        foreignJdbc, schema, privileges))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

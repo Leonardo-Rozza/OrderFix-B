@@ -28,6 +28,19 @@ public class LegalDryRunDatabaseConfiguration {
     public static final String ENABLED_PROPERTY = "ordenfix.legal.dry-run-context.enabled";
 
     @Bean
+    LegalDatabaseBoundaryMarker legalDryRunDatabaseBoundaryMarker() {
+        return new LegalDatabaseBoundaryMarker(LegalDatabaseBoundaryMarker.Kind.DRY_RUN);
+    }
+
+    @Bean
+    LegalDatabaseBoundaryMarker.Guard legalDryRunDatabaseBoundaryGuard(
+            List<LegalDatabaseBoundaryMarker> markers) {
+        return new LegalDatabaseBoundaryMarker.Guard(
+                markers,
+                LegalDatabaseBoundaryMarker.Kind.DRY_RUN);
+    }
+
+    @Bean
     LegalDatabaseBudgets legalDatabaseBudgets() {
         return LegalDatabaseBudgets.production();
     }

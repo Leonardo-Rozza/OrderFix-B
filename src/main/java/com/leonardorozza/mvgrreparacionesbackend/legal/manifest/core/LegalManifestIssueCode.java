@@ -247,6 +247,9 @@ public enum LegalManifestIssueCode {
     IMPORT_DB_SCHEMA_INCOMPATIBLE(
             LegalManifestStatus.ERROR,
             "La base no posee el schema legal V27 exacto requerido por la importación."),
+    IMPORT_DB_PRIVILEGES_INCOMPATIBLE(
+            LegalManifestStatus.ERROR,
+            "La credencial de importación no posee el perfil PostgreSQL mínimo requerido."),
     IMPORT_DB_PERSISTED_CONFLICT(
             LegalManifestStatus.BLOCKED,
             "El release entra en conflicto con una identidad legal ya persistida."),

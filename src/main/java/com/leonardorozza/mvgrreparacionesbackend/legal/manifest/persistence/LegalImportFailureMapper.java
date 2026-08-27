@@ -2,7 +2,9 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
+import org.springframework.transaction.TransactionSystemException;
 
+import java.sql.SQLException;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
@@ -42,6 +44,11 @@ final class LegalImportFailureMapper {
         if (typed.blockedIssue() != null) {
             return typed.blockedIssue();
         }
+        if (typed.privilegeDenied()) {
+            return LegalManifestIssue.at(
+                    LegalManifestIssueCode.IMPORT_DB_PRIVILEGES_INCOMPATIBLE,
+                    LegalImportPrivilegeVerifier.ISSUE_LOCATION);
+        }
 
         LegalManifestIssue databaseIssue = databaseFailureMapper.map(failure);
         return LegalManifestIssue.at(
@@ -52,6 +59,7 @@ final class LegalImportFailureMapper {
     private static TypedEvidence inspectTyped(Throwable root) {
         LegalManifestIssue operational = null;
         LegalManifestIssue blocked = null;
+        boolean privilegeDenied = false;
         Deque<Throwable> pending = new ArrayDeque<>();
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         pending.add(root);
@@ -68,12 +76,21 @@ final class LegalImportFailureMapper {
                     && blocked == null) {
                 blocked = exception.issue();
             }
+            if (current instanceof SQLException sqlException) {
+                if ("42501".equals(sqlException.getSQLState())) {
+                    privilegeDenied = true;
+                }
+                add(pending, sqlException.getNextException());
+            }
+            if (current instanceof TransactionSystemException transactionFailure) {
+                add(pending, transactionFailure.getApplicationException());
+            }
             add(pending, current.getCause());
             for (Throwable suppressed : current.getSuppressed()) {
                 add(pending, suppressed);
             }
         }
-        return new TypedEvidence(operational, blocked);
+        return new TypedEvidence(operational, blocked, privilegeDenied);
     }
 
     private static void add(Deque<Throwable> pending, Throwable candidate) {
@@ -100,6 +117,7 @@ final class LegalImportFailureMapper {
 
     private record TypedEvidence(
             LegalManifestIssue operationalIssue,
-            LegalManifestIssue blockedIssue
+            LegalManifestIssue blockedIssue,
+            boolean privilegeDenied
     ) { }
 }

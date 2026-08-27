@@ -148,7 +148,8 @@ class LegalManifestDryRunConcurrencyIT {
                 """);
         Map<String, Long> baseline = requiredTableCounts();
 
-        LegalManifestValidation<DryRunResult> validation = service.dryRun(goldenRelease);
+        LegalManifestValidation<DryRunResult> validation =
+                serviceWithoutSchemaPreflight().dryRun(goldenRelease);
 
         assertFailure(validation, LegalManifestStatus.BLOCKED,
                 LegalManifestIssueCode.DB_CONSTRAINT);
@@ -281,6 +282,7 @@ class LegalManifestDryRunConcurrencyIT {
         Map<String, Long> baseline = requiredTableCounts();
         JdbcTemplate observer = directJdbc();
         installNewLineGate(observer);
+        LegalManifestDryRunService instrumentedService = serviceWithoutSchemaPreflight();
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
@@ -288,9 +290,9 @@ class LegalManifestDryRunConcurrencyIT {
         try (Connection gate = directDataSource().getConnection()) {
             acquireAdvisoryLock(gate, NEW_LINE_GATE_LOCK_ID);
             Future<LegalManifestValidation<DryRunResult>> first =
-                    submitDryRun(executor, forward, ready, start);
+                    submitDryRun(instrumentedService, executor, forward, ready, start);
             Future<LegalManifestValidation<DryRunResult>> second =
-                    submitDryRun(executor, reverse, ready, start);
+                    submitDryRun(instrumentedService, executor, reverse, ready, start);
 
             assertThat(ready.await(5, TimeUnit.SECONDS))
                     .as("ambos dry-runs quedaron listos")
@@ -321,9 +323,10 @@ class LegalManifestDryRunConcurrencyIT {
         Map<String, Long> baseline = requiredTableCounts();
         JdbcTemplate observer = directJdbc();
         installDisconnectPause(observer);
+        LegalManifestDryRunService instrumentedService = serviceWithoutSchemaPreflight();
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<LegalManifestValidation<DryRunResult>> pending =
-                executor.submit(() -> service.dryRun(goldenRelease));
+                executor.submit(() -> instrumentedService.dryRun(goldenRelease));
 
         try {
             int backendPid = awaitValue(
@@ -372,7 +375,9 @@ class LegalManifestDryRunConcurrencyIT {
                 """);
         LegalManifestDryRunService shortDeadlineService = serviceWithTransaction(
                 TransactionDefinition.ISOLATION_READ_COMMITTED,
-                1);
+                1,
+                LegalDatabaseBudgets.production(),
+                false);
         Map<String, Long> baseline = requiredTableCounts();
 
         LegalManifestValidation<DryRunResult> validation =
@@ -394,6 +399,14 @@ class LegalManifestDryRunConcurrencyIT {
             int isolation,
             int timeoutSeconds,
             LegalDatabaseBudgets budgets) {
+        return serviceWithTransaction(isolation, timeoutSeconds, budgets, true);
+    }
+
+    private LegalManifestDryRunService serviceWithTransaction(
+            int isolation,
+            int timeoutSeconds,
+            LegalDatabaseBudgets budgets,
+            boolean verifySchema) {
         TransactionTemplate transaction = new TransactionTemplate(
                 context.getBean(JdbcTransactionManager.class));
         transaction.setName("legal-manifest-dry-run-test");
@@ -404,7 +417,27 @@ class LegalManifestDryRunConcurrencyIT {
                 transaction,
                 jdbc,
                 budgets,
-                List.of(context.getBean(LegalV27SchemaVerifier.class)));
+                verifySchema
+                        ? List.of(context.getBean(LegalV27SchemaVerifier.class))
+                        : List.of());
+        return new LegalManifestDryRunService(
+                gate,
+                jdbc,
+                context.getBean(LegalManifestGraphWriter.class),
+                context.getBean(LegalDatabaseFailureMapper.class));
+    }
+
+    /**
+     * Test-only boundary for deliberate catalog instrumentation. Product contexts always keep the
+     * strict V27 preflight; these fixtures add temporary triggers/functions to exercise failures
+     * that occur after graph access.
+     */
+    private LegalManifestDryRunService serviceWithoutSchemaPreflight() {
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                context.getBean(TransactionTemplate.class),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
         return new LegalManifestDryRunService(
                 gate,
                 jdbc,
@@ -455,6 +488,7 @@ class LegalManifestDryRunConcurrencyIT {
     }
 
     private static Future<LegalManifestValidation<DryRunResult>> submitDryRun(
+            LegalManifestDryRunService dryRunService,
             ExecutorService executor,
             ValidatedRelease release,
             CountDownLatch ready,
@@ -464,7 +498,7 @@ class LegalManifestDryRunConcurrencyIT {
             if (!start.await(5, TimeUnit.SECONDS)) {
                 throw new AssertionError("No se abrió la salida concurrente del dry-run");
             }
-            return service.dryRun(release);
+            return dryRunService.dryRun(release);
         });
     }
 

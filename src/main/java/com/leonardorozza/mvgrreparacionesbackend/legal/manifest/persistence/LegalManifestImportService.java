@@ -13,8 +13,8 @@ import java.util.UUID;
 /**
  * Imports one accredited legal release or confirms its exact, immutable replay.
  *
- * <p>This service is deliberately not a Spring component yet. The restricted import context in
- * the next cut is the only production assembly allowed to construct it.</p>
+ * <p>This service is deliberately not a Spring component. Only the isolated, accredited import
+ * database context is allowed to construct it for production use.</p>
  */
 public final class LegalManifestImportService {
 
@@ -37,6 +37,21 @@ public final class LegalManifestImportService {
         this.graphWriter = Objects.requireNonNull(graphWriter, "graphWriter");
         this.replayVerifier = Objects.requireNonNull(replayVerifier, "replayVerifier");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
+    }
+
+    LegalManifestImportService(
+            LegalManifestDatabaseGate databaseGate,
+            JdbcTemplate jdbc,
+            LegalManifestGraphWriter graphWriter,
+            LegalManifestReplayVerifier replayVerifier,
+            LegalImportFailureMapper failureMapper,
+            LegalV27ImportSchemaVerifier schemaVerifier,
+            LegalImportPrivilegeVerifier privilegeVerifier) {
+        this(databaseGate, jdbc, graphWriter, replayVerifier, failureMapper);
+        databaseGate.requireExactImportPreflights(
+                jdbc,
+                Objects.requireNonNull(schemaVerifier, "schemaVerifier"),
+                Objects.requireNonNull(privilegeVerifier, "privilegeVerifier"));
     }
 
     /** Executes one non-retrying import attempt for the opaque validator-issued release. */
