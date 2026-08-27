@@ -240,6 +240,10 @@ El parser exige exactamente una instancia de cada argumento, sin alias, extras, 
 password, propiedades Spring ni `--force`. No hay prompt interactivo. Las confirmaciones no son un
 mecanismo de autorización; evitan apuntar al bundle equivocado.
 
+Los tres argumentos con nombre pueden aparecer en cualquier orden después de `import`. El orden no
+posee semántica: sólo importan el nombre exacto, una única aparición y un valor no vacío que cumpla
+su contrato. No se aceptan formas separadas (`--manifest ruta`) ni abreviaturas.
+
 El orden operativo es:
 
 1. parsear los argumentos sin revelar sus valores;

@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: Cortes 1 a 3 completados; Cortes 4 a 7 pendientes
+Estado: Cortes 1 a 4 completados; Cortes 5 a 7 pendientes
 
 Diseño aprobado:
 
@@ -512,7 +512,8 @@ Crear/modificar pruebas:
 
 1. Agregar `import` al parser con exactamente:
    `--manifest`, `--confirm-publication-id` y `--confirm-manifest-sha256`; una instancia de cada uno,
-   sin alias, extras, duplicados, prompt, `--force`, password ni properties Spring.
+   en cualquier orden después del comando y sin alias, extras, duplicados, prompt, `--force`,
+   password ni properties Spring. No aceptar formas separadas como `--manifest ruta`.
 2. Validar bundle antes de confirmaciones; comparar ID y hash JCS exactos; comprobar luego
    `ORDENFIX_LEGAL_IMPORT_ENABLED=true`; abrir DB al final.
 3. `LegalImportEnvironment` acepta únicamente:
