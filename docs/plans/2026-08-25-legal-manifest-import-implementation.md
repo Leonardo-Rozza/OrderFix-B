@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: Cortes 1 a 5 completados; Cortes 6 a 7 pendientes
+Estado: Cortes 1 a 6 completados; Corte 7 pendiente
 
 Diseño aprobado:
 
@@ -592,6 +592,8 @@ Commit: `feat(legal): expone import seguro en CLI aislada`.
 
 ## Corte 6 — Concurrencia, procesos reales y hardening
 
+Estado: completado el 2026-08-27.
+
 ### Objetivo
 
 Acreditar el protocolo completo en PostgreSQL y en el jar empaquetado, incluidos timeout seguro,
@@ -599,15 +601,24 @@ reconciliación y pérdida de stdout, sin hooks productivos de fallo.
 
 ### Archivos
 
-Crear/modificar pruebas:
+Crear:
 
-- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestImportConcurrencyIT.java`;
-- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestImportFailureIT.java`;
-- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestImportCapacityIT.java`;
-- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalManifestImportProcessIT.java`;
-- `LegalManifestCliIsolationIT.java`;
-- `LegalManifestCliProcessIT.java` para regresión de ambos comandos v1;
-- `pom.xml` sólo para incluir la nueva inspección si no entra por `*IT`.
+- `scripts/legal-manifest-import.sh`;
+- soporte compartido de procesos `LegalCliProcessSupport`;
+- fixtures compartidas de persistencia y rol restringido;
+- `LegalManifestImportConcurrencyIT`, `LegalManifestImportFailureIT` y
+  `LegalManifestImportCapacityIT`;
+- `LegalManifestImportProcessIT`.
+
+Modificar:
+
+- `LegalManifestGraphWriter` para batching y límites de lecturas históricas;
+- `LegalManifestReplayVerifier` para límites `expected + 1`;
+- `LegalManifestReplayVerifierTest` para congelar las siete consultas limitadas;
+- `LegalManifestCliIsolationIT` y `LegalManifestCliProcessIT` para aislamiento, artefactos y
+  regresión de ambos comandos v1;
+- este plan y `docs/runbooks/legal-manifest-import-postgresql.md` para registrar la evidencia y la
+  frontera operativa del launcher.
 
 ### Implementación y escenarios
 
@@ -656,6 +667,51 @@ git diff --check
 
 Registrar cantidad de unitarias/IT, versión de PostgreSQL y cualquier incidente transitorio sin
 disfrazarlo como PASS inicial.
+
+### Evidencia del Corte 6
+
+- concurrencia real sobre PostgreSQL 16 mediante `postgres:16-alpine` —ejecución final observada en
+  16.14—: imports idénticos producen exactamente un `IMPORTED` y un `ALREADY_IMPORTED`; releases
+  compatibles se serializan, reutilizan identidades y conservan conteos al hacer replay; releases
+  incompatibles confirman como máximo uno; dry-run e import comparten el lock sin exponer grafos
+  parciales;
+- fallos reales acreditados sin hooks productivos: timeout de lock, deadlock PostgreSQL, terminación de
+  sesión y pérdida simulada del acuse de commit revierten o quedan `UNKNOWN` según la evidencia
+  disponible. El pool se recupera, ningún intento deja una publicación `ABIERTO` y el retry exacto
+  termina en `IMPORTED` o `ALREADY_IMPORTED` según haya existido commit;
+- import y replay ejecutados en otra JVM mediante el jar empaquetado y un rol PostgreSQL restringido;
+  también quedaron acreditados conflicto persistido, drift de privilegios, pipe de stdout cerrado,
+  redacción de canaries y rechazo previo a sesión/escritura de cada
+  `-Dspring.datasource.{url,username,password,driver-class-name}`;
+- launcher POSIX ejecutado directamente por su shebang y permiso executable: elimina
+  `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS`, exige la ruta explícita del único jar
+  CLI mediante `ORDENFIX_LEGAL_CLI_JAR` y delega con `exec`. Su distribución operativa junto al jar
+  queda exigida en el runbook; Windows permanece fuera de alcance hasta tener un launcher separado
+  y revisado;
+- inspección de todos los jars directos de `target/`: Start-Class normal/CLI correcto, ausencia de
+  `application-secret.properties` y exactamente un jar importador; los comandos v1 conservan
+  procesos, bytes, códigos de salida y aislamiento;
+- release sintético con las cardinalidades máximas productivas —128 documentos, 256 requisitos, 16
+  documentos por requisito y 16 scopes— acreditado con los preflights exactos y el rol restringido.
+  El Markdown permanece dentro del presupuesto, pero este caso no simula un payload total de 16
+  MiB. La métrica cuenta ejecuciones JDBC lógicas con ida al servidor —no paquetes físicos del
+  protocolo— y se autoverifica contra la latencia inyectada; el fresco queda en hasta 1000
+  ejecuciones, el replay en hasta 500 y este último debe usar menos que el fresco;
+- una primera ejecución de capacidad descubrió dos problemas reales: la fixture no respetaba al
+  inicio la identidad del directorio y el writer fila-a-fila agotaba el margen con 5 ms artificiales
+  —la batería llegó a aproximadamente 149 s—. Se corrigió la fixture y se agruparon en orden
+  determinista los inserts de 11 relaciones, sin relajar locks, constraints ni timeouts. Las
+  repeticiones finales ejecutaron import fresco más replay con 5 ms por llamada entre 7,2 y 9,0 s,
+  por debajo de 70 s y con cada sentencia por debajo de 30 s;
+- las siete lecturas multirrow de replay y las tres lecturas históricas del writer están acotadas a
+  cardinalidad esperada más una fila. La fixture corrupta agregó 4096 vínculos documentales y el
+  replay bloqueó tras leer exactamente 129 filas; un test estructural congela el límite en las siete
+  consultas;
+- puertas focalizadas verdes: 5 unitarias de replay, 12 IT de capacidad/concurrencia/fallos,
+  17 unitarias CLI y 17 IT de procesos/aislamiento. Puerta completa con JDK 21.0.10:
+  729 pruebas unitarias y 113 pruebas de integración, todas sin fallos, errores ni omitidas;
+- no hubo migración, endpoint, cambio frontend, credenciales o contenido legal reales, deploy,
+  importación operativa, push ni cambio de `BACKEND-HANDOFF 1`.
 
 Commit: `test(legal): acredita importacion y reconciliacion real`.
 

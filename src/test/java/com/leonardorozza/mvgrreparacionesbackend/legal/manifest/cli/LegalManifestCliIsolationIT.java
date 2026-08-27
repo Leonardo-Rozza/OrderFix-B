@@ -3,7 +3,9 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 import com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication;
 import com.leonardorozza.mvgrreparacionesbackend.config.DataLoader;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalDryRunDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalImportDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestImportService;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.MercadoPagoEventRetryScheduler;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.MercadoPagoReconciliationScheduler;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.SuscripcionScheduler;
@@ -17,6 +19,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.web.server.servlet.ServletWebServerFactory;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.web.context.WebApplicationContext;
@@ -27,6 +31,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import java.sql.DriverManager;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Properties;
 
 import javax.sql.DataSource;
 
@@ -90,6 +95,100 @@ class LegalManifestCliIsolationIT {
                 connectionPool = (HikariDataSource) dataSource;
                 assertThat(connectionPool.isClosed()).isFalse();
                 assertThat(context.getBeansOfType(LegalManifestDryRunService.class)).hasSize(1);
+
+                assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
+                assertThat(context.getBeansOfType(ApplicationRunner.class)).isEmpty();
+                assertThat(context.getBeansOfType(CommandLineRunner.class)).isEmpty();
+                assertThat(context.getBeansOfType(TaskScheduler.class)).isEmpty();
+                assertThat(context.getBeansOfType(
+                        ScheduledAnnotationBeanPostProcessor.class)).isEmpty();
+                assertThat(context.getBeansOfType(ServletWebServerFactory.class)).isEmpty();
+                assertThat(context.getBeansOfType(EntityManagerFactory.class)).isEmpty();
+                assertThat(context.getBeansOfType(DataLoader.class)).isEmpty();
+                assertThat(context.getBeansOfType(
+                        DeviceCredentialLegacyMigration.class)).isEmpty();
+                assertThat(context.getBeansOfType(SuscripcionScheduler.class)).isEmpty();
+                assertThat(context.getBeansOfType(
+                        MercadoPagoEventRetryScheduler.class)).isEmpty();
+                assertThat(context.getBeansOfType(
+                        MercadoPagoReconciliationScheduler.class)).isEmpty();
+            }
+        } finally {
+            restoreSystemProperties(previousSystemProperties);
+        }
+
+        assertThat(connectionPool).isNotNull();
+        assertThat(connectionPool.isClosed()).isTrue();
+        assertThat(flywaySchemaHistoryExists()).isFalse();
+    }
+
+    @Test
+    void importCliBuilderRejectsAmbientSpringConfigurationAndClosesItsPool() {
+        Map<String, String> importVariables = Map.of(
+                LegalImportEnvironment.ENABLED_VARIABLE, "true",
+                LegalImportEnvironment.URL_VARIABLE, POSTGRES.getJdbcUrl(),
+                LegalImportEnvironment.USERNAME_VARIABLE, POSTGRES.getUsername(),
+                LegalImportEnvironment.PASSWORD_VARIABLE, POSTGRES.getPassword(),
+                LegalImportEnvironment.DRIVER_VARIABLE, POSTGRES.getDriverClassName());
+        var resolved = LegalImportEnvironment.resolve(importVariables, new Properties());
+        assertThat(resolved.passed()).isTrue();
+        LegalImportEnvironment importEnvironment = resolved.value().orElseThrow();
+        Map<String, String> hostileSystemProperties = Map.ofEntries(
+                Map.entry(LegalImportDatabaseConfiguration.ENABLED_PROPERTY, "false"),
+                Map.entry("spring.datasource.url", "jdbc:h2:mem:hostile"),
+                Map.entry("spring.datasource.username", "hostile-user"),
+                Map.entry("spring.datasource.password", "hostile-secret"),
+                Map.entry("spring.config.import",
+                        "file:/private/ordenfix-hostile-import.properties"),
+                Map.entry("spring.config.additional-location", "classpath:/"),
+                Map.entry("spring.main.sources",
+                        MvgrReparacionesBackendApplication.class.getName()),
+                Map.entry("spring.main.web-application-type", "servlet"),
+                Map.entry("spring.main.banner-mode", "console"),
+                Map.entry("spring.flyway.enabled", "true"),
+                Map.entry("logging.config", "classpath:logback-spring.xml"),
+                Map.entry("logging.level.root", "TRACE"));
+        Map<String, String> previousSystemProperties = replaceSystemProperties(
+                hostileSystemProperties);
+        HikariDataSource connectionPool = null;
+        try {
+            try (ConfigurableApplicationContext context =
+                         LegalManifestCli.openImportContext(importEnvironment)) {
+                assertThat(context).isNotInstanceOf(WebApplicationContext.class);
+                assertThat(context.getEnvironment().getPropertySources().contains(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)).isFalse();
+                assertThat(context.getEnvironment().getPropertySources().contains(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)).isFalse();
+                assertThat(context.getEnvironment().getProperty(
+                        LegalImportDatabaseConfiguration.ENABLED_PROPERTY)).isEqualTo("true");
+                assertThat(context.getEnvironment().getProperty("spring.datasource.url"))
+                        .isEqualTo(POSTGRES.getJdbcUrl());
+                assertThat(context.getEnvironment().getProperty("spring.datasource.username"))
+                        .isEqualTo(POSTGRES.getUsername());
+                assertThat(context.getEnvironment().getProperty("spring.config.location"))
+                        .isEqualTo("optional:classpath:/ordenfix-legal-cli/");
+                assertThat(context.getEnvironment().getProperty("spring.config.import")).isNull();
+                assertThat(context.getEnvironment().getProperty(
+                        "spring.config.additional-location")).isNull();
+                assertThat(context.getEnvironment().getProperty("spring.main.sources")).isNull();
+                assertThat(context.getEnvironment().getProperty(
+                        "spring.main.web-application-type")).isEqualTo("none");
+                assertThat(context.getEnvironment().getProperty("spring.main.banner-mode"))
+                        .isEqualTo("off");
+                assertThat(context.getEnvironment().getProperty("spring.flyway.enabled"))
+                        .isEqualTo("false");
+                assertThat(context.getEnvironment().getProperty("logging.config")).isNull();
+                assertThat(context.getEnvironment().getProperty("logging.level.root"))
+                        .isEqualTo("OFF");
+
+                assertThat(context.getBeansOfType(DataSource.class)).hasSize(1);
+                assertThat(context.getBeansOfType(JdbcTemplate.class)).hasSize(1);
+                DataSource dataSource = context.getBean(DataSource.class);
+                assertThat(dataSource).isInstanceOf(HikariDataSource.class);
+                connectionPool = (HikariDataSource) dataSource;
+                assertThat(connectionPool.isClosed()).isFalse();
+                assertThat(context.getBeansOfType(LegalManifestImportService.class)).hasSize(1);
+                assertThat(context.getBeansOfType(LegalManifestDryRunService.class)).isEmpty();
 
                 assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
                 assertThat(context.getBeansOfType(ApplicationRunner.class)).isEmpty();

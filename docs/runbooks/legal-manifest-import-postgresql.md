@@ -1,8 +1,7 @@
 # Runbook PostgreSQL del importador legal V27
 
-Estado: contexto DB y comando CLI implementados hasta el Corte 5. La acreditación mediante
-PostgreSQL y procesos del jar real corresponde al Corte 6; el cierre operativo final corresponde al
-Corte 7.
+Estado: contexto DB, comando CLI, launcher y protocolo real acreditados hasta el Corte 6. El cierre
+cross-repo y la autorización operativa final corresponden al Corte 7.
 
 ## Propósito y límites
 
@@ -297,8 +296,8 @@ locks de fila usados por el protocolo. Los triggers V27 rechazan cualquier updat
 
 ## Contrato de ejecución del comando
 
-El proceso acepta únicamente estas variables. El driver es opcional; las otras cuatro deben estar
-presentes y la habilitación debe ser exactamente `true`:
+El contexto importador acepta únicamente estas variables. El driver es opcional; las otras cuatro
+deben estar presentes y la habilitación debe ser exactamente `true`:
 
 ```text
 ORDENFIX_LEGAL_IMPORT_ENABLED=true
@@ -308,29 +307,51 @@ ORDENFIX_LEGAL_IMPORT_DB_PASSWORD=<secreto>
 ORDENFIX_LEGAL_IMPORT_DB_DRIVER_CLASS_NAME=<driver-opcional>
 ```
 
+El launcher agrega sólo dos variables de routing, que no ingresan al contexto Spring:
+`ORDENFIX_LEGAL_CLI_JAR` es obligatoria y `ORDENFIX_JAVA_BIN` es opcional. No confundirlas con las
+cinco variables del contrato importador.
+
 Obtenga el password desde el gestor de secretos y entréguelo sólo como variable del proceso. No lo
 pase por argumentos, archivos versionados, propiedades `-D` ni logs. Cualquier system property JVM
 con prefijo `spring.datasource.*` bloquea el comando aunque también existan variables válidas.
 
-La invocación usa exactamente tres flags con forma `--nombre=valor`, en cualquier orden después de
-`import` y una sola vez cada uno:
+La invocación operativa usa el launcher POSIX versionado. Debe distribuirse como archivo executable
+junto al jar aprobado —Maven construye los jars, pero no empaqueta este script— y su checksum debe
+formar parte del artefacto de release. `ORDENFIX_LEGAL_CLI_JAR` apunta al jar exacto; el launcher
+agrega el comando `import` y acepta exactamente tres flags con forma `--nombre=valor`, en cualquier
+orden y una sola vez cada uno:
 
 ```bash
-java -jar mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar import \
+ORDENFIX_LEGAL_CLI_JAR=/ruta/aprobada/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar \
+./scripts/legal-manifest-import.sh \
   --manifest=/ruta/aprobada/publication-manifest.json \
   --confirm-publication-id=<publication-id-exacto> \
   --confirm-manifest-sha256=<64-hex-jcs-exacto>
 ```
 
+El script requiere `/bin/sh` compatible con POSIX, permiso de ejecución y `java` en `PATH`; puede
+recibir una ruta aprobada mediante `ORDENFIX_JAVA_BIN`. Linux y macOS son los sistemas cubiertos.
+En Windows, detenga el procedimiento hasta contar con un launcher separado, probado y revisado; no
+reemplace este control por una invocación manual del jar.
+
 No continúe si el publication ID o el SHA-256 no coinciden exactamente con el release revisado. El
 proceso devuelve `0` para PASS, `2` para BLOCKED y `3` para ERROR. Si el reporte trae
-`persisted=null` y `outcome=UNKNOWN`, no afirme rollback ni repita con otro release: resuelva la
-causa y reejecute el mismo bundle y las mismas confirmaciones para reconciliar de forma idempotente
-como `ALREADY_IMPORTED` o recibir un fallo conocido.
+`persisted=null` y `outcome=UNKNOWN`, no confirma commit ni rollback y no expone receipt. No cambie
+el release: resuelva la causa y reejecute exactamente el mismo bundle y las mismas confirmaciones.
+El resultado puede ser `ALREADY_IMPORTED` si el intento previo confirmó, `IMPORTED` si revirtió y el
+retry confirma, o un fallo conocido.
+
+Un stdout ausente, truncado o inválido también deja el resultado operativo indeterminado, aunque el
+proceso termine con exit `3`; no lo convierta automáticamente en `UNKNOWN` ni infiera rollback. El
+caso acreditado de pipe cerrado ocurrió después del commit y el retry exacto devolvió
+`ALREADY_IMPORTED`. Capture stdout y stderr por separado, sin pipelines que puedan cerrar stdout,
+y aplique la misma reconciliación exacta.
 
 `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` son interpretadas por la JVM antes de
-`main`; la limpieza efectiva de esas variables en el launcher operativo se acredita recién en el
-Corte 6. Hasta entonces este comando no constituye autorización para una importación productiva.
+`main`. El launcher las elimina antes de iniciar Java y su ejecución directa quedó acreditada en el
+Corte 6. No lo omita: las defensas dentro de `main` no pueden neutralizar opciones que la JVM ya
+procesó. La acreditación del corte se realizó sólo con fixtures sintéticas y no constituye por sí
+sola autorización para importar documentos reales.
 
 ## Verificación posterior
 
@@ -346,9 +367,12 @@ password por argumentos del proceso ni lo guarde en este archivo.
 5. Con una conexión observer/owner, confirme que no quedaron publicaciones `ABIERTO` ni escrituras
    en transiciones, slots, reemplazos, aceptaciones, metadata o idempotencia.
 
-Estos pasos describen el procedimiento operativo objetivo. El Corte 5 no los ejecutó contra
-PostgreSQL ni con credenciales reales; esa evidencia de proceso, replay, concurrencia, pérdida de
-stdout y canaries corresponde al Corte 6.
+El Corte 6 acreditó estos pasos con PostgreSQL 16 mediante `postgres:16-alpine` —la ejecución final
+observó 16.14—, el jar empaquetado, un rol restringido y fixtures sintéticas: import fresco/replay,
+conflicto, drift de privilegios, concurrencia, pérdida de stdout, canaries y recuperación de
+resultados inciertos. No se usaron credenciales, documentos ni entornos operativos reales. Antes de
+una importación real todavía deben cerrarse el Corte 7, la revisión profesional del release y la
+autorización del entorno.
 
 Si cualquiera de los verifiers devuelve `IMPORT_DB_SCHEMA_INCOMPATIBLE` o
 `IMPORT_DB_PRIVILEGES_INCOMPATIBLE`, detenga la importación. No repare grants, historial Flyway ni
@@ -361,15 +385,18 @@ Archive fuera de V27, con acceso restringido:
 
 - entorno, base, schema y rol (sin secreto);
 - versión PostgreSQL y checksum V27 `1575269868`;
+- revisión y SHA-256 del jar CLI y del launcher pareados, más el modo executable del script;
 - identificadores del job y operador;
 - SHA-256 del manifiesto confirmado;
-- outcome, UUID, tiempos y receipt del import/replay;
+- exit code y stdout JSON v2 crudo validado; conserve stderr por separado y sanitizado;
+- outcome, UUID, tiempos y receipt del import/replay sólo cuando el reporte lo incluya;
+- resultado del retry exacto cuando haya existido `UNKNOWN` o una salida ausente/truncada;
 - salida sanitizada de ambos verifiers y logs PostgreSQL relevantes;
 - referencia al cambio que aplicó revocaciones/grants y a la revisión profesional del release.
 
-El receipt, los logs PostgreSQL y los resultados reales se archivan sólo cuando la acreditación del
-Corte 6 o una operación posterior expresamente autorizada haya sido ejecutada; no se fabrican a
-partir de las pruebas unitarias del Corte 5.
+El receipt, los logs PostgreSQL y los resultados de una operación real se archivan sólo cuando esa
+operación haya sido expresamente autorizada. Los receipts sintéticos del Corte 6 acreditan el
+software, pero no deben reutilizarse ni presentarse como evidencia operativa del release real.
 
 No trate el receipt como comprobante fiscal ni como aceptación del cliente. Es evidencia técnica de
 que el grafo editorial exacto fue sellado o reconciliado.

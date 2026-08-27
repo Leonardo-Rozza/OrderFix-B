@@ -102,6 +102,11 @@ class LegalManifestReplayVerifierTest {
         assertThat(verifierJdbc.statements())
                 .isNotEmpty()
                 .allMatch(statement -> statement.startsWith("select "));
+        assertThat(verifierJdbc.statements().stream()
+                .filter(LegalManifestReplayVerifierTest::isMultirowReplayRead)
+                .toList())
+                .hasSize(7)
+                .allMatch(statement -> statement.endsWith("limit ?"));
     }
 
     @Test
@@ -380,6 +385,12 @@ class LegalManifestReplayVerifierTest {
                 declaration.sha256(),
                 declaration.effectiveAt(),
                 declaration.locale());
+    }
+
+    private static boolean isMultirowReplayRead(String statement) {
+        return statement.contains("from legal_publicacion_documentos")
+                || statement.contains("from legal_publicacion_requisitos")
+                || statement.contains("from legal_requisito_conjuntos");
     }
 
     private static void createSchema(JdbcTemplate jdbc) {

@@ -112,6 +112,8 @@ class LegalManifestCliProcessIT {
     private static Path normalJar;
     private static Path legalCliJar;
     private static Path javaExecutable;
+    private static Path buildDirectory;
+    private static String buildFinalName;
 
     @TempDir
     private Path temporaryDirectory;
@@ -126,15 +128,15 @@ class LegalManifestCliProcessIT {
         Path configuredBuildDirectory = Path.of(System.getProperty(
                 BUILD_DIRECTORY_PROPERTY,
                 DEFAULT_BUILD_DIRECTORY));
-        Path buildDirectory = configuredBuildDirectory.isAbsolute()
+        buildDirectory = configuredBuildDirectory.isAbsolute()
                 ? configuredBuildDirectory.normalize()
                 : projectDirectory.resolve(configuredBuildDirectory).normalize();
-        String finalName = System.getProperty(
+        buildFinalName = System.getProperty(
                 BUILD_FINAL_NAME_PROPERTY,
                 DEFAULT_BUILD_FINAL_NAME);
 
-        normalJar = buildDirectory.resolve(finalName + ".jar");
-        legalCliJar = buildDirectory.resolve(finalName + "-legal-cli.jar");
+        normalJar = buildDirectory.resolve(buildFinalName + ".jar");
+        legalCliJar = buildDirectory.resolve(buildFinalName + "-legal-cli.jar");
         javaExecutable = Path.of(System.getProperty("java.home"), "bin", "java")
                 .toAbsolutePath()
                 .normalize();
@@ -172,6 +174,7 @@ class LegalManifestCliProcessIT {
             throws IOException {
         assertJarContract(normalJar, NORMAL_START_CLASS);
         assertJarContract(legalCliJar, LEGAL_CLI_START_CLASS);
+        assertSinglePackagedImportStartClass();
     }
 
     @Test
@@ -465,6 +468,29 @@ class LegalManifestCliProcessIT {
                     .as("application-secret.properties dentro de %s", jarPath.getFileName())
                     .isEmpty();
         }
+    }
+
+    private static void assertSinglePackagedImportStartClass() throws IOException {
+        List<Path> importArtifacts = new ArrayList<>();
+        try (Stream<Path> candidates = Files.list(buildDirectory)) {
+            for (Path candidate : candidates
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".jar"))
+                    .sorted()
+                    .toList()) {
+                try (JarFile jar = new JarFile(candidate.toFile())) {
+                    if (jar.getManifest() != null
+                            && LEGAL_CLI_START_CLASS.equals(jar.getManifest()
+                                    .getMainAttributes()
+                                    .getValue("Start-Class"))) {
+                        importArtifacts.add(candidate.toAbsolutePath().normalize());
+                    }
+                }
+            }
+        }
+        assertThat(importArtifacts)
+                .as("artefactos cuyo Start-Class expone el importador legal")
+                .containsExactly(legalCliJar.toAbsolutePath().normalize());
     }
 
     private static boolean isSecretProperties(String entryName) {

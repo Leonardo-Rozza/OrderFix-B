@@ -68,18 +68,25 @@ final class LegalManifestReplayVerifier {
         requireExactHeader(plan, publication);
         validateSealedPublication(publicationId);
 
-        List<DocumentRow> documents = readDocuments(publicationId);
-        Map<Integer, List<DocumentContextRow>> contexts = readDocumentContexts(publicationId);
+        List<DocumentRow> documents = readDocuments(publicationId, plan.documentCount());
+        Map<Integer, List<DocumentContextRow>> contexts = readDocumentContexts(
+                publicationId,
+                expectedDocumentContexts(plan));
         Map<String, DocumentRow> documentsByKey = verifyDocuments(
                 plan,
                 documents,
                 contexts);
 
-        List<RequirementRow> requirements = readRequirements(publicationId);
+        List<RequirementRow> requirements = readRequirements(
+                publicationId,
+                plan.requirementCount());
         Map<Integer, List<RequirementAudienceRow>> audiences = readRequirementAudiences(
-                publicationId);
+                publicationId,
+                expectedRequirementAudiences(plan));
         Map<Integer, List<RequirementDocumentRow>> requirementDocuments =
-                readRequirementDocuments(publicationId);
+                readRequirementDocuments(
+                        publicationId,
+                        expectedRequirementDocuments(plan));
         Map<Integer, RequirementRow> requirementsByOrdinal = verifyRequirements(
                 plan,
                 requirements,
@@ -87,8 +94,10 @@ final class LegalManifestReplayVerifier {
                 requirementDocuments,
                 documentsByKey);
 
-        List<ScopeRow> scopes = readScopes(publicationId);
-        Map<ScopeKey, List<ScopeMemberRow>> members = readScopeMembers(publicationId);
+        List<ScopeRow> scopes = readScopes(publicationId, plan.scopeCount());
+        Map<ScopeKey, List<ScopeMemberRow>> members = readScopeMembers(
+                publicationId,
+                expectedScopeMembers(plan));
         verifyScopes(
                 plan,
                 publicationId,
@@ -418,7 +427,7 @@ final class LegalManifestReplayVerifier {
                 LocaleLegal.fromCodigo(document.locale()));
     }
 
-    private List<DocumentRow> readDocuments(UUID publicationId) {
+    private List<DocumentRow> readDocuments(UUID publicationId, int expectedRows) {
         return jdbc.query("""
                 SELECT pd.manifest_ordinal,
                        dl.id AS document_line_id,
@@ -436,10 +445,15 @@ final class LegalManifestReplayVerifier {
                     ON dl.id = dv.documento_linea_id
                  WHERE pd.publicacion_id = ?
                  ORDER BY pd.manifest_ordinal
-                """, LegalManifestReplayVerifier::mapDocument, publicationId);
+                 LIMIT ?
+                """, LegalManifestReplayVerifier::mapDocument,
+                publicationId,
+                expectedPlusOne(expectedRows));
     }
 
-    private Map<Integer, List<DocumentContextRow>> readDocumentContexts(UUID publicationId) {
+    private Map<Integer, List<DocumentContextRow>> readDocumentContexts(
+            UUID publicationId,
+            int expectedRows) {
         List<DocumentContextRow> rows = jdbc.query("""
                 SELECT pd.manifest_ordinal, dc.documento_version_id, dc.contexto
                   FROM legal_publicacion_documentos pd
@@ -447,14 +461,17 @@ final class LegalManifestReplayVerifier {
                     ON dc.documento_version_id = pd.documento_version_id
                  WHERE pd.publicacion_id = ?
                  ORDER BY pd.manifest_ordinal, dc.contexto, dc.id
+                 LIMIT ?
                 """, (rs, rowNumber) -> new DocumentContextRow(
                 rs.getInt("manifest_ordinal"),
                 rs.getObject("documento_version_id", UUID.class),
-                rs.getString("contexto")), publicationId);
+                rs.getString("contexto")),
+                publicationId,
+                expectedPlusOne(expectedRows));
         return groupByOrdinal(rows, DocumentContextRow::manifestOrdinal);
     }
 
-    private List<RequirementRow> readRequirements(UUID publicationId) {
+    private List<RequirementRow> readRequirements(UUID publicationId, int expectedRows) {
         return jdbc.query("""
                 SELECT pr.manifest_ordinal,
                        rl.id AS requirement_line_id,
@@ -471,11 +488,15 @@ final class LegalManifestReplayVerifier {
                     ON rl.id = rv.requisito_linea_id
                  WHERE pr.publicacion_id = ?
                  ORDER BY pr.manifest_ordinal
-                """, LegalManifestReplayVerifier::mapRequirement, publicationId);
+                 LIMIT ?
+                """, LegalManifestReplayVerifier::mapRequirement,
+                publicationId,
+                expectedPlusOne(expectedRows));
     }
 
     private Map<Integer, List<RequirementAudienceRow>> readRequirementAudiences(
-            UUID publicationId) {
+            UUID publicationId,
+            int expectedRows) {
         List<RequirementAudienceRow> rows = jdbc.query("""
                 SELECT pr.manifest_ordinal, ra.requisito_linea_id, ra.audiencia
                   FROM legal_publicacion_requisitos pr
@@ -485,15 +506,19 @@ final class LegalManifestReplayVerifier {
                     ON ra.requisito_linea_id = rv.requisito_linea_id
                  WHERE pr.publicacion_id = ?
                  ORDER BY pr.manifest_ordinal, ra.audiencia, ra.id
+                 LIMIT ?
                 """, (rs, rowNumber) -> new RequirementAudienceRow(
                 rs.getInt("manifest_ordinal"),
                 rs.getObject("requisito_linea_id", UUID.class),
-                rs.getString("audiencia")), publicationId);
+                rs.getString("audiencia")),
+                publicationId,
+                expectedPlusOne(expectedRows));
         return groupByOrdinal(rows, RequirementAudienceRow::manifestOrdinal);
     }
 
     private Map<Integer, List<RequirementDocumentRow>> readRequirementDocuments(
-            UUID publicationId) {
+            UUID publicationId,
+            int expectedRows) {
         List<RequirementDocumentRow> rows = jdbc.query("""
                 SELECT pr.manifest_ordinal AS requirement_ordinal,
                        rd.requisito_version_id,
@@ -509,30 +534,38 @@ final class LegalManifestReplayVerifier {
                     ON dl.id = dv.documento_linea_id
                  WHERE pr.publicacion_id = ?
                  ORDER BY pr.manifest_ordinal, rd.documento_ordinal, rd.id
+                 LIMIT ?
                 """, (rs, rowNumber) -> new RequirementDocumentRow(
                 rs.getInt("requirement_ordinal"),
                 rs.getObject("requisito_version_id", UUID.class),
                 rs.getInt("documento_ordinal"),
                 rs.getObject("documento_version_id", UUID.class),
-                rs.getString("document_key")), publicationId);
+                rs.getString("document_key")),
+                publicationId,
+                expectedPlusOne(expectedRows));
         return groupByOrdinal(rows, RequirementDocumentRow::requirementOrdinal);
     }
 
-    private List<ScopeRow> readScopes(UUID publicationId) {
+    private List<ScopeRow> readScopes(UUID publicationId, int expectedRows) {
         return jdbc.query("""
                 SELECT id, locale, contexto, audiencia, required_set_revision
-                  FROM legal_requisito_conjuntos
+                 FROM legal_requisito_conjuntos
                  WHERE publicacion_id = ?
                  ORDER BY locale, contexto, audiencia
+                 LIMIT ?
                 """, (rs, rowNumber) -> new ScopeRow(
                 rs.getObject("id", UUID.class),
                 rs.getString("locale"),
                 rs.getString("contexto"),
                 rs.getString("audiencia"),
-                rs.getString("required_set_revision")), publicationId);
+                rs.getString("required_set_revision")),
+                publicationId,
+                expectedPlusOne(expectedRows));
     }
 
-    private Map<ScopeKey, List<ScopeMemberRow>> readScopeMembers(UUID publicationId) {
+    private Map<ScopeKey, List<ScopeMemberRow>> readScopeMembers(
+            UUID publicationId,
+            int expectedRows) {
         List<ScopeMemberRow> rows = jdbc.query("""
                 SELECT c.id AS scope_id, c.locale, c.contexto, c.audiencia,
                        m.publicacion_id, m.requisito_version_id,
@@ -543,6 +576,7 @@ final class LegalManifestReplayVerifier {
                  WHERE c.publicacion_id = ?
                  ORDER BY c.locale, c.contexto, c.audiencia,
                           m.manifest_ordinal, m.id
+                 LIMIT ?
                 """, (rs, rowNumber) -> new ScopeMemberRow(
                 rs.getObject("scope_id", UUID.class),
                 new ScopeKey(
@@ -552,12 +586,53 @@ final class LegalManifestReplayVerifier {
                 rs.getObject("publicacion_id", UUID.class),
                 rs.getObject("requisito_version_id", UUID.class),
                 rs.getObject("requisito_linea_id", UUID.class),
-                rs.getInt("manifest_ordinal")), publicationId);
+                rs.getInt("manifest_ordinal")),
+                publicationId,
+                expectedPlusOne(expectedRows));
         Map<ScopeKey, List<ScopeMemberRow>> grouped = new LinkedHashMap<>();
         for (ScopeMemberRow row : rows) {
             grouped.computeIfAbsent(row.key(), ignored -> new ArrayList<>()).add(row);
         }
         return immutableLists(grouped);
+    }
+
+    private static int expectedDocumentContexts(LegalPublicationPlan plan) {
+        int expected = 0;
+        for (DocumentPlan document : plan.documents()) {
+            expected = Math.addExact(expected, document.declaration().contexts().size());
+        }
+        return expected;
+    }
+
+    private static int expectedRequirementAudiences(LegalPublicationPlan plan) {
+        int expected = 0;
+        for (RequirementEntry requirement : plan.manifest().requirements()) {
+            expected = Math.addExact(expected, requirement.roles().size());
+        }
+        return expected;
+    }
+
+    private static int expectedRequirementDocuments(LegalPublicationPlan plan) {
+        int expected = 0;
+        for (RequirementEntry requirement : plan.manifest().requirements()) {
+            expected = Math.addExact(expected, requirement.documents().size());
+        }
+        return expected;
+    }
+
+    private static int expectedScopeMembers(LegalPublicationPlan plan) {
+        int expected = 0;
+        for (ScopePlan scope : plan.scopes()) {
+            expected = Math.addExact(expected, scope.requirements().size());
+        }
+        return expected;
+    }
+
+    private static int expectedPlusOne(int expectedRows) {
+        if (expectedRows < 0) {
+            throw new IllegalArgumentException("La cardinalidad esperada no puede ser negativa");
+        }
+        return Math.addExact(expectedRows, 1);
     }
 
     private static boolean exactDocumentContexts(

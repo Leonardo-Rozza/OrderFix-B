@@ -23,6 +23,7 @@ import org.springframework.jdbc.core.RowMapper;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -452,7 +453,10 @@ final class LegalManifestGraphWriter {
                     SELECT contexto
                       FROM legal_documento_contextos
                      WHERE documento_version_id = ?
-                    """, String.class, document.versionId()));
+                     LIMIT ?
+                    """, String.class,
+                    document.versionId(),
+                    expectedPlusOne(document.plan().declaration().contexts().size())));
             if (!contexts.equals(enumNameSet(document.plan().declaration().contexts()))) {
                 throw blocked(location);
             }
@@ -465,7 +469,10 @@ final class LegalManifestGraphWriter {
                         SELECT audiencia
                           FROM legal_requisito_audiencias
                          WHERE requisito_linea_id = ?
-                        """, String.class, requirement.lineId()));
+                         LIMIT ?
+                        """, String.class,
+                        requirement.lineId(),
+                        expectedPlusOne(requirement.declaration().roles().size())));
                 if (!audiences.equals(enumNameSet(requirement.declaration().roles()))) {
                     throw blocked(location);
                 }
@@ -473,11 +480,13 @@ final class LegalManifestGraphWriter {
             if (!requirement.newVersion()) {
                 List<RequirementDocumentRow> relations = jdbc.query("""
                         SELECT documento_ordinal, documento_version_id
-                          FROM legal_requisito_documentos
+                         FROM legal_requisito_documentos
                          WHERE requisito_version_id = ?
                          ORDER BY documento_ordinal
+                         LIMIT ?
                         """, LegalManifestGraphWriter::mapRequirementDocument,
-                        requirement.versionId());
+                        requirement.versionId(),
+                        expectedPlusOne(requirement.documents().size()));
                 boolean relationMatches = relations.size() == requirement.documents().size();
                 for (int index = 0; relationMatches && index < relations.size(); index++) {
                     RequirementDocumentRow relation = relations.get(index);
@@ -573,42 +582,78 @@ final class LegalManifestGraphWriter {
         List<DocumentPlan> insertionOrder = plan.documents().stream()
                 .sorted(Comparator.comparing(document -> document.declaration().key()))
                 .toList();
+
+        List<Object[]> lineRows = new ArrayList<>();
+        List<Object[]> versionRows = new ArrayList<>();
+        List<Object[]> contextRows = new ArrayList<>();
         for (DocumentPlan documentPlan : insertionOrder) {
             ResolvedDocument document = documents.get(documentPlan.declaration().key());
             DocumentEntry declaration = documentPlan.declaration();
             if (document.newLine()) {
-                jdbc.update("""
-                        INSERT INTO legal_documento_lineas
-                            (id, clave, tipo, locale, publicacion_intro_id, creado_en)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """, document.lineId(), declaration.key(), declaration.type().name(),
-                        declaration.locale().getCodigo(), publicationId, transactionTime);
+                lineRows.add(new Object[]{
+                        document.lineId(),
+                        declaration.key(),
+                        declaration.type().name(),
+                        declaration.locale().getCodigo(),
+                        publicationId,
+                        transactionTime
+                });
             }
             if (document.newVersion()) {
-                jdbc.update("""
-                        INSERT INTO legal_documento_versiones
-                            (id, documento_linea_id, publicacion_intro_id, version,
-                             lineage_ordinal, titulo, contenido_markdown, sha256,
-                             vigente_desde, requires_reacceptance)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, document.versionId(), document.lineId(), publicationId,
-                        declaration.version(), document.lineageOrdinal(), documentPlan.title(),
-                        documentPlan.markdown(), declaration.sha256(), declaration.effectiveAt(),
-                        declaration.requiresReacceptance());
+                versionRows.add(new Object[]{
+                        document.versionId(),
+                        document.lineId(),
+                        publicationId,
+                        declaration.version(),
+                        document.lineageOrdinal(),
+                        documentPlan.title(),
+                        documentPlan.markdown(),
+                        declaration.sha256(),
+                        declaration.effectiveAt(),
+                        declaration.requiresReacceptance()
+                });
                 for (var context : declaration.contexts()) {
-                    jdbc.update("""
-                            INSERT INTO legal_documento_contextos
-                                (documento_version_id, contexto)
-                            VALUES (?, ?)
-                            """, document.versionId(), context.name());
+                    contextRows.add(new Object[]{document.versionId(), context.name()});
                 }
             }
-            jdbc.update("""
-                    INSERT INTO legal_publicacion_documentos
-                        (publicacion_id, documento_version_id, manifest_ordinal)
-                    VALUES (?, ?, ?)
-                    """, publicationId, document.versionId(), documentPlan.manifestOrdinal() + 1);
         }
+
+        executeExactBatch("""
+                INSERT INTO legal_documento_lineas
+                    (id, clave, tipo, locale, publicacion_intro_id, creado_en)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, lineRows);
+        executeExactBatch("""
+                INSERT INTO legal_documento_versiones
+                    (id, documento_linea_id, publicacion_intro_id, version,
+                     lineage_ordinal, titulo, contenido_markdown, sha256,
+                     vigente_desde, requires_reacceptance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, versionRows);
+        executeExactBatch("""
+                INSERT INTO legal_documento_contextos
+                    (documento_version_id, contexto)
+                VALUES (?, ?)
+                """, contextRows);
+
+        List<Object[]> publicationRows = plan.documents().stream()
+                .sorted(Comparator.comparingInt(DocumentPlan::manifestOrdinal))
+                .map(documentPlan -> {
+                    ResolvedDocument document = Objects.requireNonNull(
+                            documents.get(documentPlan.declaration().key()),
+                            "resolved document");
+                    return new Object[]{
+                            publicationId,
+                            document.versionId(),
+                            documentPlan.manifestOrdinal() + 1
+                    };
+                })
+                .toList();
+        executeExactBatch("""
+                INSERT INTO legal_publicacion_documentos
+                    (publicacion_id, documento_version_id, manifest_ordinal)
+                VALUES (?, ?, ?)
+                """, publicationRows);
     }
 
     private void insertRequirements(
@@ -620,51 +665,91 @@ final class LegalManifestGraphWriter {
         List<ResolvedRequirement> insertionOrder = requirements.stream()
                 .sorted(Comparator.comparing(requirement -> requirement.declaration().key()))
                 .toList();
+
+        List<Object[]> lineRows = new ArrayList<>();
+        List<Object[]> audienceRows = new ArrayList<>();
+        List<Object[]> versionRows = new ArrayList<>();
         for (ResolvedRequirement requirement : insertionOrder) {
             RequirementEntry declaration = requirement.declaration();
             if (requirement.newLine()) {
-                jdbc.update("""
-                        INSERT INTO legal_requisito_lineas
-                            (id, clave, locale, contexto, tipo_acto,
-                             publicacion_intro_id, creado_en)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, requirement.lineId(), declaration.key(),
-                        plan.manifest().locale().getCodigo(), declaration.context().name(),
-                        declaration.actType().name(), publicationId, transactionTime);
+                lineRows.add(new Object[]{
+                        requirement.lineId(),
+                        declaration.key(),
+                        plan.manifest().locale().getCodigo(),
+                        declaration.context().name(),
+                        declaration.actType().name(),
+                        publicationId,
+                        transactionTime
+                });
                 for (var audience : declaration.roles()) {
-                    jdbc.update("""
-                            INSERT INTO legal_requisito_audiencias
-                                (requisito_linea_id, audiencia)
-                            VALUES (?, ?)
-                            """, requirement.lineId(), audience.name());
+                    audienceRows.add(new Object[]{requirement.lineId(), audience.name()});
                 }
             }
             if (requirement.newVersion()) {
-                jdbc.update("""
-                        INSERT INTO legal_requisito_versiones
-                            (id, requisito_linea_id, publicacion_intro_id, version,
-                             lineage_ordinal, afirmacion, afirmacion_sha256, requerido,
-                             requires_reacceptance)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, requirement.versionId(), requirement.lineId(), publicationId,
-                        declaration.version(), requirement.lineageOrdinal(), declaration.statement(),
-                        declaration.statementSha256(), declaration.required(),
-                        declaration.requiresReacceptance());
+                versionRows.add(new Object[]{
+                        requirement.versionId(),
+                        requirement.lineId(),
+                        publicationId,
+                        declaration.version(),
+                        requirement.lineageOrdinal(),
+                        declaration.statement(),
+                        declaration.statementSha256(),
+                        declaration.required(),
+                        declaration.requiresReacceptance()
+                });
+            }
+        }
+
+        executeExactBatch("""
+                INSERT INTO legal_requisito_lineas
+                    (id, clave, locale, contexto, tipo_acto,
+                     publicacion_intro_id, creado_en)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, lineRows);
+        executeExactBatch("""
+                INSERT INTO legal_requisito_audiencias
+                    (requisito_linea_id, audiencia)
+                VALUES (?, ?)
+                """, audienceRows);
+        executeExactBatch("""
+                INSERT INTO legal_requisito_versiones
+                    (id, requisito_linea_id, publicacion_intro_id, version,
+                     lineage_ordinal, afirmacion, afirmacion_sha256, requerido,
+                     requires_reacceptance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, versionRows);
+
+        List<ResolvedRequirement> ordinalOrder = requirements.stream()
+                .sorted(Comparator.comparingInt(ResolvedRequirement::manifestOrdinal))
+                .toList();
+        List<Object[]> documentRows = new ArrayList<>();
+        List<Object[]> publicationRows = new ArrayList<>(ordinalOrder.size());
+        for (ResolvedRequirement requirement : ordinalOrder) {
+            if (requirement.newVersion()) {
                 for (int index = 0; index < requirement.documents().size(); index++) {
-                    jdbc.update("""
-                            INSERT INTO legal_requisito_documentos
-                                (requisito_version_id, documento_version_id, documento_ordinal)
-                            VALUES (?, ?, ?)
-                            """, requirement.versionId(),
-                            requirement.documents().get(index).versionId(), index + 1);
+                    documentRows.add(new Object[]{
+                            requirement.versionId(),
+                            requirement.documents().get(index).versionId(),
+                            index + 1
+                    });
                 }
             }
-            jdbc.update("""
-                    INSERT INTO legal_publicacion_requisitos
-                        (publicacion_id, requisito_version_id, manifest_ordinal)
-                    VALUES (?, ?, ?)
-                    """, publicationId, requirement.versionId(), requirement.manifestOrdinal() + 1);
+            publicationRows.add(new Object[]{
+                    publicationId,
+                    requirement.versionId(),
+                    requirement.manifestOrdinal() + 1
+            });
         }
+        executeExactBatch("""
+                INSERT INTO legal_requisito_documentos
+                    (requisito_version_id, documento_version_id, documento_ordinal)
+                VALUES (?, ?, ?)
+                """, documentRows);
+        executeExactBatch("""
+                INSERT INTO legal_publicacion_requisitos
+                    (publicacion_id, requisito_version_id, manifest_ordinal)
+                VALUES (?, ?, ?)
+                """, publicationRows);
     }
 
     private void insertScopes(
@@ -675,28 +760,67 @@ final class LegalManifestGraphWriter {
         Map<Integer, ResolvedRequirement> byOrdinal = new HashMap<>();
         requirements.forEach(requirement ->
                 byOrdinal.put(requirement.manifestOrdinal(), requirement));
+        List<ResolvedScope> resolvedScopes = new ArrayList<>(plan.scopeCount());
         for (ScopePlan scope : plan.scopes()) {
             UUID snapshotId = UUID.randomUUID();
             String requiredSetRevision = requiredSetRevisionCalculator.calculate(
                     projectScope(scope, byOrdinal));
-            jdbc.update("""
-                    INSERT INTO legal_requisito_conjuntos
-                        (id, publicacion_id, locale, contexto, audiencia,
-                         required_set_revision, creado_en)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, snapshotId, publicationId, scope.locale().getCodigo(),
-                    scope.context().name(), scope.audience().name(),
-                    requiredSetRevision, transactionTime);
-            for (RequirementPlan member : scope.requirements()) {
+            resolvedScopes.add(new ResolvedScope(scope, snapshotId, requiredSetRevision));
+        }
+
+        List<Object[]> scopeRows = resolvedScopes.stream()
+                .map(scope -> new Object[]{
+                        scope.id(),
+                        publicationId,
+                        scope.plan().locale().getCodigo(),
+                        scope.plan().context().name(),
+                        scope.plan().audience().name(),
+                        scope.requiredSetRevision(),
+                        transactionTime
+                })
+                .toList();
+        executeExactBatch("""
+                INSERT INTO legal_requisito_conjuntos
+                    (id, publicacion_id, locale, contexto, audiencia,
+                     required_set_revision, creado_en)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, scopeRows);
+
+        List<Object[]> memberRows = new ArrayList<>();
+        for (ResolvedScope scope : resolvedScopes) {
+            for (RequirementPlan member : scope.plan().requirements().stream()
+                    .sorted(Comparator.comparingInt(RequirementPlan::manifestOrdinal))
+                    .toList()) {
                 ResolvedRequirement requirement = Objects.requireNonNull(
                         byOrdinal.get(member.manifestOrdinal()), "resolved scope requirement");
-                jdbc.update("""
-                        INSERT INTO legal_requisito_conjunto_miembros
-                            (conjunto_id, publicacion_id, requisito_version_id,
-                             requisito_linea_id, manifest_ordinal)
-                        VALUES (?, ?, ?, ?, ?)
-                        """, snapshotId, publicationId, requirement.versionId(),
-                        requirement.lineId(), member.manifestOrdinal() + 1);
+                memberRows.add(new Object[]{
+                        scope.id(),
+                        publicationId,
+                        requirement.versionId(),
+                        requirement.lineId(),
+                        member.manifestOrdinal() + 1
+                });
+            }
+        }
+        executeExactBatch("""
+                INSERT INTO legal_requisito_conjunto_miembros
+                    (conjunto_id, publicacion_id, requisito_version_id,
+                     requisito_linea_id, manifest_ordinal)
+                VALUES (?, ?, ?, ?, ?)
+                """, memberRows);
+    }
+
+    private void executeExactBatch(String sql, List<Object[]> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        int[] updateCounts = jdbc.batchUpdate(sql, rows);
+        if (updateCounts.length != rows.size()) {
+            throw new IllegalStateException("El batch legal devolvió una cardinalidad inesperada");
+        }
+        for (int updateCount : updateCounts) {
+            if (updateCount != 1 && updateCount != Statement.SUCCESS_NO_INFO) {
+                throw new IllegalStateException("El batch legal no insertó exactamente una fila");
             }
         }
     }
@@ -821,6 +945,13 @@ final class LegalManifestGraphWriter {
         }
     }
 
+    private static int expectedPlusOne(int expectedRows) {
+        if (expectedRows < 0) {
+            throw new IllegalArgumentException("La cardinalidad esperada no puede ser negativa");
+        }
+        return Math.addExact(expectedRows, 1);
+    }
+
     private <T> Optional<T> querySingle(String sql, RowMapper<T> mapper, Object... arguments) {
         List<T> rows = jdbc.query(sql, mapper, arguments);
         if (rows.size() > 1) {
@@ -939,6 +1070,12 @@ final class LegalManifestGraphWriter {
     ) { }
 
     private record RequirementDocumentRow(int ordinal, UUID documentVersionId) { }
+
+    private record ResolvedScope(
+            ScopePlan plan,
+            UUID id,
+            String requiredSetRevision
+    ) { }
 
     private record PublicationSealRow(
             String state,
