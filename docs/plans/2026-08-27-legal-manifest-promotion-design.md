@@ -498,7 +498,8 @@ El rol editorial:
 - recibe los UPDATE de columnas que el call graph SECURITY INVOKER necesita para materializar
   estados: estado, estado_cambiado_en, ultimo_motivo y reemplazo_lote_id documentales; estado,
   estado_cambiado_en y ultimo_motivo de requisitos;
-- recibe UPDATE(id) técnico sobre líneas y versiones para los SELECT FOR UPDATE requeridos;
+- recibe UPDATE(id) técnico sobre publicaciones, líneas y versiones para los SELECT FOR
+  UPDATE/SHARE requeridos;
 - puede borrar únicamente proyecciones actuales que el protocolo de reemplazo/retiro deba
   reconstruir;
 - no puede insertar, actualizar ni borrar snapshots sellados en legal_requisito_conjuntos o
@@ -511,6 +512,12 @@ El rol editorial:
 Esos grants de UPDATE no autorizan updates directos: legal_version_update_interno_guard y los
 guards de las líneas los rechazan fuera del call graph de triggers. El verifier exige las columnas
 positivas exactas, la ausencia de UPDATE de tabla y pruebas negativas de UPDATE real y no-op.
+
+Precisión incorporada durante el plan de implementación: legal_publicaciones también requiere
+UPDATE(id) porque legal_bloquear_publicacion_sellada(uuid), parte del call graph SECURITY INVOKER de
+V27, usa SELECT FOR SHARE. Es un grant técnico de columna, no UPDATE de tabla ni autorización para
+cambiar una publicación; el verifier acredita el call graph positivo y que UPDATE directo y no-op
+continúan rechazados.
 
 El inventario exacto de tablas, columnas, secuencias, funciones y grants se congela como fixture en
 el corte de seguridad. Un permiso faltante o adicional bloquea antes de mutar.
