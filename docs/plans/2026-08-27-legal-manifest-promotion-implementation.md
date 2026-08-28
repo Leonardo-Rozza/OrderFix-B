@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 y 2 completados
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2 y 3 completados
 
 Diseño aprobado:
 
@@ -384,7 +384,7 @@ Commit:
 
 ## Corte 3 — Plan editorial inmutable y simulación
 
-Estado: pendiente.
+Estado: completado el 2026-08-28.
 
 ### Objetivo
 
@@ -410,7 +410,10 @@ Crear:
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalEditorialPlanParserTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalEditorialPlanValidatorTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalEditorialPlanGoldenFixtureTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialExecutionPlanTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPlanResultTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPlanServiceTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPlannerCoreTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPlannerIT.java;
 - src/test/resources/legal/editorial/replace-valid-v1/editorial-plan.json;
 - src/test/resources/legal/editorial/replace-valid-v1/canonical.json;
@@ -424,6 +427,9 @@ Modificar:
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/StrictJsonReader.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/Rfc8785Canonicalizer.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalManifestIssueCode.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessCore.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessCoreTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessIT.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestPersistenceITSupport.java.
 
 ### Implementación
@@ -449,6 +455,36 @@ Modificar:
     temporal ni row locks.
 13. No habilitar todavía DML REPLACE/RETIRE.
 
+### Precisiones incorporadas durante el Corte 3
+
+- El artefacto v1 quedó plano, cerrado y sin `$schema`: 18 propiedades obligatorias y ocho arrays
+  siempre presentes. El batch documental declara su UUID; no se deriva de contenido ni de orden.
+- El SHA externo se calcula sobre el JSON estricto de entrada canonicalizado con RFC 8785. Los
+  arrays son sensibles al orden para esa identidad; el token validado mantiene además una
+  representación semántica ordenada y determinista para planificar.
+- El reader confinado reutiliza las garantías comunes de archivo regular, tamaño, UTF-8, NFC, LF y
+  ausencia de symlink, pero conserva códigos editoriales específicos para que un plan inválido no
+  se reporte falsamente como un manifiesto inválido.
+- `LegalEditorialExecutionPlan` separa estado fuente esperado, postestado exacto, comandos directos
+  y efectos producidos por los triggers V27. Así el futuro apply no podrá duplicar transiciones o
+  proyecciones que ya crea el lote documental.
+- El planner evalúa primero el postestado para reconocer replay sin volver a exigir el fingerprint
+  fuente. Sólo ante un postestado distinto valida la fuente exacta; cualquier mezcla parcial queda
+  BLOCKED.
+- El replay REPLACE acredita una única operación atómica: todas las transiciones creadas por ese
+  plan, la creación y sello de sus lotes y la actualización de los punteros target deben compartir
+  un único instante. Una publicación source SELLADA no es suficiente por sí sola: sus membresías no
+  pueden permanecer BORRADOR o PUBLICADA y la cobertura declarada se calcula sobre las VIGENTE.
+- La recuperación de huecos editoriales clasifica la fuente desde la membresía sellada y los
+  estados VIGENTE, no sólo desde punteros actuales. RETIRE elimina explícitamente los punteros que
+  referencian documentos o requisitos afectados, incluidos retiros exclusivamente documentales.
+- `LegalEditorialReadinessCore` expone internamente una única snapshot SELECT-only reutilizable por
+  readiness y planner. Una publicación ajena completamente BORRADOR no altera el fingerprint de la
+  fuente.
+- `LegalEditorialPlanService` abre un único gate read-only, comparte la misma `JdbcTemplate` y lee
+  exactamente una vez `transaction_timestamp()`. Core, parser y validator no abren conexiones ni
+  ejecutan DML.
+
 ### Pruebas y puerta
 
 Cubrir path security, límites, schema, canonical, cambios de hash, tipo de comando, source
@@ -456,7 +492,7 @@ fingerprint, cobertura exacta, delta mixto, ningún retiro inferido y cero cambi
 en plan.
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialPlanSchemaTest,ConfinedEditorialPlanReaderTest,LegalEditorialPlanParserTest,LegalEditorialPlanValidatorTest,LegalEditorialPlanGoldenFixtureTest,LegalEditorialPlanResultTest,StrictJsonReaderTest,Rfc8785CanonicalizerTest test
+./mvnw -Dtest=LegalEditorialPlanSchemaTest,ConfinedEditorialPlanReaderTest,LegalEditorialPlanParserTest,LegalEditorialPlanValidatorTest,LegalEditorialPlanGoldenFixtureTest,LegalEditorialExecutionPlanTest,LegalEditorialPlanResultTest,LegalEditorialPlanServiceTest,LegalEditorialPlannerCoreTest,StrictJsonReaderTest,Rfc8785CanonicalizerTest test
 ./mvnw -Dit.test=LegalEditorialPlannerIT,LegalEditorialReadinessIT verify
 git diff --check
 git status --short
@@ -465,6 +501,29 @@ git status --short
 Commit:
 
     feat(legal): planifica acciones editoriales
+
+### Evidencia de cierre
+
+- Java 21 (Corretto 21.0.10), puerta focalizada del contrato, parser, modelo, planner y service:
+  134 tests, 0 fallos, 0 errores y 0 omitidos.
+- Suite unitaria backend completa ejecutada por verify: 856 tests, 0 fallos, 0 errores y 0
+  omitidos.
+- PostgreSQL 16 real con Flyway V27: 39 tests de integración, 0 fallos, 0 errores y 0 omitidos:
+  LegalEditorialPlannerIT (8), LegalEditorialReadinessIT (9),
+  LegalEditorialSchemaVerifierIT (15) y LegalManifestImportIT (7).
+- Los golden RFC 8785 del artefacto v1 quedaron congelados en
+  `534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c` para REPLACE y
+  `69015b111e3fda886debf05201648578e306403c1e222f02d7e17b21be822d33` para RETIRE.
+- PROMOTE, replay, REPLACE mixto, RETIRE exclusivamente documental, fingerprint incorrecto,
+  historia previa, estado parcial y overflow preservan exactamente las 19 tablas y 10 secuencias
+  editoriales durante plan.
+- La auditoría cruzada detectó y cerró dos regresiones antes del commit: replay con transiciones en
+  instantes distintos y REPLACE addition-only sobre una publicación source aún BORRADOR. No quedan
+  hallazgos P1/P2 confirmados.
+- El core no contiene DML, row locks, función de validación sellada ni reloj propio; el service abre
+  un único gate read-only y ejecuta un único `transaction_timestamp()` después del lock.
+- V27, inventario/verifier/importador de 2.3B, publication-manifest.schema.json, endpoints,
+  frontend y configuración de despliegue no se modificaron. `git diff --check` quedó limpio.
 
 ## Corte 4 — Primera promoción transaccional
 

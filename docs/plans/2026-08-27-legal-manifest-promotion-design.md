@@ -351,8 +351,49 @@ modificar el schema del manifiesto de publicación. El parser comparte las defen
 - JSON estricto, sin claves desconocidas ni duplicadas;
 - operationId UUID, IDs normalizados y arrays sin duplicados;
 - hasta 128 documentos, 256 requisitos y 128 lotes;
-- motivo recortado, no vacío y de hasta 1000 caracteres;
+- motivo sin whitespace exterior, no vacío y de hasta 1000 caracteres;
 - cero rutas o referencias a archivos adicionales dentro del plan.
+
+#### Contrato JSON editorial v1 congelado
+
+El artefacto v1 no declara `$schema`, no admite `null` y usa una raíz plana con exactamente estos
+campos, todos obligatorios: `schemaVersion`, `operationId`, `operationType`,
+`expectedCurrentPublicationId`, `expectedCurrentManifestSha256`,
+`expectedEditorialStateFingerprint`, `targetPublicationId`, `targetManifestSha256`,
+`documentAdditions`, `documentReuses`, `documentReplacementBatches`, `documentRetirements`,
+`requirementAdditions`, `requirementReuses`, `requirementReplacements`,
+`requirementRetirements`, `expectedReadinessAfter` y `acknowledgeFailClosedGap`. Los ocho arrays
+siempre están presentes, incluso cuando están vacíos.
+
+Las referencias documentales usan `documentVersionId` y `sha256`. Adiciones y reutilizaciones
+agregan `contexts`; los lotes agregan `replacementBatchId`, `contexts`, `predecessors` y
+`successors`; las retiradas agregan `contexts` y `reason`. Las referencias de requisito usan
+`requirementVersionId` y `statementSha256`. Adiciones y reutilizaciones agregan `context` y
+`audiences`; los reemplazos declaran `predecessor`, `successor`, `context` y `audiences`; las
+retiradas agregan `context`, `audiences` y `reason`.
+
+`operationId`, `replacementBatchId` y los UUID de versión usan la representación UUID canónica en
+minúsculas. Los digests de manifiesto, documento y afirmación son 64 hexadecimales minúsculos; el
+fingerprint lleva el prefijo `sha256:`. Los motivos no se corrigen silenciosamente: deben llegar
+sin whitespace exterior, contener entre 1 y 1000 caracteres y quedan cubiertos por el hash.
+
+El SHA del plan se calcula sobre el JSON estricto exacto canonicalizado con RFC 8785. Como RFC 8785
+preserva el orden de arrays, dos artefactos con distinto orden pueden tener hashes distintos aunque
+describan el mismo delta. El modelo validado y el plan de ejecución ordenan sus copias por UUID y
+clave contractual, de modo que la ejecución sí es determinista sin falsear la identidad del
+artefacto confirmado.
+
+Los límites de 128 documentos y 256 requisitos se aplican por lado source y target de la
+clasificación; una versión reutilizada participa en ambos lados. Se admiten hasta 128 lotes. Los
+UUID son disjuntos entre categorías incompatibles y un miembro no puede aparecer en más de un
+lote. Cada lote tiene ambos lados y contexts no vacíos. Contexts y audiencias tampoco admiten
+duplicados.
+
+REPLACE exige target distinto, `expectedReadinessAfter=READY` y acknowledgement falso. RETIRE
+repite ID y SHA current, exige `expectedReadinessAfter=NOT_READY`, acknowledgement verdadero,
+mantiene vacías las seis categorías no destructivas y declara al menos una retirada documental o
+de requisito. RETIRE puede abrir sólo el hueco explícitamente enumerado; la ausencia de otra
+versión nunca la retira ni la clasifica implícitamente.
 
 ### Primera promoción
 

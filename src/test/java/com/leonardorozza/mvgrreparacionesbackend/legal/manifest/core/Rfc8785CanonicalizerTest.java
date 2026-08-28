@@ -189,6 +189,24 @@ class Rfc8785CanonicalizerTest {
     }
 
     @Test
+    void editorialPlanUsesTheSameRawJcsBytesThroughANamedClosedProfile() {
+        byte[] input = "{\"z\":[2,1],\"a\":true}".getBytes(StandardCharsets.UTF_8);
+        StrictJsonReader.StrictJsonDocument document = reader.readEditorialPlan(input)
+                .value().orElseThrow();
+
+        Rfc8785Canonicalizer.CanonicalJson editorial = canonicalizer
+                .canonicalizeEditorialPlan(document)
+                .value().orElseThrow();
+        Rfc8785Canonicalizer.CanonicalJson manifest = canonicalizer
+                .canonicalize(document)
+                .value().orElseThrow();
+
+        assertThat(editorial).isEqualTo(manifest);
+        assertThat(editorial.utf8()).asString(StandardCharsets.UTF_8)
+                .isEqualTo("{\"a\":true,\"z\":[2,1]}");
+    }
+
+    @Test
     void canonicalBytesAreDefensivelyCopied() {
         Rfc8785Canonicalizer.CanonicalJson canonical = canonicalize("{\"a\":1}");
         byte[] exposed = canonical.utf8();

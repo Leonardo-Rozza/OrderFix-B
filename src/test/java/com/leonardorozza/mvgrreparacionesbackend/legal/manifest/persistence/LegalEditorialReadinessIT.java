@@ -22,6 +22,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -141,6 +142,59 @@ class LegalEditorialReadinessIT {
                 .isEqualTo(rowsBefore);
         assertThat(LegalManifestPersistenceITSupport.editorialSequenceStates(jdbc))
                 .isEqualTo(sequencesBefore);
+    }
+
+    @Test
+    void bundleFreeObservationMatchesReadinessAndIgnoresAForeignDraftTarget()
+            throws Exception {
+        ReadyGraph source = readyGraph("readiness-observe-source-v1");
+        Instant observedAt = Instant.parse("2026-08-28T15:00:00.123456Z");
+        String sourceExternalId = source.release().plan().manifest().publicationId();
+
+        LegalEditorialReadinessResult evaluated = readinessHarness.core()
+                .evaluate(source.release(), observedAt);
+        LegalEditorialReadinessObservation before = readinessHarness.core()
+                .observeState(sourceExternalId, observedAt);
+        assertThat(evaluated.observation()).contains(before);
+
+        ValidatedRelease foreign = foreignDraftRelease(
+                "readiness-observe-foreign-draft-v1");
+        UUID foreignPublicationId = importHarness.importService()
+                .importManifest(foreign)
+                .receipt()
+                .orElseThrow()
+                .publicationUuid();
+        Long foreignNonDraftVersions = jdbc.queryForObject("""
+                SELECT (
+                           SELECT count(*)
+                             FROM legal_publicacion_documentos pd
+                             JOIN legal_documento_versiones dv
+                               ON dv.id = pd.documento_version_id
+                            WHERE pd.publicacion_id = ?
+                              AND dv.estado <> 'BORRADOR'
+                       ) + (
+                           SELECT count(*)
+                             FROM legal_publicacion_requisitos pr
+                             JOIN legal_requisito_versiones rv
+                               ON rv.id = pr.requisito_version_id
+                            WHERE pr.publicacion_id = ?
+                              AND rv.estado <> 'BORRADOR'
+                       )
+                """, Long.class, foreignPublicationId, foreignPublicationId);
+        assertThat(foreignNonDraftVersions).isZero();
+        Map<String, Long> rowsBeforeObservation =
+                LegalManifestPersistenceITSupport.editorialTableCounts(jdbc);
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeObservation =
+                LegalManifestPersistenceITSupport.editorialSequenceStates(jdbc);
+
+        LegalEditorialReadinessObservation after = readinessHarness.core()
+                .observeState(sourceExternalId, observedAt);
+
+        assertThat(after).isEqualTo(before);
+        assertThat(LegalManifestPersistenceITSupport.editorialTableCounts(jdbc))
+                .isEqualTo(rowsBeforeObservation);
+        assertThat(LegalManifestPersistenceITSupport.editorialSequenceStates(jdbc))
+                .isEqualTo(sequencesBeforeObservation);
     }
 
     @Test
@@ -290,6 +344,26 @@ class LegalEditorialReadinessIT {
                         .forEach(document -> ((ObjectNode) document).put(
                                 "effectiveAt",
                                 "2026-01-01T00:00:00-03:00")));
+    }
+
+    private ValidatedRelease foreignDraftRelease(String externalId) throws Exception {
+        return LegalManifestPersistenceITSupport.copyRelease(
+                temporaryDirectory,
+                LegalEditorialReadinessIT.class,
+                externalId,
+                (manifestPath, manifest) -> {
+                    manifest.withArray("documents").forEach(document -> {
+                        ObjectNode declaration = (ObjectNode) document;
+                        declaration.put("version", "foreign-draft-v1");
+                        declaration.put(
+                                "effectiveAt",
+                                "2026-01-01T00:00:00-03:00");
+                    });
+                    manifest.withArray("requirements").forEach(requirement ->
+                            ((ObjectNode) requirement).put(
+                                    "version",
+                                    "foreign-draft-v1"));
+                });
     }
 
     private static void insertAdditionalSlot(UUID publicationId) {

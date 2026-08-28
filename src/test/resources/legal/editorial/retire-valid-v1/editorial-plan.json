@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "operationId": "00000000-0000-0000-0000-000000000011",
+  "operationType": "RETIRE",
+  "expectedCurrentPublicationId": "legal-2026-02",
+  "expectedCurrentManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "expectedEditorialStateFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "targetPublicationId": "legal-2026-02",
+  "targetManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "documentAdditions": [],
+  "documentReuses": [],
+  "documentReplacementBatches": [],
+  "documentRetirements": [
+    {
+      "documentVersionId": "00000000-0000-0000-0000-000000000210",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "contexts": ["PRIMER_INGRESO_EMPLEADO", "REGISTRO"],
+      "reason": "Retiro explícito de emergencia"
+    }
+  ],
+  "requirementAdditions": [],
+  "requirementReuses": [],
+  "requirementReplacements": [],
+  "requirementRetirements": [
+    {
+      "requirementVersionId": "00000000-0000-0000-0000-000000000410",
+      "statementSha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "context": "PRIMER_INGRESO_EMPLEADO",
+      "audiences": ["USER", "ADMIN_TITULAR"],
+      "reason": "Retiro explícito del requisito"
+    }
+  ],
+  "expectedReadinessAfter": "NOT_READY",
+  "acknowledgeFailClosedGap": true
+}

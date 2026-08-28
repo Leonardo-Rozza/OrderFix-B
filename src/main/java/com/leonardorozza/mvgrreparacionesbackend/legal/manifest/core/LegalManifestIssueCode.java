@@ -64,6 +64,78 @@ public enum LegalManifestIssueCode {
     MANIFEST_VALIDATION_ERROR(
             LegalManifestStatus.ERROR,
             "No se pudo completar la validación integral del manifiesto."),
+    EDITORIAL_PLAN_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "Se requiere el contenido del plan editorial."),
+    EDITORIAL_PLAN_SIZE_LIMIT_EXCEEDED(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial supera el límite permitido de 1 MiB."),
+    EDITORIAL_PLAN_UTF8_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial no contiene UTF-8 válido."),
+    EDITORIAL_PLAN_BOM_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial no puede contener BOM."),
+    EDITORIAL_PLAN_CR_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial debe usar saltos LF y no puede contener CR."),
+    EDITORIAL_PLAN_NFC_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial debe estar normalizado en Unicode NFC."),
+    EDITORIAL_PLAN_SURROGATE_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial contiene un surrogate Unicode inválido."),
+    EDITORIAL_PLAN_UNICODE_NONCHARACTER_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial contiene un noncharacter Unicode no permitido."),
+    EDITORIAL_PLAN_JSON_LIMIT_EXCEEDED(
+            LegalManifestStatus.BLOCKED,
+            "El JSON del plan editorial supera un límite operativo permitido."),
+    EDITORIAL_PLAN_JSON_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial no contiene un único documento JSON estricto válido."),
+    EDITORIAL_PLAN_IJSON_NUMBER_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial contiene un número no representable como IEEE-754 finito."),
+    EDITORIAL_PLAN_SCHEMA_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial no cumple el JSON Schema v1."),
+    EDITORIAL_PLAN_RFC8785_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial no puede representarse mediante RFC 8785."),
+    EDITORIAL_PLAN_JSON_READER_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la lectura segura del JSON del plan editorial."),
+    EDITORIAL_PLAN_SCHEMA_UNAVAILABLE(
+            LegalManifestStatus.ERROR,
+            "El JSON Schema del plan editorial v1 no está disponible."),
+    EDITORIAL_PLAN_MODEL_MAPPING_ERROR(
+            LegalManifestStatus.ERROR,
+            "El plan editorial validado no pudo mapearse al modelo v1."),
+    EDITORIAL_PLAN_CANONICALIZATION_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la canonicalización del plan editorial."),
+    EDITORIAL_PLAN_VALIDATION_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la validación integral del plan editorial."),
+    EDITORIAL_PLAN_PATH_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "Se requiere la ruta local del plan editorial."),
+    EDITORIAL_PLAN_FILENAME_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El plan editorial debe llamarse editorial-plan.json."),
+    EDITORIAL_PLAN_SYMLINK_FORBIDDEN(
+            LegalManifestStatus.BLOCKED,
+            "El archivo del plan editorial no puede ser un enlace simbólico."),
+    EDITORIAL_PLAN_NOT_REGULAR(
+            LegalManifestStatus.BLOCKED,
+            "La ruta del plan editorial no identifica un archivo regular."),
+    EDITORIAL_PLAN_FILE_CHANGED(
+            LegalManifestStatus.BLOCKED,
+            "El archivo del plan editorial cambió durante su lectura."),
+    EDITORIAL_PLAN_READ_ERROR(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar la lectura segura del archivo del plan editorial."),
     CLI_ARGUMENTS_INVALID(
             LegalManifestStatus.BLOCKED,
             "Los argumentos del comando legal no son válidos."),

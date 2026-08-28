@@ -197,6 +197,33 @@ final class LegalManifestPersistenceITSupport {
                 service);
     }
 
+    static PlannerHarness plannerHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets) {
+        ReadinessHarness readiness = readinessHarness(dataSource, budgets);
+        LegalEditorialPlannerCore plannerCore = new LegalEditorialPlannerCore(
+                readiness.jdbc(),
+                readiness.core(),
+                readiness.originVerifier());
+        LegalEditorialPlanService plannerService = new LegalEditorialPlanService(
+                readiness.gate(),
+                readiness.jdbc(),
+                plannerCore,
+                new LegalEditorialFailureMapper(),
+                readiness.schemaVerifier());
+        return new PlannerHarness(
+                readiness.dataSource(),
+                readiness.jdbc(),
+                readiness.transaction(),
+                readiness.gate(),
+                readiness.schemaVerifier(),
+                readiness.originVerifier(),
+                readiness.core(),
+                readiness.service(),
+                plannerCore,
+                plannerService);
+    }
+
     static void promoteToReady(JdbcTemplate jdbc, UUID publicationId) {
         Objects.requireNonNull(jdbc, "jdbc");
         Objects.requireNonNull(publicationId, "publicationId");
@@ -701,6 +728,19 @@ final class LegalManifestPersistenceITSupport {
             LegalManifestOriginGraphVerifier originVerifier,
             LegalEditorialReadinessCore core,
             LegalEditorialReadinessService service
+    ) { }
+
+    record PlannerHarness(
+            DataSource dataSource,
+            JdbcTemplate jdbc,
+            TransactionTemplate transaction,
+            LegalManifestDatabaseGate gate,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalManifestOriginGraphVerifier originVerifier,
+            LegalEditorialReadinessCore readinessCore,
+            LegalEditorialReadinessService readinessService,
+            LegalEditorialPlannerCore plannerCore,
+            LegalEditorialPlanService plannerService
     ) { }
 
     record SequenceState(long lastValue, boolean called) { }

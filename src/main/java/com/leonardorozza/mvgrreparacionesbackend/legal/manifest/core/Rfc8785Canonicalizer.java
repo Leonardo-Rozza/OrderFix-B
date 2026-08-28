@@ -24,18 +24,42 @@ final class Rfc8785Canonicalizer {
 
     public LegalManifestValidation<CanonicalJson> canonicalize(
             StrictJsonReader.StrictJsonDocument document) {
+        return canonicalizeExternalDocument(
+                document,
+                LegalManifestIssueCode.MANIFEST_RFC8785_INVALID,
+                LegalManifestIssueCode.MANIFEST_CANONICALIZATION_ERROR,
+                StrictJsonReader.DEFAULT_LOCATION);
+    }
+
+    LegalManifestValidation<CanonicalJson> canonicalizeEditorialPlan(
+            StrictJsonReader.StrictJsonDocument document) {
+        return canonicalizeExternalDocument(
+                document,
+                LegalManifestIssueCode.EDITORIAL_PLAN_RFC8785_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_CANONICALIZATION_ERROR,
+                StrictJsonReader.EDITORIAL_PLAN_LOCATION);
+    }
+
+    private static LegalManifestValidation<CanonicalJson> canonicalizeExternalDocument(
+            StrictJsonReader.StrictJsonDocument document,
+            LegalManifestIssueCode invalidCode,
+            LegalManifestIssueCode errorCode,
+            String safeLocation) {
         Objects.requireNonNull(document, "document");
+        Objects.requireNonNull(invalidCode, "invalidCode");
+        Objects.requireNonNull(errorCode, "errorCode");
+        Objects.requireNonNull(safeLocation, "safeLocation");
 
         try {
             return LegalManifestValidation.pass(canonicalizeText(document.text()));
         } catch (IOException exception) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
-                    LegalManifestIssueCode.MANIFEST_RFC8785_INVALID,
-                    StrictJsonReader.DEFAULT_LOCATION));
+                    invalidCode,
+                    safeLocation));
         } catch (RuntimeException exception) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
-                    LegalManifestIssueCode.MANIFEST_CANONICALIZATION_ERROR,
-                    StrictJsonReader.DEFAULT_LOCATION));
+                    errorCode,
+                    safeLocation));
         }
     }
 

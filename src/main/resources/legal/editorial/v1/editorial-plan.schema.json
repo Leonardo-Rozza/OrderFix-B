@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ordenfix:legal:editorial-plan:1",
+  "title": "OrdenFix legal editorial plan",
+  "description": "One immutable and explicit legal editorial transition. The artifact contains no file references and is validated independently from publication manifests.",
+  "$comment": "Cross-collection disjointness, complete source/target classification and the REPLACE/RETIRE operation matrix are enforced by LegalEditorialPlanValidator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "operationId",
+    "operationType",
+    "expectedCurrentPublicationId",
+    "expectedCurrentManifestSha256",
+    "expectedEditorialStateFingerprint",
+    "targetPublicationId",
+    "targetManifestSha256",
+    "documentAdditions",
+    "documentReuses",
+    "documentReplacementBatches",
+    "documentRetirements",
+    "requirementAdditions",
+    "requirementReuses",
+    "requirementReplacements",
+    "requirementRetirements",
+    "expectedReadinessAfter",
+    "acknowledgeFailClosedGap"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "operationId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "operationType": {
+      "enum": [
+        "REPLACE",
+        "RETIRE"
+      ]
+    },
+    "expectedCurrentPublicationId": {
+      "$ref": "#/$defs/publicationId"
+    },
+    "expectedCurrentManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "expectedEditorialStateFingerprint": {
+      "$ref": "#/$defs/editorialStateFingerprint"
+    },
+    "targetPublicationId": {
+      "$ref": "#/$defs/publicationId"
+    },
+    "targetManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "documentAdditions": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/documentScopedRef"
+      }
+    },
+    "documentReuses": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/documentScopedRef"
+      }
+    },
+    "documentReplacementBatches": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/documentReplacementBatch"
+      }
+    },
+    "documentRetirements": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/documentRetirement"
+      }
+    },
+    "requirementAdditions": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirementScopedRef"
+      }
+    },
+    "requirementReuses": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirementScopedRef"
+      }
+    },
+    "requirementReplacements": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirementReplacement"
+      }
+    },
+    "requirementRetirements": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirementRetirement"
+      }
+    },
+    "expectedReadinessAfter": {
+      "enum": [
+        "READY",
+        "NOT_READY"
+      ]
+    },
+    "acknowledgeFailClosedGap": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "publicationId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 80,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "editorialStateFingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "context": {
+      "enum": [
+        "REGISTRO",
+        "PRIMER_INGRESO_EMPLEADO",
+        "USO_CONTINUADO",
+        "CONTRATACION_PRO",
+        "ATESTACION_FOTOS",
+        "ATESTACION_CREDENCIALES",
+        "CIERRE_CUENTA",
+        "ARREPENTIMIENTO"
+      ]
+    },
+    "audience": {
+      "enum": [
+        "ADMIN_TITULAR",
+        "USER"
+      ]
+    },
+    "contexts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/context"
+      }
+    },
+    "audiences": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/audience"
+      }
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+    },
+    "documentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentVersionId",
+        "sha256"
+      ],
+      "properties": {
+        "documentVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "documentScopedRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentVersionId",
+        "sha256",
+        "contexts"
+      ],
+      "properties": {
+        "documentVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contexts": {
+          "$ref": "#/$defs/contexts"
+        }
+      }
+    },
+    "documentReplacementBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replacementBatchId",
+        "contexts",
+        "predecessors",
+        "successors"
+      ],
+      "properties": {
+        "replacementBatchId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "contexts": {
+          "$ref": "#/$defs/contexts"
+        },
+        "predecessors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/documentRef"
+          }
+        },
+        "successors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/documentRef"
+          }
+        }
+      }
+    },
+    "documentRetirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentVersionId",
+        "sha256",
+        "contexts",
+        "reason"
+      ],
+      "properties": {
+        "documentVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contexts": {
+          "$ref": "#/$defs/contexts"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "requirementRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirementVersionId",
+        "statementSha256"
+      ],
+      "properties": {
+        "requirementVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "statementSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "requirementScopedRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirementVersionId",
+        "statementSha256",
+        "context",
+        "audiences"
+      ],
+      "properties": {
+        "requirementVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "statementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        },
+        "audiences": {
+          "$ref": "#/$defs/audiences"
+        }
+      }
+    },
+    "requirementReplacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predecessor",
+        "successor",
+        "context",
+        "audiences"
+      ],
+      "properties": {
+        "predecessor": {
+          "$ref": "#/$defs/requirementRef"
+        },
+        "successor": {
+          "$ref": "#/$defs/requirementRef"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        },
+        "audiences": {
+          "$ref": "#/$defs/audiences"
+        }
+      }
+    },
+    "requirementRetirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirementVersionId",
+        "statementSha256",
+        "context",
+        "audiences",
+        "reason"
+      ],
+      "properties": {
+        "requirementVersionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "statementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        },
+        "audiences": {
+          "$ref": "#/$defs/audiences"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    }
+  }
+}

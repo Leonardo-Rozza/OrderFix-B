@@ -31,6 +31,7 @@ import java.util.Objects;
 public final class StrictJsonReader {
 
     public static final String DEFAULT_LOCATION = "publication-manifest.json";
+    static final String EDITORIAL_PLAN_LOCATION = "editorial-plan.json";
 
     private final ObjectMapper objectMapper;
 
@@ -39,35 +40,60 @@ public final class StrictJsonReader {
     }
 
     public LegalManifestValidation<StrictJsonDocument> read(byte[] rawBytes) {
-        return read(rawBytes, DEFAULT_LOCATION);
+        return read(
+                rawBytes,
+                DEFAULT_LOCATION,
+                LegalManifestLimits.MAX_MANIFEST_BYTES,
+                IssueProfile.MANIFEST);
     }
 
     LegalManifestValidation<StrictJsonDocument> read(
             byte[] rawBytes,
             String safeLocation) {
+        return read(
+                rawBytes,
+                safeLocation,
+                LegalManifestLimits.MAX_MANIFEST_BYTES,
+                IssueProfile.MANIFEST);
+    }
+
+    LegalManifestValidation<StrictJsonDocument> readEditorialPlan(byte[] rawBytes) {
+        return read(
+                rawBytes,
+                EDITORIAL_PLAN_LOCATION,
+                LegalEditorialPlanLimits.MAX_PLAN_BYTES,
+                IssueProfile.EDITORIAL_PLAN);
+    }
+
+    private LegalManifestValidation<StrictJsonDocument> read(
+            byte[] rawBytes,
+            String safeLocation,
+            int maxBytes,
+            IssueProfile issueProfile) {
         Objects.requireNonNull(safeLocation, "safeLocation");
+        Objects.requireNonNull(issueProfile, "issueProfile");
         if (rawBytes == null || rawBytes.length == 0) {
-            return failure(LegalManifestIssueCode.MANIFEST_REQUIRED, safeLocation);
+            return failure(issueProfile.required, safeLocation);
         }
-        if (rawBytes.length > LegalManifestLimits.MAX_MANIFEST_BYTES) {
-            return failure(LegalManifestIssueCode.MANIFEST_SIZE_LIMIT_EXCEEDED, safeLocation);
+        if (rawBytes.length > maxBytes) {
+            return failure(issueProfile.sizeLimitExceeded, safeLocation);
         }
         if (hasUtf8Bom(rawBytes)) {
-            return failure(LegalManifestIssueCode.MANIFEST_BOM_FORBIDDEN, safeLocation);
+            return failure(issueProfile.bomForbidden, safeLocation);
         }
 
         final String text;
         try {
             text = decodeUtf8(rawBytes);
         } catch (CharacterCodingException exception) {
-            return failure(LegalManifestIssueCode.MANIFEST_UTF8_INVALID, safeLocation);
+            return failure(issueProfile.utf8Invalid, safeLocation);
         }
 
         EnumSet<LegalManifestIssueCode> textualIssues = EnumSet.noneOf(
                 LegalManifestIssueCode.class);
-        inspectUnicodeString(text, textualIssues);
+        inspectUnicodeString(text, textualIssues, issueProfile);
         if (text.startsWith("\uFEFF")) {
-            textualIssues.add(LegalManifestIssueCode.MANIFEST_BOM_FORBIDDEN);
+            textualIssues.add(issueProfile.bomForbidden);
         }
         if (!textualIssues.isEmpty()) {
             return failures(textualIssues, safeLocation);
@@ -77,20 +103,20 @@ public final class StrictJsonReader {
         try {
             root = objectMapper.readTree(text);
         } catch (StreamConstraintsException exception) {
-            return failure(LegalManifestIssueCode.MANIFEST_JSON_LIMIT_EXCEEDED, safeLocation);
+            return failure(issueProfile.jsonLimitExceeded, safeLocation);
         } catch (JsonProcessingException exception) {
-            return failure(LegalManifestIssueCode.MANIFEST_JSON_INVALID, safeLocation);
+            return failure(issueProfile.jsonInvalid, safeLocation);
         } catch (RuntimeException exception) {
-            return failure(LegalManifestIssueCode.MANIFEST_JSON_READER_ERROR, safeLocation);
+            return failure(issueProfile.jsonReaderError, safeLocation);
         }
 
         if (root == null || root.isMissingNode()) {
-            return failure(LegalManifestIssueCode.MANIFEST_JSON_INVALID, safeLocation);
+            return failure(issueProfile.jsonInvalid, safeLocation);
         }
 
         EnumSet<LegalManifestIssueCode> semanticIssues = EnumSet.noneOf(
                 LegalManifestIssueCode.class);
-        inspectDecodedTree(root, semanticIssues);
+        inspectDecodedTree(root, semanticIssues, issueProfile);
         if (!semanticIssues.isEmpty()) {
             return failures(semanticIssues, safeLocation);
         }
@@ -154,23 +180,24 @@ public final class StrictJsonReader {
 
     private static void inspectDecodedTree(
             JsonNode root,
-            EnumSet<LegalManifestIssueCode> issues) {
+            EnumSet<LegalManifestIssueCode> issues,
+            IssueProfile issueProfile) {
         Deque<JsonNode> pending = new ArrayDeque<>();
         pending.add(root);
 
         while (!pending.isEmpty()) {
             JsonNode node = pending.removeFirst();
             if (node.isTextual()) {
-                inspectUnicodeString(node.textValue(), issues);
+                inspectUnicodeString(node.textValue(), issues, issueProfile);
             }
             if (node.isNumber() && !Double.isFinite(node.doubleValue())) {
-                issues.add(LegalManifestIssueCode.MANIFEST_IJSON_NUMBER_INVALID);
+                issues.add(issueProfile.ijsonNumberInvalid);
             }
             if (node.isObject()) {
                 Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
                 while (fields.hasNext()) {
                     Map.Entry<String, JsonNode> field = fields.next();
-                    inspectUnicodeString(field.getKey(), issues);
+                    inspectUnicodeString(field.getKey(), issues, issueProfile);
                     pending.addLast(field.getValue());
                 }
             } else if (node.isArray()) {
@@ -181,18 +208,19 @@ public final class StrictJsonReader {
 
     private static void inspectUnicodeString(
             String value,
-            EnumSet<LegalManifestIssueCode> issues) {
+            EnumSet<LegalManifestIssueCode> issues,
+            IssueProfile issueProfile) {
         if (value.indexOf('\r') >= 0) {
-            issues.add(LegalManifestIssueCode.MANIFEST_CR_FORBIDDEN);
+            issues.add(issueProfile.crForbidden);
         }
         if (!Normalizer.isNormalized(value, Normalizer.Form.NFC)) {
-            issues.add(LegalManifestIssueCode.MANIFEST_NFC_REQUIRED);
+            issues.add(issueProfile.nfcRequired);
         }
         if (hasUnpairedSurrogate(value)) {
-            issues.add(LegalManifestIssueCode.MANIFEST_SURROGATE_INVALID);
+            issues.add(issueProfile.surrogateInvalid);
         }
         if (hasUnicodeNoncharacter(value)) {
-            issues.add(LegalManifestIssueCode.MANIFEST_UNICODE_NONCHARACTER_FORBIDDEN);
+            issues.add(issueProfile.unicodeNoncharacterForbidden);
         }
     }
 
@@ -238,6 +266,75 @@ public final class StrictJsonReader {
             issues.add(LegalManifestIssue.at(code, location));
         }
         return LegalManifestValidation.failure(issues);
+    }
+
+    private enum IssueProfile {
+        MANIFEST(
+                LegalManifestIssueCode.MANIFEST_REQUIRED,
+                LegalManifestIssueCode.MANIFEST_SIZE_LIMIT_EXCEEDED,
+                LegalManifestIssueCode.MANIFEST_UTF8_INVALID,
+                LegalManifestIssueCode.MANIFEST_BOM_FORBIDDEN,
+                LegalManifestIssueCode.MANIFEST_CR_FORBIDDEN,
+                LegalManifestIssueCode.MANIFEST_NFC_REQUIRED,
+                LegalManifestIssueCode.MANIFEST_SURROGATE_INVALID,
+                LegalManifestIssueCode.MANIFEST_UNICODE_NONCHARACTER_FORBIDDEN,
+                LegalManifestIssueCode.MANIFEST_JSON_LIMIT_EXCEEDED,
+                LegalManifestIssueCode.MANIFEST_JSON_INVALID,
+                LegalManifestIssueCode.MANIFEST_IJSON_NUMBER_INVALID,
+                LegalManifestIssueCode.MANIFEST_JSON_READER_ERROR),
+        EDITORIAL_PLAN(
+                LegalManifestIssueCode.EDITORIAL_PLAN_REQUIRED,
+                LegalManifestIssueCode.EDITORIAL_PLAN_SIZE_LIMIT_EXCEEDED,
+                LegalManifestIssueCode.EDITORIAL_PLAN_UTF8_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_BOM_FORBIDDEN,
+                LegalManifestIssueCode.EDITORIAL_PLAN_CR_FORBIDDEN,
+                LegalManifestIssueCode.EDITORIAL_PLAN_NFC_REQUIRED,
+                LegalManifestIssueCode.EDITORIAL_PLAN_SURROGATE_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_UNICODE_NONCHARACTER_FORBIDDEN,
+                LegalManifestIssueCode.EDITORIAL_PLAN_JSON_LIMIT_EXCEEDED,
+                LegalManifestIssueCode.EDITORIAL_PLAN_JSON_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_IJSON_NUMBER_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_JSON_READER_ERROR);
+
+        private final LegalManifestIssueCode required;
+        private final LegalManifestIssueCode sizeLimitExceeded;
+        private final LegalManifestIssueCode utf8Invalid;
+        private final LegalManifestIssueCode bomForbidden;
+        private final LegalManifestIssueCode crForbidden;
+        private final LegalManifestIssueCode nfcRequired;
+        private final LegalManifestIssueCode surrogateInvalid;
+        private final LegalManifestIssueCode unicodeNoncharacterForbidden;
+        private final LegalManifestIssueCode jsonLimitExceeded;
+        private final LegalManifestIssueCode jsonInvalid;
+        private final LegalManifestIssueCode ijsonNumberInvalid;
+        private final LegalManifestIssueCode jsonReaderError;
+
+        IssueProfile(
+                LegalManifestIssueCode required,
+                LegalManifestIssueCode sizeLimitExceeded,
+                LegalManifestIssueCode utf8Invalid,
+                LegalManifestIssueCode bomForbidden,
+                LegalManifestIssueCode crForbidden,
+                LegalManifestIssueCode nfcRequired,
+                LegalManifestIssueCode surrogateInvalid,
+                LegalManifestIssueCode unicodeNoncharacterForbidden,
+                LegalManifestIssueCode jsonLimitExceeded,
+                LegalManifestIssueCode jsonInvalid,
+                LegalManifestIssueCode ijsonNumberInvalid,
+                LegalManifestIssueCode jsonReaderError) {
+            this.required = required;
+            this.sizeLimitExceeded = sizeLimitExceeded;
+            this.utf8Invalid = utf8Invalid;
+            this.bomForbidden = bomForbidden;
+            this.crForbidden = crForbidden;
+            this.nfcRequired = nfcRequired;
+            this.surrogateInvalid = surrogateInvalid;
+            this.unicodeNoncharacterForbidden = unicodeNoncharacterForbidden;
+            this.jsonLimitExceeded = jsonLimitExceeded;
+            this.jsonInvalid = jsonInvalid;
+            this.ijsonNumberInvalid = ijsonNumberInvalid;
+            this.jsonReaderError = jsonReaderError;
+        }
     }
 
     /**

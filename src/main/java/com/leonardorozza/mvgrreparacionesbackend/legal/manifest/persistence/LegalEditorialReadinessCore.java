@@ -140,7 +140,102 @@ final class LegalEditorialReadinessCore {
         List<TargetScopeRow> targetScopes = publicationId == null
                 ? List.of()
                 : readTargetScopes(publicationId, plan.scopeCount());
+        EditorialStateSnapshot snapshot = readStateSnapshot(
+                publication,
+                requiredObservedAt);
 
+        if (publicationId != null) {
+            validateTargetCardinality(
+                    plan,
+                    targetDocuments,
+                    targetRequirements,
+                    targetScopes,
+                    findings);
+        }
+        validateTargetStates(
+                publicationId,
+                targetDocuments,
+                targetRequirements,
+                snapshot.documentVersions(),
+                snapshot.requirementVersions(),
+                requiredObservedAt,
+                findings);
+        ExpectedProjection expected = expectedProjection(
+                plan,
+                publicationId,
+                targetDocuments,
+                targetRequirements,
+                targetScopes,
+                findings);
+        validateSlots(expected, snapshot.slots(), findings);
+        validatePointers(
+                expected,
+                snapshot.pointers(),
+                snapshot.pointerMembers(),
+                targetRequirements,
+                findings);
+
+        return findings.isEmpty()
+                ? LegalEditorialReadinessResult.ready(snapshot.observation())
+                : LegalEditorialReadinessResult.notReady(
+                        snapshot.observation(),
+                        findings);
+    }
+
+    LegalEditorialReadinessObservation observeState(
+            String publicationExternalId,
+            Instant observedAt) {
+        Objects.requireNonNull(publicationExternalId, "publicationExternalId");
+        Instant requiredObservedAt = requirePostgresInstant(observedAt);
+        return readStateSnapshot(
+                readPublication(publicationExternalId),
+                requiredObservedAt).observation();
+    }
+
+    boolean usesJdbc(JdbcTemplate candidate) {
+        return jdbc == candidate && originGraphVerifier.usesJdbc(candidate);
+    }
+
+    private void verifyOrigin(
+            ValidatedRelease release,
+            UUID publicationId,
+            List<LegalManifestIssue> findings) {
+        try {
+            originGraphVerifier.verify(release, publicationId);
+        } catch (LegalEditorialBlockedException mismatch) {
+            findings.add(mismatch.issue());
+        }
+    }
+
+    private static void verifyApprovedMarkers(
+            LegalPublicationPlan plan,
+            List<LegalManifestIssue> findings) {
+        if (plan.manifest().review().legal().status() != ReviewStatus.APPROVED
+                || plan.manifest().review().accounting().status() != ReviewStatus.APPROVED) {
+            findings.add(issue(
+                    LegalManifestIssueCode.REVISION_MISMATCH,
+                    "manifest/review"));
+        }
+    }
+
+    private Optional<PublicationRow> readPublication(String externalId) {
+        List<PublicationRow> rows = jdbc.query("""
+                SELECT id, publication_external_id, manifest_sha256,
+                       estado_construccion, sellado_en
+                  FROM legal_publicaciones
+                 WHERE publication_external_id = ?
+                 LIMIT 2
+                """, LegalEditorialReadinessCore::mapPublication, externalId);
+        if (rows.size() > 1) {
+            throw observationFailed();
+        }
+        return rows.stream().findFirst();
+    }
+
+    private EditorialStateSnapshot readStateSnapshot(
+            Optional<PublicationRow> publication,
+            Instant observedAt) {
+        UUID publicationId = publication.map(PublicationRow::id).orElse(null);
         List<SlotRow> slots = boundedQuery(
                 """
                 SELECT tipo, locale, contexto, documento_version_id,
@@ -196,8 +291,8 @@ final class LegalEditorialReadinessCore {
                 """,
                 LegalEditorialReadinessCore::mapPointerDocument,
                 MAX_POINTER_DOCUMENT_REFERENCES);
-
-        List<DocumentVersionRow> documentVersions = readRelevantDocumentVersions(publicationId);
+        List<DocumentVersionRow> documentVersions =
+                readRelevantDocumentVersions(publicationId);
         List<RequirementVersionRow> requirementVersions =
                 readRelevantRequirementVersions(publicationId);
         List<ReplacementBatchRow> replacementBatches =
@@ -206,37 +301,6 @@ final class LegalEditorialReadinessCore {
                 readReplacementPredecessors(publicationId);
         List<ReplacementSuccessorRow> replacementSuccessors =
                 readReplacementSuccessors(publicationId);
-
-        if (publicationId != null) {
-            validateTargetCardinality(
-                    plan,
-                    targetDocuments,
-                    targetRequirements,
-                    targetScopes,
-                    findings);
-        }
-        validateTargetStates(
-                publicationId,
-                targetDocuments,
-                targetRequirements,
-                documentVersions,
-                requirementVersions,
-                requiredObservedAt,
-                findings);
-        ExpectedProjection expected = expectedProjection(
-                plan,
-                publicationId,
-                targetDocuments,
-                targetRequirements,
-                targetScopes,
-                findings);
-        validateSlots(expected, slots, findings);
-        validatePointers(
-                expected,
-                pointers,
-                pointerMembers,
-                targetRequirements,
-                findings);
 
         LegalEditorialStateProjection projection = buildFingerprintProjection(
                 publication,
@@ -249,64 +313,31 @@ final class LegalEditorialReadinessCore {
                 replacementBatches,
                 replacementPredecessors,
                 replacementSuccessors);
-        int documentTransitions = countDocumentTransitions(documentVersions);
-        int requirementTransitions = countRequirementTransitions(requirementVersions);
         LegalEditorialReadinessObservation observation =
                 new LegalEditorialReadinessObservation(
                         publication.map(PublicationRow::id),
-                        requiredObservedAt,
+                        observedAt,
                         fingerprintCalculator.calculate(projection),
                         documentVersions.size(),
                         requirementVersions.size(),
-                        documentTransitions,
-                        requirementTransitions,
+                        countDocumentTransitions(documentVersions),
+                        countRequirementTransitions(requirementVersions),
                         slots.size(),
                         pointers.size(),
                         replacementBatches.size());
-
-        return findings.isEmpty()
-                ? LegalEditorialReadinessResult.ready(observation)
-                : LegalEditorialReadinessResult.notReady(observation, findings);
-    }
-
-    boolean usesJdbc(JdbcTemplate candidate) {
-        return jdbc == candidate && originGraphVerifier.usesJdbc(candidate);
-    }
-
-    private void verifyOrigin(
-            ValidatedRelease release,
-            UUID publicationId,
-            List<LegalManifestIssue> findings) {
-        try {
-            originGraphVerifier.verify(release, publicationId);
-        } catch (LegalEditorialBlockedException mismatch) {
-            findings.add(mismatch.issue());
-        }
-    }
-
-    private static void verifyApprovedMarkers(
-            LegalPublicationPlan plan,
-            List<LegalManifestIssue> findings) {
-        if (plan.manifest().review().legal().status() != ReviewStatus.APPROVED
-                || plan.manifest().review().accounting().status() != ReviewStatus.APPROVED) {
-            findings.add(issue(
-                    LegalManifestIssueCode.REVISION_MISMATCH,
-                    "manifest/review"));
-        }
-    }
-
-    private Optional<PublicationRow> readPublication(String externalId) {
-        List<PublicationRow> rows = jdbc.query("""
-                SELECT id, publication_external_id, manifest_sha256,
-                       estado_construccion, sellado_en
-                  FROM legal_publicaciones
-                 WHERE publication_external_id = ?
-                 LIMIT 2
-                """, LegalEditorialReadinessCore::mapPublication, externalId);
-        if (rows.size() > 1) {
-            throw observationFailed();
-        }
-        return rows.stream().findFirst();
+        return new EditorialStateSnapshot(
+                publication,
+                observedAt,
+                slots,
+                pointers,
+                pointerMembers,
+                pointerDocuments,
+                documentVersions,
+                requirementVersions,
+                replacementBatches,
+                replacementPredecessors,
+                replacementSuccessors,
+                observation);
     }
 
     private List<TargetDocumentRow> readTargetDocuments(UUID publicationId, int expected) {
@@ -1318,6 +1349,20 @@ final class LegalEditorialReadinessCore {
     }
 
     private record CountedRow<T>(long total, T value) { }
+
+    private record EditorialStateSnapshot(
+            Optional<PublicationRow> publication,
+            Instant observedAt,
+            List<SlotRow> slots,
+            List<PointerRow> pointers,
+            List<PointerMemberRow> pointerMembers,
+            List<PointerDocumentRow> pointerDocuments,
+            List<DocumentVersionRow> documentVersions,
+            List<RequirementVersionRow> requirementVersions,
+            List<ReplacementBatchRow> replacementBatches,
+            List<ReplacementPredecessorRow> replacementPredecessors,
+            List<ReplacementSuccessorRow> replacementSuccessors,
+            LegalEditorialReadinessObservation observation) { }
 
     private record PublicationRow(
             UUID id,

@@ -77,6 +77,33 @@ class StrictJsonReaderTest {
         assertThat(Modifier.isPublic(defaultModifiers)).isTrue();
         assertThat(locationAwareModifiers
                 & (Modifier.PUBLIC | Modifier.PROTECTED | Modifier.PRIVATE)).isZero();
+        int editorialPlanModifiers = StrictJsonReader.class
+                .getDeclaredMethod("readEditorialPlan", byte[].class)
+                .getModifiers();
+        assertThat(editorialPlanModifiers
+                & (Modifier.PUBLIC | Modifier.PROTECTED | Modifier.PRIVATE)).isZero();
+    }
+
+    @Test
+    void appliesTheClosedEditorialPlanIssueProfileWithoutChangingManifestCodes() {
+        LegalManifestValidation<?> manifest = reader.read(null);
+        LegalManifestValidation<?> plan = reader.readEditorialPlan(null);
+
+        assertThat(manifest.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.MANIFEST_REQUIRED);
+        assertThat(plan.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EDITORIAL_PLAN_REQUIRED);
+        assertThat(plan.issues())
+                .extracting(LegalManifestIssue::location)
+                .containsOnly(ConfinedEditorialPlanReader.PLAN_FILENAME);
+
+        LegalManifestValidation<?> malformed = reader.readEditorialPlan(
+                "{\"a\":1,\"a\":2}".getBytes(StandardCharsets.UTF_8));
+        assertThat(malformed.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EDITORIAL_PLAN_JSON_INVALID);
     }
 
     @Test

@@ -8,6 +8,8 @@ import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -50,6 +52,28 @@ class LegalEditorialReadinessCoreTest {
                 .doesNotContain("update legal_")
                 .doesNotContain("delete from ");
         assertThat(normalized).contains("select ");
+    }
+
+    @Test
+    void exposesOnePackagePrivateBundleFreeObservationPathSharedByReadiness()
+            throws Exception {
+        Method observeState = LegalEditorialReadinessCore.class.getDeclaredMethod(
+                "observeState",
+                String.class,
+                Instant.class);
+        String coreSource = Files.readString(Path.of(
+                "src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/"
+                        + "persistence/LegalEditorialReadinessCore.java"));
+
+        assertThat(observeState.getReturnType())
+                .isEqualTo(LegalEditorialReadinessObservation.class);
+        assertThat(observeState.getModifiers()
+                & (Modifier.PUBLIC | Modifier.PROTECTED | Modifier.PRIVATE))
+                .isZero();
+        assertThat(coreSource)
+                .contains("EditorialStateSnapshot snapshot = readStateSnapshot(")
+                .contains("return readStateSnapshot(")
+                .containsOnlyOnce("new LegalEditorialReadinessObservation(");
     }
 
     @Test

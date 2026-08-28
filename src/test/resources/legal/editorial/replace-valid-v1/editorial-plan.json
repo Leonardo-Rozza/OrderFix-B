@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "operationId": "00000000-0000-0000-0000-000000000010",
+  "operationType": "REPLACE",
+  "expectedCurrentPublicationId": "legal-2026-01",
+  "expectedCurrentManifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expectedEditorialStateFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "targetPublicationId": "legal-2026-02",
+  "targetManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "documentAdditions": [
+    {
+      "documentVersionId": "00000000-0000-0000-0000-000000000201",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "contexts": ["USO_CONTINUADO"]
+    }
+  ],
+  "documentReuses": [
+    {
+      "documentVersionId": "00000000-0000-0000-0000-000000000101",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "contexts": ["USO_CONTINUADO", "REGISTRO"]
+    }
+  ],
+  "documentReplacementBatches": [
+    {
+      "replacementBatchId": "00000000-0000-0000-0000-000000001001",
+      "contexts": ["REGISTRO", "PRIMER_INGRESO_EMPLEADO"],
+      "predecessors": [
+        {
+          "documentVersionId": "00000000-0000-0000-0000-000000000111",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "documentVersionId": "00000000-0000-0000-0000-000000000110",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "successors": [
+        {
+          "documentVersionId": "00000000-0000-0000-0000-000000000210",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ]
+    }
+  ],
+  "documentRetirements": [
+    {
+      "documentVersionId": "00000000-0000-0000-0000-000000000120",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "contexts": ["CIERRE_CUENTA"],
+      "reason": "Contenido reemplazado sin sucesor"
+    }
+  ],
+  "requirementAdditions": [
+    {
+      "requirementVersionId": "00000000-0000-0000-0000-000000000401",
+      "statementSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "context": "USO_CONTINUADO",
+      "audiences": ["USER"]
+    }
+  ],
+  "requirementReuses": [
+    {
+      "requirementVersionId": "00000000-0000-0000-0000-000000000301",
+      "statementSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "context": "REGISTRO",
+      "audiences": ["USER", "ADMIN_TITULAR"]
+    }
+  ],
+  "requirementReplacements": [
+    {
+      "predecessor": {
+        "requirementVersionId": "00000000-0000-0000-0000-000000000310",
+        "statementSha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "successor": {
+        "requirementVersionId": "00000000-0000-0000-0000-000000000410",
+        "statementSha256": "8888888888888888888888888888888888888888888888888888888888888888"
+      },
+      "context": "PRIMER_INGRESO_EMPLEADO",
+      "audiences": ["ADMIN_TITULAR"]
+    }
+  ],
+  "requirementRetirements": [
+    {
+      "requirementVersionId": "00000000-0000-0000-0000-000000000320",
+      "statementSha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "context": "CIERRE_CUENTA",
+      "audiences": ["USER"],
+      "reason": "Requisito retirado expresamente"
+    }
+  ],
+  "expectedReadinessAfter": "READY",
+  "acknowledgeFailClosedGap": false
+}
