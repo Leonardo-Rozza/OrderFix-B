@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2 y 3 completados
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3 y 4 completados
 
 Diseño aprobado:
 
@@ -559,7 +559,7 @@ Commit local:
 
 ## Corte 4 — Primera promoción transaccional
 
-Estado: pendiente.
+Estado: completado el 2026-08-28.
 
 ### Objetivo
 
@@ -632,6 +632,45 @@ git status --short
 Commit:
 
     feat(legal): promociona primera publicacion
+
+### Precisiones incorporadas durante el Corte 4
+
+- `LegalTransactionCompletionState<R>` concentra la semántica neutral de finalización; el estado
+  histórico de importación queda como wrapper compatible. Un commit confirmado habilita el receipt,
+  un rollback autoritativo informa `persisted=false` y una confirmación ambigua devuelve
+  `UNKNOWN`/`persisted=null` sin exponer metadata tentativa.
+- El resultado de apply distingue de forma tipada `APPLIED`, `ALREADY_APPLIED`, `BLOCKED`, `ERROR`
+  y `UNKNOWN`. El receipt confirmado contiene operación, target, instante PostgreSQL, readiness y
+  siete cantidades, nunca contenido legal.
+- El gate mutante valida primero que el resultado del commit sea observable y abre una sola frontera
+  `REQUIRES_NEW`, `READ_COMMITTED`, `readOnly=false`. Dentro de ella se obtiene un único
+  `transaction_timestamp()` compartido por planner, mutación y readiness.
+- Antes de mutar se bloquean en orden UUID el target y todas las publicaciones introductorias
+  alcanzadas por las versiones reutilizadas, además de líneas y versiones. Esto respeta los locks
+  que toman los triggers de V27 también cuando documento o requisito reutilizan membresía.
+- Las transiciones se insertan en dos fases globales (`BORRADOR→PUBLICADA` y luego
+  `PUBLICADA→VIGENTE`), se crean slots y punteros exactos, se fuerzan los constraints y el mismo
+  `ReadinessCore` debe observar `READY` antes de aceptar el commit.
+- El replay exacto se confirma por lectura de membresía y no ejecuta DML ni avanza sequences. Un
+  target diferente, historia previa, estado parcial, fecha futura o postcondición no READY queda
+  bloqueado o revierte según corresponda.
+- No fue necesario modificar el servicio histórico de importación ni su API pública: la
+  compatibilidad quedó cubierta por el wrapper neutral y su suite existente. Tampoco se agregó CLI,
+  endpoint, migración, cambio de V27, despliegue ni modificación frontend en este corte.
+
+### Evidencia de cierre
+
+- Java 21 (Corretto 21.0.10), puerta unitaria focalizada: 81 tests, 0 fallos, 0 errores y 0
+  omitidos.
+- Suite unitaria backend completa: 897 tests, 0 fallos, 0 errores y 0 omitidos.
+- PostgreSQL 16 real con las 27 migraciones: 18 integraciones seleccionadas, 0 fallos, 0 errores y
+  0 omitidos (`LegalInitialPromotionIT`: 7, `LegalInitialPromotionFailureIT`: 4,
+  `LegalManifestImportIT`: 7).
+- Se acreditaron aplicación fresca, reutilización de membresía en documentos y requisitos, replay
+  sin escrituras ni avance de sequences, exclusión entre targets, rechazo de parciales/historia y
+  fecha futura, rollback por postcondición/constraint, timeout de advisory lock y pérdida de ACK del
+  commit con resultado UNKNOWN y retry exacto.
+- `git diff --check` limpio y revisión adversarial independiente sin hallazgos P1/P2 pendientes.
 
 ## Corte 5 — CLI inicial, contexto y rol editorial
 

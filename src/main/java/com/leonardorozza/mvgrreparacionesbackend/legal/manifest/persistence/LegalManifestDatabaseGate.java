@@ -43,6 +43,25 @@ final class LegalManifestDatabaseGate {
     }
 
     /**
+     * Executes one commit-sensitive editorial mutation in an accredited writable transaction.
+     *
+     * <p>The boundary is checked before opening PostgreSQL. Once inside, the effective isolation
+     * and read-only mode are accredited before preflights, advisory lock or graph access. This
+     * keeps apply operations separate from the legacy import entry point while sharing the exact
+     * timeout and cooperative-lock protocol.</p>
+     */
+    <T> T executeMutable(TransactionCallback<T> protectedCallback) {
+        Objects.requireNonNull(protectedCallback, "protectedCallback");
+        requireCommitOutcomeSafe();
+        return transactionTemplate.execute(status -> {
+            setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
+            requireEffectiveMutableTransaction();
+            enterProtectedGraphAfterStatementBudget();
+            return protectedCallback.doInTransaction(status);
+        });
+    }
+
+    /**
      * Executes a non-mutating editorial observation in an accredited read-only transaction.
      *
      * <p>The template declaration and the effective PostgreSQL transaction mode are both checked
@@ -143,6 +162,19 @@ final class LegalManifestDatabaseGate {
         if (!"read committed".equals(isolation) || !"on".equals(readOnly)) {
             throw new IllegalArgumentException(
                     "PostgreSQL no confirmó la frontera read-only del readiness legal");
+        }
+    }
+
+    private void requireEffectiveMutableTransaction() {
+        String isolation = jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class);
+        String readOnly = jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class);
+        if (!"read committed".equals(isolation) || !"off".equals(readOnly)) {
+            throw new IllegalArgumentException(
+                    "PostgreSQL no confirmó la frontera mutable editorial");
         }
     }
 

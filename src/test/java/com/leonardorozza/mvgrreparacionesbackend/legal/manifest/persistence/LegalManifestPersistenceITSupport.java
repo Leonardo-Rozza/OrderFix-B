@@ -55,7 +55,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Shared, test-only assembly and PostgreSQL probes for the legal import hardening ITs. */
+/** Shared, test-only assembly and PostgreSQL probes for the legal persistence ITs. */
 final class LegalManifestPersistenceITSupport {
 
     static final String GOLDEN_MANIFEST =
@@ -224,6 +224,61 @@ final class LegalManifestPersistenceITSupport {
                 plannerService);
     }
 
+    static ApplyHarness applyHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        manager.setRollbackOnCommitFailure(false);
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.setName("legal-editorial-apply-it");
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(budgets.transactionTimeoutSeconds());
+        transaction.setReadOnly(false);
+
+        LegalRequiredSetRevisionCalculator revisionCalculator =
+                new LegalRequiredSetRevisionCalculator();
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(jdbc, "public");
+        LegalManifestOriginGraphVerifier originVerifier =
+                new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
+        LegalEditorialReadinessCore readinessCore = new LegalEditorialReadinessCore(
+                jdbc,
+                originVerifier,
+                revisionCalculator,
+                new LegalEditorialStateFingerprintCalculator());
+        LegalEditorialPlannerCore plannerCore = new LegalEditorialPlannerCore(
+                jdbc,
+                readinessCore,
+                originVerifier);
+        LegalInitialPromotionCore promotionCore = new LegalInitialPromotionCore(jdbc);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                budgets,
+                List.of(schemaVerifier));
+        LegalEditorialApplyService service = new LegalEditorialApplyService(
+                gate,
+                jdbc,
+                plannerCore,
+                promotionCore,
+                readinessCore,
+                new LegalEditorialFailureMapper(),
+                schemaVerifier);
+        return new ApplyHarness(
+                dataSource,
+                jdbc,
+                transaction,
+                gate,
+                schemaVerifier,
+                originVerifier,
+                readinessCore,
+                plannerCore,
+                promotionCore,
+                service);
+    }
+
     static void promoteToReady(JdbcTemplate jdbc, UUID publicationId) {
         Objects.requireNonNull(jdbc, "jdbc");
         Objects.requireNonNull(publicationId, "publicationId");
@@ -305,6 +360,18 @@ final class LegalManifestPersistenceITSupport {
                      ORDER BY locale, contexto, audiencia
                     """, occurredAt, publicationId);
             jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        });
+    }
+
+    static void withReplicaRole(JdbcTemplate jdbc, Runnable mutation) {
+        Objects.requireNonNull(jdbc, "jdbc");
+        Objects.requireNonNull(mutation, "mutation");
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(
+                Objects.requireNonNull(jdbc.getDataSource(), "dataSource"));
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.executeWithoutResult(status -> {
+            jdbc.execute("SET LOCAL session_replication_role = replica");
+            mutation.run();
         });
     }
 
@@ -599,6 +666,73 @@ final class LegalManifestPersistenceITSupport {
                 .containsExactly(LegalManifestIssueCode.IMPORT_DB_COMMIT_UNKNOWN);
     }
 
+    static void assertEditorialConfirmed(
+            LegalEditorialApplyResult result,
+            LegalEditorialApplyResult.Outcome outcome) {
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.persisted()).isTrue();
+        assertThat(result.outcome()).isEqualTo(outcome);
+        assertThat(result.receipt()).isPresent();
+        assertThat(result.issues()).isEmpty();
+    }
+
+    static void assertEditorialKnownFailure(
+            LegalEditorialApplyResult result,
+            LegalManifestStatus status,
+            LegalManifestIssueCode code) {
+        LegalEditorialApplyResult.Outcome expectedOutcome = switch (status) {
+            case BLOCKED -> LegalEditorialApplyResult.Outcome.BLOCKED;
+            case ERROR -> LegalEditorialApplyResult.Outcome.ERROR;
+            case PASS -> throw new IllegalArgumentException(
+                    "Un fallo editorial conocido no puede tener status PASS");
+        };
+        assertThat(result.status()).isEqualTo(status);
+        assertThat(result.persisted()).isFalse();
+        assertThat(result.outcome()).isEqualTo(expectedOutcome);
+        assertThat(result.receipt()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(code);
+    }
+
+    static void assertEditorialUnknown(LegalEditorialApplyResult result) {
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.ERROR);
+        assertThat(result.persisted()).isNull();
+        assertThat(result.outcome()).isEqualTo(LegalEditorialApplyResult.Outcome.UNKNOWN);
+        assertThat(result.receipt()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+    }
+
+    static EditorialLockHolder holdEditorialLock(DataSource dataSource) throws SQLException {
+        Objects.requireNonNull(dataSource, "dataSource");
+        Connection connection = dataSource.getConnection();
+        try {
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """)) {
+                statement.setString(1, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+                try (var result = statement.executeQuery()) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.next()).isFalse();
+                }
+            }
+            return new EditorialLockHolder(connection);
+        } catch (RuntimeException | SQLException failure) {
+            try {
+                connection.rollback();
+            } finally {
+                connection.close();
+            }
+            throw failure;
+        }
+    }
+
     static void assertDryRunPass(LegalManifestValidation<DryRunResult> validation) {
         assertThat(validation.status())
                 .as("issues=%s", validation.issues())
@@ -743,6 +877,19 @@ final class LegalManifestPersistenceITSupport {
             LegalEditorialPlanService plannerService
     ) { }
 
+    record ApplyHarness(
+            DataSource dataSource,
+            JdbcTemplate jdbc,
+            TransactionTemplate transaction,
+            LegalManifestDatabaseGate gate,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalManifestOriginGraphVerifier originVerifier,
+            LegalEditorialReadinessCore readinessCore,
+            LegalEditorialPlannerCore plannerCore,
+            LegalInitialPromotionCore promotionCore,
+            LegalEditorialApplyService service
+    ) { }
+
     record SequenceState(long lastValue, boolean called) { }
 
     record PublicationGraphCounts(
@@ -790,6 +937,33 @@ final class LegalManifestPersistenceITSupport {
                     assertThat(result.next()).isTrue();
                     assertThat(result.next()).isFalse();
                 }
+            }
+        }
+
+        @Override
+        public void close() throws SQLException {
+            release();
+        }
+    }
+
+    static final class EditorialLockHolder implements AutoCloseable {
+
+        private final Connection connection;
+        private boolean open = true;
+
+        private EditorialLockHolder(Connection connection) {
+            this.connection = connection;
+        }
+
+        void release() throws SQLException {
+            if (!open) {
+                return;
+            }
+            open = false;
+            try {
+                connection.rollback();
+            } finally {
+                connection.close();
             }
         }
 
