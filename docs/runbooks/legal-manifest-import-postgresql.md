@@ -1,7 +1,7 @@
 # Runbook PostgreSQL del importador legal V27
 
-Estado: contexto DB, comando CLI, launcher y protocolo real acreditados hasta el Corte 6. El cierre
-cross-repo y la autorización operativa final corresponden al Corte 7.
+Estado: procedimiento técnico cerrado y verificado en la Fase 2.3B. Una importación operativa real
+requiere además release profesionalmente aprobado y autorización expresa del entorno.
 
 ## Propósito y límites
 
@@ -353,6 +353,39 @@ Corte 6. No lo omita: las defensas dentro de `main` no pueden neutralizar opcion
 procesó. La acreditación del corte se realizó sólo con fixtures sintéticas y no constituye por sí
 sola autorización para importar documentos reales.
 
+## Checklist final go/no-go
+
+Marque **NO-GO** y detenga el procedimiento ante cualquier diferencia. El cierre técnico de 2.3B
+no reemplaza estas aprobaciones para cada release y entorno.
+
+Antes de ejecutar:
+
+- [ ] release inmutable revisado profesionalmente, sin placeholders y con referencia de aprobación;
+- [ ] `publicationId` y SHA-256 JCS coinciden con la aprobación registrada y con un cálculo
+  independiente sobre ese mismo artefacto;
+- [ ] PostgreSQL 16, V27 única y checksum `1575269868` verificados;
+- [ ] rol nominal nuevo, restringido, sin memberships ni drift, validado con conexión nueva;
+- [ ] jar CLI y launcher pareados por revisión/SHA, script executable y Java 21 aprobado;
+- [ ] password obtenido del gestor de secretos, nunca copiado a argumentos, archivos o logs;
+- [ ] stdout y stderr capturados por separado sin pipeline, con destino de evidencia restringido;
+- [ ] job, operador, ventana y autorización del entorno registrados.
+
+Durante la ejecución:
+
+- [ ] usar únicamente `scripts/legal-manifest-import.sh` con las tres confirmaciones exactas;
+- [ ] no editar el release, los grants, Flyway ni la base para forzar un resultado;
+- [ ] validar exit y JSON v2 antes de interpretar el outcome;
+- [ ] archivar receipt sólo para `IMPORTED` o `ALREADY_IMPORTED` confirmados.
+
+Después de ejecutar:
+
+- [ ] repetir exactamente el mismo comando y exigir `ALREADY_IMPORTED` con el mismo receipt;
+- [ ] comprobar con observer que no existe publicación `ABIERTO` ni escritura fuera del grafo;
+- [ ] ante `UNKNOWN` o stdout ausente/truncado, resolver la causa y repetir el mismo bundle y
+  confirmaciones; nunca inferir commit o rollback;
+- [ ] ante `BLOCKED` o `ERROR` conocido, detenerse y corregir mediante un cambio revisado;
+- [ ] conservar evidencia sanitizada; el receipt no es aceptación ni comprobante fiscal.
+
 ## Verificación posterior
 
 Abra una conexión nueva usando la credencial importadora obtenida del gestor de secretos. No pase el
@@ -367,12 +400,12 @@ password por argumentos del proceso ni lo guarde en este archivo.
 5. Con una conexión observer/owner, confirme que no quedaron publicaciones `ABIERTO` ni escrituras
    en transiciones, slots, reemplazos, aceptaciones, metadata o idempotencia.
 
-El Corte 6 acreditó estos pasos con PostgreSQL 16 mediante `postgres:16-alpine` —la ejecución final
-observó 16.14—, el jar empaquetado, un rol restringido y fixtures sintéticas: import fresco/replay,
-conflicto, drift de privilegios, concurrencia, pérdida de stdout, canaries y recuperación de
-resultados inciertos. No se usaron credenciales, documentos ni entornos operativos reales. Antes de
-una importación real todavía deben cerrarse el Corte 7, la revisión profesional del release y la
-autorización del entorno.
+Los Cortes 6 y 7 acreditaron estos pasos con PostgreSQL 16 mediante `postgres:16-alpine` —la
+ejecución final observó 16.14—, el jar empaquetado, un rol restringido y fixtures sintéticas: import
+fresco/replay, conflicto, drift de privilegios, concurrencia, pérdida de stdout, canaries y
+recuperación de resultados inciertos. No se usaron credenciales, documentos ni entornos operativos
+reales. Antes de una importación real continúan siendo obligatorias la revisión profesional del
+release y la autorización expresa del entorno.
 
 Si cualquiera de los verifiers devuelve `IMPORT_DB_SCHEMA_INCOMPATIBLE` o
 `IMPORT_DB_PRIVILEGES_INCOMPATIBLE`, detenga la importación. No repare grants, historial Flyway ni

@@ -2,14 +2,15 @@
 
 Fecha: 2026-08-25
 
-Estado: diseño aprobado
+Estado: implementación cerrada y verificada (Cortes 1 a 7)
 
 Continuidad:
 
 - `docs/plans/2026-08-23-legal-api-contract-v1-design.md`;
 - `docs/plans/2026-08-23-legal-persistence-append-only-design.md`;
 - `docs/plans/2026-08-24-legal-manifest-dry-run-design.md`;
-- `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`.
+- `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`;
+- `docs/plans/2026-08-25-legal-manifest-import-closure.md`.
 
 ## Decisión de producto
 

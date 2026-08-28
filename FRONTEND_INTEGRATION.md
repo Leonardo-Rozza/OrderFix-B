@@ -56,10 +56,11 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     opcional por taller; USER puede consultarlos, pero no modificarlos.
 18. **Resumen digital no fiscal** (§4.13): `GET /resumen-digital` reemplaza al recibo imprimible. El
     alias `/recibo` sigue temporalmente disponible con el mismo JSON, pero está deprecado.
-19. **Contrato legal v1 y preimportación segura** (§4.1.a): quedan definidos
+19. **Contrato legal v1 e importación interna segura** (§4.1.a): quedan definidos
     documentos/requisitos versionados, evidencia propia, aceptación idempotente, `409`/`428` y
-    caché. La persistencia V27 y la CLI interna `validate`/`dry-run` están listas; las APIs, la
-    importación confirmada y el enforcement todavía no están habilitados.
+    caché. La persistencia V27 y la CLI interna `validate`/`dry-run`/`import` están listas; `import`
+    deja la publicación `SELLADO`, conserva las versiones nuevas en `BORRADOR` y no promueve. Las
+    APIs, catálogo, readiness, aceptación y enforcement todavía no están habilitados.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
@@ -200,13 +201,14 @@ Errores: `401` (email o contraseña incorrectos).
 > **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
 > de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
 
-### 4.1.a Legal versionado — contrato v1 congelado, preimportación interna disponible
+### 4.1.a Legal versionado — contrato v1 congelado, importación interna disponible
 
-> **Estado al 2026-08-25:** la Fase 2.3A cerró el schema, la persistencia append-only V27 y una CLI
-> interna de validación/dry-run rollback-only. Las rutas de esta sección todavía no existen en
-> runtime y el registro histórico de §4.1 continúa activo hasta completar el rollout compatible. La
-> herramienta no importa, publica ni habilita enforcement: no actives la UI basándote solamente en
-> esta documentación.
+> **Estado al 2026-08-27:** las Fases 2.3A y 2.3B cerraron el schema, la persistencia append-only
+> V27 y una CLI interna capaz de validar, simular rollback-only e importar/sellar de forma
+> idempotente. El import deja versiones nuevas en `BORRADOR`: no promueve, no publica catálogo y no
+> habilita readiness ni enforcement. Las rutas de esta sección todavía no existen en runtime y el
+> registro histórico de §4.1 continúa activo; no actives la UI basándote solamente en esta
+> documentación.
 
 #### Endpoints y autorización
 
@@ -912,7 +914,7 @@ cerrar la cuenta y solicitar eliminación/supresión. Esto incluye, mientras sig
 explícita, sin wildcards. La excepción sólo evita el `428`: no omite autenticación, rol, aislamiento
 por taller, reautenticación ni controles propios de cada operación.
 
-#### CLI interna de preimportación (Fase 2.3A)
+#### CLI interna de validación e importación (Fases 2.3A y 2.3B)
 
 Esta herramienta es operativa del backend; el frontend no la invoca ni consume su salida. El build
 genera un ejecutable separado del API:
@@ -934,8 +936,8 @@ java -jar target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar \
   dry-run --manifest=/ruta/release/publication-manifest.json
 ```
 
-El parser acepta exactamente un comando (`validate` o `dry-run`) y una única asignación
-`--manifest=<path>`. No admite passwords ni propiedades Spring por argumento. `validate` es
+Los comandos v1 aceptan exactamente `validate` o `dry-run` y una única asignación
+`--manifest=<path>`. No admiten passwords ni propiedades Spring por argumento. `validate` es
 completamente offline. `dry-run` exige `SPRING_DATASOURCE_URL`; por allowlist puede recibir también
 `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` y
 `SPRING_DATASOURCE_DRIVER_CLASS_NAME`. La base debe estar migrada previamente y ser compatible con
@@ -1005,7 +1007,20 @@ promete ausencia de efectos físicos: puede generar WAL, tomar locks y avanzar s
 transaccionales. Para exigir cero efectos físicos se usa una base descartable; para una validación
 sin interacción con infraestructura se usa `validate`.
 
-El cierre reproducible, la matriz de pruebas y los alcances pendientes están en
+La Fase 2.3B agregó `import` como operación exclusiva de plataforma. El frontend no lo invoca. Se
+ejecuta únicamente mediante `scripts/legal-manifest-import.sh`, con credenciales
+`ORDENFIX_LEGAL_IMPORT_DB_*`, habilitación exacta y confirmaciones explícitas de `publicationId` y
+SHA-256 JCS. El comando usa reporte v2: un fresco confirmado devuelve `IMPORTED`, un replay exacto
+`ALREADY_IMPORTED`, ambos con `persisted=true` y el mismo receipt. Blockers y errores conocidos
+devuelven `persisted=false`; sólo una finalización DB realmente indeterminada devuelve
+`persisted=null` y `outcome=UNKNOWN`. El retry debe repetir exactamente el mismo bundle y
+confirmaciones. El importador sella el grafo, deja versiones nuevas en `BORRADOR` y nunca promueve.
+
+El cierre reproducible y el runbook operativo están en
+`docs/plans/2026-08-25-legal-manifest-import-closure.md` y
+`docs/runbooks/legal-manifest-import-postgresql.md`.
+
+El cierre previo de 2.3A, su matriz de pruebas y sus alcances están en
 `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`.
 
 #### Orden de rollout
@@ -2087,9 +2102,10 @@ window.location.href = data.initPoint;
 - **Exportación a Excel** (§4.14): el ADMIN descarga todos los datos del taller en un `.xlsx`.
 - **Gating por plan**: inventario, cobros manuales/datos de cobro y multi-empleado son PRO
   (402 + mapa `funciones` en §4.2). Perfil y dashboard son FREE.
-- **Preimportación legal interna (Fase 2.3A)**: schema v1, persistencia V27 y CLI aislada
-  `validate`/`dry-run` rollback-only. Todavía no existen las APIs legales, la importación sellada,
-  la promoción/readiness ni el enforcement descritos en §4.1.a.
+- **Importación legal interna (Fases 2.3A–2.3B)**: schema v1, persistencia V27 y CLI aislada
+  `validate`/`dry-run`/`import`; el import es idempotente y sella el grafo con versiones nuevas en
+  `BORRADOR`. Todavía no existen las APIs legales, la promoción/readiness, las aceptaciones ni el
+  enforcement descritos en §4.1.a.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 

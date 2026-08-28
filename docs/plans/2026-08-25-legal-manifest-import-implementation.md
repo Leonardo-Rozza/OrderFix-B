@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-25
 
-Estado: Cortes 1 a 6 completados; Corte 7 pendiente
+Estado: fase cerrada y verificada; Cortes 1 a 7 completados
 
 Diseño aprobado:
 
@@ -717,6 +717,8 @@ Commit: `test(legal): acredita importacion y reconciliacion real`.
 
 ## Corte 7 — Runbook final, cierre cross-repo y regresión
 
+Estado: completado el 2026-08-27.
+
 ### Objetivo
 
 Dejar evidencia reproducible, actualizar el plan maestro sin habilitar integración y cerrar 2.3B
@@ -782,6 +784,28 @@ git status --short
 El build frontend local puede omitir deliberadamente el guard `public` cuando no hay variables de
 deploy ni manifiesto profesional aprobado. No ejecutar `build:public` contra borradores para simular
 readiness.
+
+### Evidencia del Corte 7
+
+- cierre reproducible creado en
+  `docs/plans/2026-08-25-legal-manifest-import-closure.md`, con matriz v2, protocolo de
+  reconciliación, inventario/grants, capacidad, trazabilidad y fronteras diferidas;
+- runbook PostgreSQL cerrado con checklist go/no-go, secreto sólo por environment, confirmaciones
+  exactas, captura separada de stdout/stderr, archivo del receipt y retry exacto de resultados
+  inciertos;
+- contrato backend/frontend actualizado sin declarar catálogo, endpoints, promoción, readiness,
+  aceptación ni enforcement disponibles;
+- suite backend completa con JDK 21.0.10 y PostgreSQL 16.14: 729 pruebas unitarias y 113 de
+  integración, sin fallos, errores ni omitidas;
+- regresión frontend: 42/42 pruebas dirigidas del guard, 82 archivos con 498 pruebas Vitest y build
+  local aprobados; los controles de release/artefactos públicos se omitieron deliberadamente por no
+  existir un manifiesto profesional ni variables de deploy;
+- schema cross-repo idéntico byte a byte: 10.547 bytes y SHA-256
+  `f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b`;
+- no hubo push, deploy, importación operativa real ni integración funcional frontend. Los no
+  versionados frontend `.agents/` y `public/OrdenFix project naming/` se preservaron.
+
+Commit: `docs(legal): cierra fase 2.3B`.
 
 ## Puerta de salida de la fase
 

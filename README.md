@@ -12,7 +12,12 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 >   manuales históricos.
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
 > - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — decisiones y rollout del contrato
->   legal v1 congelado; implementación todavía pendiente.
+>   legal v1 congelado; persistencia e importación/sello internos listos, con APIs, aceptación y
+>   enforcement todavía pendientes.
+> - **`docs/plans/2026-08-25-legal-manifest-import-closure.md`** — cierre reproducible de la Fase
+>   2.3B y fronteras pendientes.
+> - **`docs/runbooks/legal-manifest-import-postgresql.md`** — operación PostgreSQL restringida del
+>   importador legal; no reemplaza la aprobación profesional ni la autorización del entorno.
 
 ---
 
