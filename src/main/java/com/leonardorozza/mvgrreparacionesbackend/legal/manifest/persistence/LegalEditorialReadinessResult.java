@@ -22,19 +22,12 @@ public final class LegalEditorialReadinessResult {
                     LegalManifestIssueCode.PUBLICATION_CONTENT_MISMATCH,
                     LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED,
                     LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
-                    LegalManifestIssueCode.SOURCE_FINGERPRINT_MISMATCH,
-                    LegalManifestIssueCode.INITIAL_PROJECTION_ALREADY_EXISTS,
                     LegalManifestIssueCode.SCOPE_COVERAGE_INCOMPLETE,
-                    LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
-                    LegalManifestIssueCode.RETIREMENT_REASON_REQUIRED,
-                    LegalManifestIssueCode.EXPECTED_READINESS_MISMATCH,
-                    LegalManifestIssueCode.FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED,
                     LegalManifestIssueCode.REVISION_MISMATCH,
                     LegalManifestIssueCode.CONCURRENT_OPERATION,
                     LegalManifestIssueCode.ROLE_PRIVILEGE_DRIFT,
                     LegalManifestIssueCode.SCHEMA_DRIFT,
-                    LegalManifestIssueCode.POSTCONDITION_NOT_READY,
-                    LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN));
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED));
 
     private final LegalEditorialReadiness readiness;
     private final LegalEditorialReadinessObservation observation;

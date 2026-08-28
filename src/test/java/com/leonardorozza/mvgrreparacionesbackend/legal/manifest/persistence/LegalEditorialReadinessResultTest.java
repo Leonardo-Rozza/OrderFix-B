@@ -17,6 +17,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -32,6 +33,17 @@ class LegalEditorialReadinessResultTest {
     private static final Instant OBSERVED_AT = Instant.parse(
             "2026-08-28T12:30:00.123456Z");
     private static final String FINGERPRINT = "sha256:" + "a".repeat(64);
+    private static final Set<LegalManifestIssueCode> READINESS_REASON_CODES = Set.of(
+            LegalManifestIssueCode.PUBLICATION_NOT_SEALED,
+            LegalManifestIssueCode.PUBLICATION_CONTENT_MISMATCH,
+            LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED,
+            LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+            LegalManifestIssueCode.SCOPE_COVERAGE_INCOMPLETE,
+            LegalManifestIssueCode.REVISION_MISMATCH,
+            LegalManifestIssueCode.CONCURRENT_OPERATION,
+            LegalManifestIssueCode.ROLE_PRIVILEGE_DRIFT,
+            LegalManifestIssueCode.SCHEMA_DRIFT,
+            LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
 
     private static final List<ExpectedReason> EXPECTED_EDITORIAL_REASONS = List.of(
             reason(
@@ -101,7 +113,11 @@ class LegalEditorialReadinessResultTest {
             reason(
                     LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
                     LegalManifestStatus.ERROR,
-                    "No se pudo determinar si la operación editorial fue confirmada."));
+                    "No se pudo determinar si la operación editorial fue confirmada."),
+            reason(
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
+                    LegalManifestStatus.ERROR,
+                    "No se pudo completar una observación editorial confiable."));
 
     @Test
     void freezesTheReadinessObservationAndFactoryShapes() throws NoSuchMethodException {
@@ -294,8 +310,8 @@ class LegalEditorialReadinessResultTest {
     }
 
     @Test
-    void freezesTheExactSeventeenReasonCodesSeveritiesMessagesAndAllowlist() {
-        assertThat(EXPECTED_EDITORIAL_REASONS).hasSize(17);
+    void freezesTheEighteenEditorialReasonsAndTheReadinessSpecificSubset() {
+        assertThat(EXPECTED_EDITORIAL_REASONS).hasSize(18);
         assertThat(EXPECTED_EDITORIAL_REASONS)
                 .extracting(expected -> expected.code().name())
                 .containsExactly(
@@ -315,7 +331,8 @@ class LegalEditorialReadinessResultTest {
                         "ROLE_PRIVILEGE_DRIFT",
                         "SCHEMA_DRIFT",
                         "POSTCONDITION_NOT_READY",
-                        "COMMIT_OUTCOME_UNKNOWN");
+                        "COMMIT_OUTCOME_UNKNOWN",
+                        "EDITORIAL_OBSERVATION_FAILED");
 
         Map<LegalManifestIssueCode, ExpectedReason> expectedByCode =
                 EXPECTED_EDITORIAL_REASONS.stream().collect(Collectors.toUnmodifiableMap(
@@ -331,7 +348,7 @@ class LegalEditorialReadinessResultTest {
         for (LegalManifestIssueCode code : LegalManifestIssueCode.values()) {
             LegalManifestIssue candidate = issue(code, "database/catalog");
             ExpectedReason expected = expectedByCode.get(code);
-            if (expected == null) {
+            if (expected == null || !READINESS_REASON_CODES.contains(code)) {
                 if (code.severity() == LegalManifestStatus.BLOCKED) {
                     assertThatThrownBy(() -> LegalEditorialReadinessResult.notReady(
                             observation,

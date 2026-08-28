@@ -102,6 +102,83 @@ class LegalManifestDatabaseGateTest {
     }
 
     @Test
+    void readOnlyGateAccreditsTheEffectiveModeBeforeTheSharedProtectedGraph() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingReadOnlyTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn("read committed");
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn("on");
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        when(callback.doInTransaction(any())).thenReturn("observation");
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema));
+
+        String result = gate.executeReadOnly(callback);
+
+        assertThat(result).isEqualTo("observation");
+        InOrder order = inOrder(jdbc, schema, callback);
+        order.verify(jdbc).execute("SET LOCAL statement_timeout TO '30s'");
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class);
+        order.verify(schema).verify();
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
+        order.verify(jdbc).queryForList(
+                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
+        order.verify(callback).doInTransaction(any());
+    }
+
+    @Test
+    void readOnlyGateRejectsEveryDeclaredBoundaryDriftBeforeOpeningATransaction() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate joining = safeReadOnlyTransaction(manager);
+        joining.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+        TransactionTemplate wrongIsolation = safeReadOnlyTransaction(manager);
+        wrongIsolation.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        TransactionTemplate wrongTimeout = safeReadOnlyTransaction(manager);
+        wrongTimeout.setTimeout(74);
+        TransactionTemplate writable = safeReadOnlyTransaction(manager);
+        writable.setReadOnly(false);
+        JdbcTransactionManager translatedManager = new JdbcTransactionManager(dataSource);
+
+        assertUnsafeReadOnlyTemplate(joining, dataSource);
+        assertUnsafeReadOnlyTemplate(wrongIsolation, dataSource);
+        assertUnsafeReadOnlyTemplate(wrongTimeout, dataSource);
+        assertUnsafeReadOnlyTemplate(writable, dataSource);
+        assertUnsafeReadOnlyTemplate(
+                safeReadOnlyTransaction(translatedManager),
+                dataSource);
+
+        DataSource foreignDataSource = mock(DataSource.class);
+        assertUnsafeReadOnlyTemplate(
+                safeReadOnlyTransaction(manager),
+                foreignDataSource);
+    }
+
+    @Test
+    void readOnlyGateRejectsAnEffectiveWritableOrForeignIsolationTransaction() {
+        assertEffectiveReadOnlyModeRejected("repeatable read", "on");
+        assertEffectiveReadOnlyModeRejected("read committed", "off");
+        assertEffectiveReadOnlyModeRejected(null, "on");
+        assertEffectiveReadOnlyModeRejected("read committed", null);
+    }
+
+    @Test
     void acceptsTheCommitOutcomeSafeManagerRequiredByImport() {
         DataSource dataSource = mock(DataSource.class);
         DataSourceTransactionManager manager = new DataSourceTransactionManager(
@@ -226,6 +303,57 @@ class LegalManifestDatabaseGateTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void acceptsExactlyTheReadinessSchemaPreflightOnTheSharedJdbcSession() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema));
+
+        assertThatCode(() -> gate.requireExactReadinessPreflights(jdbc, schema))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsMissingExtraForeignOrUnboundReadinessPreflights() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        JdbcTemplate foreignJdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight extra = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of()).requireExactReadinessPreflights(jdbc, schema))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, extra)).requireExactReadinessPreflights(jdbc, schema))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema)).requireExactReadinessPreflights(foreignJdbc, schema))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        when(schema.usesJdbc(jdbc)).thenReturn(false);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema)).requireExactReadinessPreflights(jdbc, schema))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static void assertUnsafeTemplate(
             TransactionTemplate transaction,
             DataSource dataSource) {
@@ -236,6 +364,52 @@ class LegalManifestDatabaseGateTest {
                 List.of());
         assertThatThrownBy(gate::requireCommitOutcomeSafe)
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static void assertUnsafeReadOnlyTemplate(
+            TransactionTemplate transaction,
+            DataSource jdbcDataSource) {
+        JdbcTemplate jdbc = new JdbcTemplate(jdbcDataSource);
+        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeReadOnly(callback))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(callback);
+    }
+
+    private static void assertEffectiveReadOnlyModeRejected(
+            String isolation,
+            String readOnly) {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingReadOnlyTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn(isolation);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn(readOnly);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema));
+
+        assertThatThrownBy(() -> gate.executeReadOnly(callback))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(jdbc).execute("SET LOCAL statement_timeout TO '30s'");
+        verify(jdbc, never()).queryForList(
+                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                org.mockito.ArgumentMatchers.<Object[]>any());
+        verifyNoInteractions(schema, callback);
     }
 
     private static LegalManifestDatabaseGate gateFor(
@@ -256,6 +430,36 @@ class LegalManifestDatabaseGateTest {
         transaction.setTimeout(
                 LegalDatabaseBudgets.production().transactionTimeoutSeconds());
         transaction.setReadOnly(false);
+        return transaction;
+    }
+
+    private static TransactionTemplate safeReadOnlyTransaction(
+            DataSourceTransactionManager transactionManager) {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(
+                LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        transaction.setReadOnly(true);
+        return transaction;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static TransactionTemplate executingReadOnlyTransaction(DataSource dataSource) {
+        TransactionTemplate transaction = mock(TransactionTemplate.class);
+        when(transaction.getTransactionManager()).thenReturn(
+                new DataSourceTransactionManager(dataSource));
+        when(transaction.getPropagationBehavior()).thenReturn(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        when(transaction.getIsolationLevel()).thenReturn(
+                TransactionDefinition.ISOLATION_READ_COMMITTED);
+        when(transaction.getTimeout()).thenReturn(
+                LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        when(transaction.isReadOnly()).thenReturn(true);
+        when(transaction.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback callback = invocation.getArgument(0);
+            return callback.doInTransaction(new SimpleTransactionStatus());
+        });
         return transaction;
     }
 

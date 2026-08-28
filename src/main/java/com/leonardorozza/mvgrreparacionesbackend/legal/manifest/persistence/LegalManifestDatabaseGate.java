@@ -37,15 +37,25 @@ final class LegalManifestDatabaseGate {
     <T> T execute(TransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         return transactionTemplate.execute(status -> {
+            enterProtectedGraph();
+            return protectedCallback.doInTransaction(status);
+        });
+    }
+
+    /**
+     * Executes a non-mutating editorial observation in an accredited read-only transaction.
+     *
+     * <p>The template declaration and the effective PostgreSQL transaction mode are both checked
+     * before any preflight or graph read. The protected callback then uses the same preflights,
+     * budgets and cooperative advisory lock as import and dry-run.</p>
+     */
+    <T> T executeReadOnly(TransactionCallback<T> protectedCallback) {
+        Objects.requireNonNull(protectedCallback, "protectedCallback");
+        requireReadOnlyBoundary();
+        return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
-            preflights.forEach(LegalDatabasePreflight::verify);
-            setLocalTimeout("lock_timeout", budgets.editorialLockTimeoutSeconds());
-            jdbc.queryForList("""
-                    SELECT pg_catalog.pg_advisory_xact_lock(
-                        pg_catalog.hashtextextended(?, 0)
-                    )
-                    """, EDITORIAL_LOCK_NAME);
-            setLocalTimeout("lock_timeout", budgets.graphLockTimeoutSeconds());
+            requireEffectiveReadOnlyTransaction();
+            enterProtectedGraphAfterStatementBudget();
             return protectedCallback.doInTransaction(status);
         });
     }
@@ -92,6 +102,64 @@ final class LegalManifestDatabaseGate {
             throw new IllegalArgumentException(
                     "El importador legal requiere preflights acreditados y ordenados");
         }
+    }
+
+    void requireExactReadinessPreflights(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema) {
+        if (jdbc != candidate
+                || preflights.size() != 1
+                || preflights.getFirst() != schema
+                || !schema.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "El readiness legal requiere el preflight de schema acreditado");
+        }
+    }
+
+    private void requireReadOnlyBoundary() {
+        Object transactionManager = transactionTemplate.getTransactionManager();
+        if (transactionManager == null
+                || transactionManager.getClass() != DataSourceTransactionManager.class
+                || ((DataSourceTransactionManager) transactionManager).getDataSource()
+                        != jdbc.getDataSource()
+                || transactionTemplate.getPropagationBehavior()
+                        != TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                || transactionTemplate.getIsolationLevel()
+                        != TransactionDefinition.ISOLATION_READ_COMMITTED
+                || transactionTemplate.getTimeout() != budgets.transactionTimeoutSeconds()
+                || !transactionTemplate.isReadOnly()) {
+            throw new IllegalArgumentException(
+                    "El readiness legal requiere una frontera read-only acreditable");
+        }
+    }
+
+    private void requireEffectiveReadOnlyTransaction() {
+        String isolation = jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class);
+        String readOnly = jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class);
+        if (!"read committed".equals(isolation) || !"on".equals(readOnly)) {
+            throw new IllegalArgumentException(
+                    "PostgreSQL no confirmó la frontera read-only del readiness legal");
+        }
+    }
+
+    private void enterProtectedGraph() {
+        setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
+        enterProtectedGraphAfterStatementBudget();
+    }
+
+    private void enterProtectedGraphAfterStatementBudget() {
+        preflights.forEach(LegalDatabasePreflight::verify);
+        setLocalTimeout("lock_timeout", budgets.editorialLockTimeoutSeconds());
+        jdbc.queryForList("""
+                SELECT pg_catalog.pg_advisory_xact_lock(
+                    pg_catalog.hashtextextended(?, 0)
+                )
+                """, EDITORIAL_LOCK_NAME);
+        setLocalTimeout("lock_timeout", budgets.graphLockTimeoutSeconds());
     }
 
     private void setLocalTimeout(String setting, int seconds) {

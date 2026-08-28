@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
@@ -51,6 +52,7 @@ class LegalManifestReplayVerifierTest {
     private JdbcTemplate database;
     private SelectOnlyJdbcTemplate verifierJdbc;
     private LegalRequiredSetRevisionCalculator revisionCalculator;
+    private LegalManifestOriginGraphVerifier originVerifier;
     private LegalManifestReplayVerifier verifier;
 
     @BeforeAll
@@ -75,7 +77,8 @@ class LegalManifestReplayVerifierTest {
         createSchema(database);
         verifierJdbc = new SelectOnlyJdbcTemplate(dataSource);
         revisionCalculator = new LegalRequiredSetRevisionCalculator();
-        verifier = new LegalManifestReplayVerifier(verifierJdbc, revisionCalculator);
+        originVerifier = new LegalManifestOriginGraphVerifier(verifierJdbc, revisionCalculator);
+        verifier = new LegalManifestReplayVerifier(verifierJdbc, originVerifier);
     }
 
     @Test
@@ -102,6 +105,13 @@ class LegalManifestReplayVerifierTest {
         assertThat(verifierJdbc.statements())
                 .isNotEmpty()
                 .allMatch(statement -> statement.startsWith("select "));
+        assertThat(verifierJdbc.statements().get(0))
+                .contains("from legal_publicaciones", "for update");
+        assertThat(verifierJdbc.statements().get(1))
+                .contains("from legal_publicaciones")
+                .doesNotContain("for update", "for share");
+        assertThat(verifierJdbc.statements().get(2))
+                .contains("legal_validar_publicacion_sellada");
         assertThat(verifierJdbc.statements().stream()
                 .filter(LegalManifestReplayVerifierTest::isMultirowReplayRead)
                 .toList())
@@ -149,6 +159,87 @@ class LegalManifestReplayVerifierTest {
         assertThatThrownBy(() -> verifier.verify(release, graph.publicationId()))
                 .isInstanceOf(LegalImportBlockedException.class);
         assertThat(verifierJdbc.validationCalls()).isOne();
+    }
+
+    @Test
+    void originIsStrictlySelectOnlyAndNeverCallsTheV27Validator() {
+        SeededGraph graph = seedExactGraph();
+
+        LegalManifestGraphReceipt receipt = originVerifier.verify(
+                release,
+                graph.publicationId());
+
+        assertThat(receipt.publicationUuid()).isEqualTo(graph.publicationId());
+        assertThat(verifierJdbc.validationCalls()).isZero();
+        assertThat(verifierJdbc.statements())
+                .isNotEmpty()
+                .allMatch(statement -> statement.startsWith("select "))
+                .noneMatch(statement -> statement.contains("for update")
+                        || statement.contains("for share")
+                        || statement.contains("legal_validar_publicacion_sellada"));
+    }
+
+    @Test
+    void originClassifiesMissingAndOpenTargetsAsNotSealed() {
+        UUID missing = UUID.randomUUID();
+
+        assertThatThrownBy(() -> originVerifier.verify(release, missing))
+                .isInstanceOfSatisfying(LegalEditorialBlockedException.class, failure ->
+                        assertThat(failure.issue().code())
+                                .isEqualTo(LegalManifestIssueCode.PUBLICATION_NOT_SEALED));
+
+        SeededGraph open = seedExactGraph();
+        database.update("""
+                UPDATE legal_publicaciones
+                   SET estado_construccion = 'ABIERTO', sellado_en = NULL
+                 WHERE id = ?
+                """, open.publicationId());
+
+        assertThatThrownBy(() -> originVerifier.verify(release, open.publicationId()))
+                .isInstanceOfSatisfying(LegalEditorialBlockedException.class, failure ->
+                        assertThat(failure.issue().code())
+                                .isEqualTo(LegalManifestIssueCode.PUBLICATION_NOT_SEALED));
+        assertThat(verifierJdbc.validationCalls()).isZero();
+    }
+
+    @Test
+    void originClassifiesHeaderGraphAndRevisionMismatchesPrecisely() {
+        SeededGraph headerMismatch = seedExactGraph();
+        database.update("""
+                UPDATE legal_publicaciones
+                   SET razon_social = 'Otra entidad'
+                 WHERE id = ?
+                """, headerMismatch.publicationId());
+
+        assertThatThrownBy(() -> originVerifier.verify(release, headerMismatch.publicationId()))
+                .isInstanceOfSatisfying(LegalEditorialBlockedException.class, failure ->
+                        assertThat(failure.issue().code())
+                                .isEqualTo(LegalManifestIssueCode.PUBLICATION_CONTENT_MISMATCH));
+
+        SeededGraph graphMismatch = seedExactGraph();
+        database.update("""
+                UPDATE legal_documento_versiones
+                   SET titulo = 'Contenido persistido alterado'
+                 WHERE id = ?
+                """, graphMismatch.firstDocumentVersionId());
+
+        assertThatThrownBy(() -> originVerifier.verify(release, graphMismatch.publicationId()))
+                .isInstanceOfSatisfying(LegalEditorialBlockedException.class, failure ->
+                        assertThat(failure.issue().code())
+                                .isEqualTo(LegalManifestIssueCode.PUBLICATION_CONTENT_MISMATCH));
+
+        SeededGraph revisionMismatch = seedExactGraph();
+        database.update("""
+                UPDATE legal_requisito_conjuntos
+                   SET required_set_revision = ?
+                 WHERE id = ?
+                """, "sha256:" + "0".repeat(64), revisionMismatch.firstScopeId());
+
+        assertThatThrownBy(() -> originVerifier.verify(release, revisionMismatch.publicationId()))
+                .isInstanceOfSatisfying(LegalEditorialBlockedException.class, failure ->
+                        assertThat(failure.issue().code())
+                                .isEqualTo(LegalManifestIssueCode.REVISION_MISMATCH));
+        assertThat(verifierJdbc.validationCalls()).isZero();
     }
 
     @Test

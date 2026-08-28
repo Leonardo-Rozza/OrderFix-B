@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-27
 
-Estado: diseño aprobado; implementación pendiente
+Estado: diseño aprobado; implementación en curso, Cortes 1 y 2 completados
 
 Continuidad:
 
@@ -261,6 +261,16 @@ proyección versionada del fingerprint incluye identidad y SHA de la publicació
 slots y punteros actuales, estados y metadata terminal de sus versiones, lotes relacionados y
 versiones adicionales que podrían interferir. Excluye nuevas publicaciones SELLADO que continúan
 íntegramente en BORRADOR. Se canonicaliza con RFC 8785 y se acredita con un vector golden.
+
+La observación debe ser completa para ser autoritativa. Las colecciones de tamaño contractual se
+leen con expected+1; las proyecciones globales y el histórico alcanzable usan máximos finitos más el
+total observado en la misma consulta. Superar un máximo o detectar una lectura parcial produce
+ERROR sin observation ni fingerprint. La clausura del fingerprint contiene las membresías target,
+las proyecciones globales actuales, toda versión global no BORRADOR, los BORRADOR target/current
+necesarios y los lotes de reemplazo alcanzables transitivamente; sus counts se derivan de esa misma
+clausura. Los máximos base son 8.192 versiones documentales, 16.384 versiones de requisito y 8.192
+lotes. El resultado de readiness sólo admite sus seis causas BLOCKED y cuatro ERROR; los demás
+códigos editoriales quedan reservados para plan y apply.
 
 El resultado observado es:
 
@@ -638,7 +648,8 @@ Los códigos estables incluyen como mínimo:
 - ROLE_PRIVILEGE_DRIFT;
 - SCHEMA_DRIFT;
 - POSTCONDITION_NOT_READY;
-- COMMIT_OUTCOME_UNKNOWN.
+- COMMIT_OUTCOME_UNKNOWN;
+- EDITORIAL_OBSERVATION_FAILED.
 
 BLOCKED representa una condición de dominio esperable. ERROR representa una incapacidad operativa
 con rollback acreditado. UNKNOWN sólo aparece cuando la frontera transaccional no puede conocer la

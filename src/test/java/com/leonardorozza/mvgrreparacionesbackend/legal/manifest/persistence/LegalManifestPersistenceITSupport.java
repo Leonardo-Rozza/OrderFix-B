@@ -8,6 +8,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialStateFingerprintCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetRevisionCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService.DryRunResult;
 import com.zaxxer.hikari.HikariConfig;
@@ -35,6 +36,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -149,6 +151,136 @@ final class LegalManifestPersistenceITSupport {
                 dryRunService);
     }
 
+    static ReadinessHarness readinessHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        manager.setRollbackOnCommitFailure(false);
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.setName("legal-editorial-readiness-it");
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(budgets.transactionTimeoutSeconds());
+        transaction.setReadOnly(true);
+
+        LegalRequiredSetRevisionCalculator revisionCalculator =
+                new LegalRequiredSetRevisionCalculator();
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(jdbc, "public");
+        LegalManifestOriginGraphVerifier originVerifier =
+                new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
+        LegalEditorialReadinessCore core = new LegalEditorialReadinessCore(
+                jdbc,
+                originVerifier,
+                revisionCalculator,
+                new LegalEditorialStateFingerprintCalculator());
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                budgets,
+                List.of(schemaVerifier));
+        LegalEditorialReadinessService service = new LegalEditorialReadinessService(
+                gate,
+                jdbc,
+                core,
+                new LegalEditorialFailureMapper(),
+                schemaVerifier);
+        return new ReadinessHarness(
+                dataSource,
+                jdbc,
+                transaction,
+                gate,
+                schemaVerifier,
+                originVerifier,
+                core,
+                service);
+    }
+
+    static void promoteToReady(JdbcTemplate jdbc, UUID publicationId) {
+        Objects.requireNonNull(jdbc, "jdbc");
+        Objects.requireNonNull(publicationId, "publicationId");
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(
+                Objects.requireNonNull(jdbc.getDataSource(), "dataSource"));
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        transaction.executeWithoutResult(status -> {
+            jdbc.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+            OffsetDateTime occurredAt = Objects.requireNonNull(jdbc.queryForObject(
+                    "SELECT transaction_timestamp()",
+                    OffsetDateTime.class));
+            jdbc.update("""
+                    INSERT INTO legal_documento_transiciones
+                        (documento_version_id, estado_anterior, estado_nuevo,
+                         ocurrido_en)
+                    SELECT pd.documento_version_id, 'BORRADOR', 'PUBLICADA', ?
+                      FROM legal_publicacion_documentos pd
+                     WHERE pd.publicacion_id = ?
+                     ORDER BY pd.manifest_ordinal
+                    """, occurredAt, publicationId);
+            jdbc.update("""
+                    INSERT INTO legal_documento_transiciones
+                        (documento_version_id, estado_anterior, estado_nuevo,
+                         ocurrido_en)
+                    SELECT pd.documento_version_id, 'PUBLICADA', 'VIGENTE', ?
+                      FROM legal_publicacion_documentos pd
+                     WHERE pd.publicacion_id = ?
+                     ORDER BY pd.manifest_ordinal
+                    """, occurredAt, publicationId);
+            jdbc.update("""
+                    INSERT INTO legal_requisito_transiciones
+                        (requisito_version_id, estado_anterior, estado_nuevo,
+                         ocurrido_en)
+                    SELECT pr.requisito_version_id, 'BORRADOR', 'PUBLICADA', ?
+                      FROM legal_publicacion_requisitos pr
+                     WHERE pr.publicacion_id = ?
+                     ORDER BY pr.manifest_ordinal
+                    """, occurredAt, publicationId);
+            jdbc.update("""
+                    INSERT INTO legal_requisito_transiciones
+                        (requisito_version_id, estado_anterior, estado_nuevo,
+                         ocurrido_en)
+                    SELECT pr.requisito_version_id, 'PUBLICADA', 'VIGENTE', ?
+                      FROM legal_publicacion_requisitos pr
+                     WHERE pr.publicacion_id = ?
+                     ORDER BY pr.manifest_ordinal
+                    """, occurredAt, publicationId);
+            jdbc.update("""
+                    INSERT INTO legal_documento_vigentes
+                        (tipo, locale, contexto, documento_version_id,
+                         documento_linea_id, publicacion_id, estado_documento)
+                    SELECT dl.tipo, dl.locale, dc.contexto, dv.id,
+                           dv.documento_linea_id, pd.publicacion_id, 'VIGENTE'
+                      FROM legal_publicacion_documentos pd
+                      JOIN legal_documento_versiones dv
+                        ON dv.id = pd.documento_version_id
+                      JOIN legal_documento_lineas dl
+                        ON dl.id = dv.documento_linea_id
+                      JOIN legal_documento_contextos dc
+                        ON dc.documento_version_id = dv.id
+                     WHERE pd.publicacion_id = ?
+                     ORDER BY dl.tipo, dl.locale, dc.contexto
+                    """, publicationId);
+            jdbc.update("""
+                    INSERT INTO legal_requisito_conjuntos_actuales
+                        (locale, contexto, audiencia, conjunto_id,
+                         publicacion_id, actualizado_en)
+                    SELECT locale, contexto, audiencia, id,
+                           publicacion_id, ?
+                      FROM legal_requisito_conjuntos
+                     WHERE publicacion_id = ?
+                     ORDER BY locale, contexto, audiencia
+                    """, occurredAt, publicationId);
+            jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        });
+    }
+
     static ValidatedRelease goldenRelease(Class<?> resourceAnchor) throws URISyntaxException {
         return validate(goldenManifest(resourceAnchor));
     }
@@ -217,6 +349,31 @@ final class LegalManifestPersistenceITSupport {
     static Map<String, SequenceState> sequenceStates(JdbcTemplate jdbc) {
         Map<String, SequenceState> states = new LinkedHashMap<>();
         for (String sequence : IMPORT_SEQUENCES) {
+            SequenceState state = jdbc.queryForObject(
+                    "SELECT last_value, is_called FROM " + quoteIdentifier(sequence),
+                    (resultSet, rowNumber) -> new SequenceState(
+                            resultSet.getLong("last_value"),
+                            resultSet.getBoolean("is_called")));
+            states.put(sequence, Objects.requireNonNull(state, "sequence state"));
+        }
+        return Map.copyOf(states);
+    }
+
+    static Map<String, Long> editorialTableCounts(JdbcTemplate jdbc) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (String table : new TreeSet<>(LegalV27EditorialInventory.EDITORIAL_TABLES)) {
+            Long count = jdbc.queryForObject(
+                    "SELECT count(*) FROM " + quoteIdentifier(table),
+                    Long.class);
+            counts.put(table, Objects.requireNonNull(count, "row count"));
+        }
+        return Map.copyOf(counts);
+    }
+
+    static Map<String, SequenceState> editorialSequenceStates(JdbcTemplate jdbc) {
+        Map<String, SequenceState> states = new LinkedHashMap<>();
+        for (String sequence : new TreeSet<>(
+                LegalV27EditorialInventory.IDENTITY_SEQUENCES.keySet())) {
             SequenceState state = jdbc.queryForObject(
                     "SELECT last_value, is_called FROM " + quoteIdentifier(sequence),
                     (resultSet, rowNumber) -> new SequenceState(
@@ -533,6 +690,17 @@ final class LegalManifestPersistenceITSupport {
             LegalManifestReplayVerifier replayVerifier,
             LegalManifestImportService importService,
             LegalManifestDryRunService dryRunService
+    ) { }
+
+    record ReadinessHarness(
+            DataSource dataSource,
+            JdbcTemplate jdbc,
+            TransactionTemplate transaction,
+            LegalManifestDatabaseGate gate,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalManifestOriginGraphVerifier originVerifier,
+            LegalEditorialReadinessCore core,
+            LegalEditorialReadinessService service
     ) { }
 
     record SequenceState(long lastValue, boolean called) { }

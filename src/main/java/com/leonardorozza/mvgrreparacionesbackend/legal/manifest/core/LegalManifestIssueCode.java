@@ -345,7 +345,10 @@ public enum LegalManifestIssueCode {
             "La operación editorial no alcanzó el readiness requerido."),
     COMMIT_OUTCOME_UNKNOWN(
             LegalManifestStatus.ERROR,
-            "No se pudo determinar si la operación editorial fue confirmada.");
+            "No se pudo determinar si la operación editorial fue confirmada."),
+    EDITORIAL_OBSERVATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar una observación editorial confiable.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;

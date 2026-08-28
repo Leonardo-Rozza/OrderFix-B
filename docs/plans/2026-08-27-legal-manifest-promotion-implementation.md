@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Corte 1 completado
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 y 2 completados
 
 Diseño aprobado:
 
@@ -251,7 +251,7 @@ Commit:
 
 ## Corte 2 — Evaluador PostgreSQL read-only
 
-Estado: pendiente.
+Estado: completado el 2026-08-28.
 
 ### Objetivo
 
@@ -272,14 +272,19 @@ Crear:
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialOperationalException.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessCoreTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessIT.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialSchemaVerifierIT.java.
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialSchemaVerifierIT.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialExceptionTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialFailureMapperTest.java.
 
 Modificar:
 
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestReplayVerifier.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestDatabaseGate.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalManifestIssueCode.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessResult.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestReplayVerifierTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestDatabaseGateTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessResultTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestPersistenceITSupport.java.
 
 ### Implementación
@@ -292,7 +297,8 @@ Modificar:
 4. Ejecutar readiness dentro de REQUIRES_NEW/READ_COMMITTED/readOnly=true con el advisory lock.
 5. Tras adquirir el lock, ReadinessService lee transaction_timestamp exactamente una vez y lo pasa
    al ReadinessCore; el core siempre recibe ese instante caller-owned y nunca consulta otro.
-6. Usar sólo SELECT simples y lecturas acotadas a cardinalidad esperada+1.
+6. Usar sólo SELECT; acotar a cardinalidad esperada+1 cuando existe un tamaño contractual y usar
+   máximo finito más total observado para proyecciones globales e historia.
 7. Comprobar target SELLADO y grafo de origen exacto mediante el verifier SELECT-only.
 8. Verificar igualdad global:
    - todas las versiones target VIGENTE;
@@ -308,6 +314,36 @@ Modificar:
 10. Devolver NOT_READY con todos los hallazgos seguros, límite 200 y fingerprint observado.
 11. Demostrar que servicio y core comparten JdbcTemplate, que el core no abre gate y que una llamada
     observa sólo el instante suministrado aunque avance el reloj real.
+
+### Precisiones incorporadas durante el Corte 2
+
+- La matriz original distinguía ERROR por conexión o lectura, pero no tenía un código general que
+  representara esa incapacidad sin mentir sobre schema, privilegios o concurrencia. Se agregó
+  EDITORIAL_OBSERVATION_FAILED como decimoctavo código editorial estable, con mensaje constante y
+  sin detalles de excepción.
+- Las colecciones con cardinalidad contractual conocida se leen con expected+1. Las proyecciones
+  globales y los históricos necesarios para el fingerprint usan máximos finitos congelados y
+  count(*) over() para probar que la lectura fue completa. Un exceso devuelve ERROR sin observation
+  ni fingerprint parcial. Los topes base son 8.192 versiones documentales, 16.384 versiones de
+  requisito y 8.192 lotes; las cardinalidades derivadas se calculan con límites aritméticos exactos.
+  El LIMIT acota lo materializado por el cliente, mientras statement_timeout sigue siendo la defensa
+  ante una selección cuyo conteo resulte costoso en el servidor.
+- La clausura observada por el fingerprint incluye las membresías target, todos los slots y punteros
+  actuales, toda versión global no BORRADOR, los BORRADOR target/current necesarios y los lotes de
+  reemplazo alcanzables de forma transitiva. Una publicación ajena íntegramente en BORRADOR continúa
+  excluida; su historia deja de ser invisible apenas una versión sale de BORRADOR.
+- Los counts de la observation se calculan sobre la misma clausura completa que se canonicaliza. No
+  se publican conteos obtenidos de un universo distinto al fingerprint.
+- READ_COMMITTED más el advisory transaction lock da una vista coherente respecto de los writers que
+  respetan el protocolo compartido. No se atribuye esa garantía a escritores externos que ignoren
+  deliberadamente el lock.
+- LegalManifestOriginGraphVerifier concentra la comparación SELECT-only. El importador conserva su
+  bloqueo de fila y legal_validar_publicacion_sellada(uuid) antes de delegar esa comparación; el
+  evaluador read-only no ejecuta ninguno de los dos.
+- LegalEditorialReadinessResult acepta sólo las seis causas BLOCKED y cuatro causas ERROR que un
+  readiness read-only puede producir. Los códigos de plan, postcondición y commit indeterminado
+  permanecen en el vocabulario editorial global, pero no pueden representarse falsamente con
+  persisted=false dentro de este resultado.
 
 ### Pruebas y puerta
 
@@ -325,6 +361,26 @@ git status --short
 Commit:
 
     feat(legal): evalua readiness editorial en postgresql
+
+### Evidencia de cierre
+
+- Java 21 (Corretto 21.0.10), puerta enfocada documentada: 37 tests, 0 fallos, 0 errores y 0
+  omitidos.
+- Puerta unitaria ampliada del corte: 62 tests, 0 fallos, 0 errores y 0 omitidos.
+- Suite unitaria backend completa ejecutada por verify: 790 tests, 0 fallos, 0 errores y 0 omitidos.
+- PostgreSQL 16 real: 30 tests de integración, 0 fallos, 0 errores y 0 omitidos:
+  LegalEditorialReadinessIT (8), LegalEditorialSchemaVerifierIT (15) y LegalManifestImportIT (7).
+- El readiness cubre READY y las seis categorías BLOCKED aplicables en este corte; también acredita
+  publicación ausente, slot y puntero global ajenos de forma independiente, historia global
+  disjunta, fecha futura, revisión corrupta y desborde fail-closed sin fingerprint parcial.
+- READY, NOT_READY y ERROR preservan las 19 tablas y las 10 secuencias de la superficie editorial:
+  el evaluador no ejecuta DML ni avanza identidades.
+- La superficie editorial V27 quedó congelada en 19 tablas, 130 columnas, 130 constraints, 58
+  triggers, 10 identity sequences y 34 funciones. V27 y el inventario/import verifier de 2.3B no se
+  modificaron.
+- Los reportes históricos permanecen byte-compatibles. Este corte no agrega endpoints, JPA,
+  frontend, configuración de despliegue ni contenido legal real.
+- `git diff --check` limpio.
 
 ## Corte 3 — Plan editorial inmutable y simulación
 
