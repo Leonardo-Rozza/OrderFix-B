@@ -145,6 +145,9 @@ public enum LegalManifestIssueCode {
     IMPORT_CLI_OPERATION_FAILED(
             LegalManifestStatus.ERROR,
             "No se pudo completar el comando de importación legal."),
+    EDITORIAL_CLI_OPERATION_FAILED(
+            LegalManifestStatus.ERROR,
+            "No se pudo completar el comando editorial legal."),
     MANIFEST_PATH_REQUIRED(
             LegalManifestStatus.BLOCKED,
             "Se requiere la ruta local del manifiesto."),
@@ -160,6 +163,18 @@ public enum LegalManifestIssueCode {
     IMPORT_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN(
             LegalManifestStatus.ERROR,
             "La importación legal no admite propiedades JVM de datasource."),
+    EDITORIAL_CONFIRMATION_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "Las confirmaciones no coinciden con el release editorial validado."),
+    EDITORIAL_DISABLED(
+            LegalManifestStatus.ERROR,
+            "La mutación editorial no está habilitada en el entorno operativo."),
+    EDITORIAL_DB_CONFIGURATION_INVALID(
+            LegalManifestStatus.ERROR,
+            "La configuración de base para la operación editorial no es válida."),
+    EDITORIAL_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN(
+            LegalManifestStatus.ERROR,
+            "La operación editorial no admite propiedades JVM de datasource."),
     MANIFEST_FILENAME_INVALID(
             LegalManifestStatus.BLOCKED,
             "El manifiesto debe llamarse publication-manifest.json."),

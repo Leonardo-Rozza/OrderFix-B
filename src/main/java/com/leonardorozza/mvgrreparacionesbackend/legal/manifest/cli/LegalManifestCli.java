@@ -7,6 +7,13 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalDryRunDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalImportDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService.DryRunResult;
@@ -37,7 +44,10 @@ public final class LegalManifestCli {
     private static final String INTERNAL_PROPERTY_SOURCE = "ordenfix-legal-cli-internal";
     private static final String IMPORT_INTERNAL_PROPERTY_SOURCE =
             "ordenfix-legal-import-cli-internal";
+    private static final String EDITORIAL_INTERNAL_PROPERTY_SOURCE =
+            "ordenfix-legal-editorial-cli-internal";
     private static final String IMPORT_ISSUE_LOCATION = "cli/import";
+    private static final String EDITORIAL_ISSUE_LOCATION = "cli/editorial";
     private static final String EMERGENCY_REPORT =
             "{\"reportVersion\":1,\"command\":null,\"status\":\"ERROR\","
                     + "\"persisted\":false,\"publication\":null,\"counts\":null,"
@@ -58,6 +68,12 @@ public final class LegalManifestCli {
             importEnvironmentResolver;
     private final Function<LegalImportEnvironment, ConfigurableApplicationContext>
             importContextFactory;
+    private final LegalEditorialReportWriter editorialReportWriter;
+    private final Function<LegalEditorialArguments.Command,
+            LegalManifestValidation<LegalEditorialEnvironment>>
+            editorialEnvironmentResolver;
+    private final Function<LegalEditorialEnvironment, ConfigurableApplicationContext>
+            editorialContextFactory;
 
     public LegalManifestCli() {
         this(
@@ -65,7 +81,10 @@ public final class LegalManifestCli {
                 new LegalManifestReportWriter(),
                 new LegalManifestImportReportWriter(),
                 LegalImportEnvironment::resolve,
-                LegalManifestCli::openImportContext);
+                LegalManifestCli::openImportContext,
+                new LegalEditorialReportWriter(),
+                LegalEditorialEnvironment::resolve,
+                LegalManifestCli::openEditorialContext);
     }
 
     LegalManifestCli(
@@ -76,7 +95,10 @@ public final class LegalManifestCli {
                 reportWriter,
                 new LegalManifestImportReportWriter(),
                 LegalImportEnvironment::resolve,
-                LegalManifestCli::openImportContext);
+                LegalManifestCli::openImportContext,
+                new LegalEditorialReportWriter(),
+                LegalEditorialEnvironment::resolve,
+                LegalManifestCli::openEditorialContext);
     }
 
     LegalManifestCli(
@@ -87,6 +109,31 @@ public final class LegalManifestCli {
                     importEnvironmentResolver,
             Function<LegalImportEnvironment, ConfigurableApplicationContext>
                     importContextFactory) {
+        this(
+                validator,
+                reportWriter,
+                importReportWriter,
+                importEnvironmentResolver,
+                importContextFactory,
+                new LegalEditorialReportWriter(),
+                LegalEditorialEnvironment::resolve,
+                LegalManifestCli::openEditorialContext);
+    }
+
+    LegalManifestCli(
+            LegalManifestValidator validator,
+            LegalManifestReportWriter reportWriter,
+            LegalManifestImportReportWriter importReportWriter,
+            Supplier<LegalManifestValidation<LegalImportEnvironment>>
+                    importEnvironmentResolver,
+            Function<LegalImportEnvironment, ConfigurableApplicationContext>
+                    importContextFactory,
+            LegalEditorialReportWriter editorialReportWriter,
+            Function<LegalEditorialArguments.Command,
+                    LegalManifestValidation<LegalEditorialEnvironment>>
+                    editorialEnvironmentResolver,
+            Function<LegalEditorialEnvironment, ConfigurableApplicationContext>
+                    editorialContextFactory) {
         this.validator = Objects.requireNonNull(validator, "validator");
         this.reportWriter = Objects.requireNonNull(reportWriter, "reportWriter");
         this.importReportWriter = Objects.requireNonNull(
@@ -98,6 +145,15 @@ public final class LegalManifestCli {
         this.importContextFactory = Objects.requireNonNull(
                 importContextFactory,
                 "importContextFactory");
+        this.editorialReportWriter = Objects.requireNonNull(
+                editorialReportWriter,
+                "editorialReportWriter");
+        this.editorialEnvironmentResolver = Objects.requireNonNull(
+                editorialEnvironmentResolver,
+                "editorialEnvironmentResolver");
+        this.editorialContextFactory = Objects.requireNonNull(
+                editorialContextFactory,
+                "editorialContextFactory");
     }
 
     public static void main(String[] args) {
@@ -108,6 +164,22 @@ public final class LegalManifestCli {
             String[] rawArguments,
             OutputStream standardOutput,
             Supplier<LegalManifestCli> cliFactory) {
+        LegalEditorialArguments.Command editorialCommand =
+                rawEditorialCommand(rawArguments);
+        if (editorialCommand != null) {
+            LegalEditorialCliExecutionState executionState =
+                    LegalEditorialCliExecutionState.recognized(editorialCommand);
+            try {
+                return Objects.requireNonNull(cliFactory, "cliFactory")
+                        .get()
+                        .runEditorialSafely(
+                                rawArguments,
+                                standardOutput,
+                                executionState);
+            } catch (RuntimeException | LinkageError unexpectedFailure) {
+                return writeEditorialBoundaryReport(standardOutput, executionState);
+            }
+        }
         if (isRawImportCommand(rawArguments)) {
             LegalManifestCliExecutionState executionState =
                     LegalManifestCliExecutionState.recognizedImport();
@@ -129,6 +201,14 @@ public final class LegalManifestCli {
     }
 
     int runSafely(String[] rawArguments, OutputStream standardOutput) {
+        LegalEditorialArguments.Command editorialCommand =
+                rawEditorialCommand(rawArguments);
+        if (editorialCommand != null) {
+            return runEditorialSafely(
+                    rawArguments,
+                    standardOutput,
+                    LegalEditorialCliExecutionState.recognized(editorialCommand));
+        }
         if (isRawImportCommand(rawArguments)) {
             return runImportSafely(
                     rawArguments,
@@ -148,10 +228,10 @@ public final class LegalManifestCli {
         try {
             bufferedReport.writeTo(standardOutput);
             standardOutput.flush();
-        } catch (IOException outputFailure) {
-            return LegalManifestStatus.ERROR.exitCode();
-        }
-        if (standardOutput instanceof PrintStream printStream && printStream.checkError()) {
+            if (standardOutput instanceof PrintStream printStream && printStream.checkError()) {
+                return LegalManifestStatus.ERROR.exitCode();
+            }
+        } catch (IOException | RuntimeException | LinkageError outputFailure) {
             return LegalManifestStatus.ERROR.exitCode();
         }
         return exitCode;
@@ -186,6 +266,51 @@ public final class LegalManifestCli {
                     report,
                     bufferedReport,
                     new LegalManifestImportReportWriter())) {
+                return LegalManifestStatus.ERROR.exitCode();
+            }
+        }
+
+        if (!copyBufferedReport(bufferedReport, standardOutput)) {
+            return LegalManifestStatus.ERROR.exitCode();
+        }
+        return report.status().exitCode();
+    }
+
+    private int runEditorialSafely(
+            String[] rawArguments,
+            OutputStream standardOutput,
+            LegalEditorialCliExecutionState executionState) {
+        Objects.requireNonNull(standardOutput, "standardOutput");
+        Objects.requireNonNull(executionState, "executionState");
+        ByteArrayOutputStream bufferedReport = new ByteArrayOutputStream();
+        LegalEditorialReport report;
+        try {
+            report = runEditorial(rawArguments, executionState);
+        } catch (RuntimeException | LinkageError unexpectedFailure) {
+            try {
+                report = fallbackEditorialReport(executionState);
+            } catch (RuntimeException | LinkageError fallbackFailure) {
+                return LegalManifestStatus.ERROR.exitCode();
+            }
+        }
+
+        try {
+            executionState.reportSerializationStarted();
+        } catch (RuntimeException stateFailure) {
+            return LegalManifestStatus.ERROR.exitCode();
+        }
+        if (!serializeEditorialReport(report, bufferedReport, editorialReportWriter)) {
+            bufferedReport.reset();
+            try {
+                executionState.reportSerializationFailed();
+                report = fallbackEditorialReport(executionState);
+            } catch (RuntimeException | LinkageError fallbackFailure) {
+                return LegalManifestStatus.ERROR.exitCode();
+            }
+            if (!serializeEditorialReport(
+                    report,
+                    bufferedReport,
+                    new LegalEditorialReportWriter())) {
                 return LegalManifestStatus.ERROR.exitCode();
             }
         }
@@ -294,6 +419,94 @@ public final class LegalManifestCli {
         return LegalManifestImportReport.forImport(release, result);
     }
 
+    private LegalEditorialReport runEditorial(
+            String[] rawArguments,
+            LegalEditorialCliExecutionState executionState) {
+        LegalEditorialArguments.Command command = executionState.snapshot().command();
+        LegalManifestValidation<LegalEditorialArguments> parsed =
+                LegalEditorialArguments.parse(rawArguments);
+        if (!parsed.passed()) {
+            return LegalEditorialReport.forKnownFailure(command, null, parsed);
+        }
+
+        LegalEditorialArguments arguments = parsed.value().orElseThrow();
+        if (arguments.command() != command) {
+            throw new IllegalArgumentException(
+                    "El comando editorial cambió dentro de su boundary");
+        }
+
+        LegalManifestValidation<ValidatedRelease> staticValidation =
+                validator.validate(arguments.manifestPath());
+        if (!staticValidation.passed()) {
+            return LegalEditorialReport.forKnownFailure(
+                    command,
+                    null,
+                    staticValidation);
+        }
+
+        ValidatedRelease release = staticValidation.value().orElseThrow();
+        executionState.releaseValidated(release);
+        LegalManifestValidation<ValidatedRelease> confirmation =
+                arguments.confirmation().verify(release);
+        if (!confirmation.passed()) {
+            return LegalEditorialReport.forKnownFailure(
+                    command,
+                    release,
+                    confirmation);
+        }
+
+        LegalManifestValidation<LegalEditorialEnvironment> environmentValidation =
+                Objects.requireNonNull(
+                        editorialEnvironmentResolver.apply(command),
+                        "editorial environment validation");
+        if (!environmentValidation.passed()) {
+            return LegalEditorialReport.forKnownFailure(
+                    command,
+                    release,
+                    environmentValidation);
+        }
+
+        LegalEditorialEnvironment environment = environmentValidation.value().orElseThrow();
+        try (ConfigurableApplicationContext context = Objects.requireNonNull(
+                editorialContextFactory.apply(environment),
+                "editorial context")) {
+            executionState.contextOpened();
+            invokeEditorialOperation(command, release, context, executionState);
+        }
+        executionState.contextClosed();
+        return fallbackEditorialReport(executionState);
+    }
+
+    private static void invokeEditorialOperation(
+            LegalEditorialArguments.Command command,
+            ValidatedRelease release,
+            ConfigurableApplicationContext context,
+            LegalEditorialCliExecutionState executionState) {
+        switch (command) {
+            case READINESS -> {
+                LegalEditorialReadinessService service =
+                        context.getBean(LegalEditorialReadinessService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialReadinessResult result = service.evaluate(release);
+                executionState.resultReceived(result);
+            }
+            case PLAN_PROMOTE -> {
+                LegalEditorialPlanService service =
+                        context.getBean(LegalEditorialPlanService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialPlanResult result = service.planPromote(release);
+                executionState.resultReceived(result);
+            }
+            case APPLY_PROMOTE -> {
+                LegalEditorialApplyService service =
+                        context.getBean(LegalEditorialApplyService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialApplyResult result = service.applyPromote(release);
+                executionState.resultReceived(result);
+            }
+        }
+    }
+
     private LegalManifestValidation<DryRunResult> dryRun(ValidatedRelease release) {
         if (!databaseUrlConfigured()) {
             return databaseFailure(LegalManifestIssueCode.DB_CONNECTION);
@@ -354,6 +567,29 @@ public final class LegalManifestCli {
         return report.status().exitCode();
     }
 
+    private static int writeEditorialBoundaryReport(
+            OutputStream standardOutput,
+            LegalEditorialCliExecutionState executionState) {
+        if (standardOutput == null || executionState == null) {
+            return LegalManifestStatus.ERROR.exitCode();
+        }
+        LegalEditorialReport report;
+        try {
+            report = fallbackEditorialReport(executionState);
+        } catch (RuntimeException | LinkageError fallbackFailure) {
+            return LegalManifestStatus.ERROR.exitCode();
+        }
+        ByteArrayOutputStream bufferedReport = new ByteArrayOutputStream();
+        if (!serializeEditorialReport(
+                report,
+                bufferedReport,
+                new LegalEditorialReportWriter())
+                || !copyBufferedReport(bufferedReport, standardOutput)) {
+            return LegalManifestStatus.ERROR.exitCode();
+        }
+        return report.status().exitCode();
+    }
+
     private static LegalManifestImportReport fallbackImportReport(
             LegalManifestCliExecutionState executionState) {
         LegalManifestCliExecutionState.Snapshot snapshot = Objects
@@ -375,10 +611,57 @@ public final class LegalManifestCli {
                         IMPORT_ISSUE_LOCATION));
     }
 
+    private static LegalEditorialReport fallbackEditorialReport(
+            LegalEditorialCliExecutionState executionState) {
+        LegalEditorialCliExecutionState.Snapshot snapshot = Objects
+                .requireNonNull(executionState, "executionState")
+                .snapshot();
+        ValidatedRelease release = snapshot.release().orElse(null);
+        if (snapshot.readinessResult().isPresent()) {
+            return LegalEditorialReport.forReadiness(
+                    Objects.requireNonNull(release, "release"),
+                    snapshot.readinessResult().orElseThrow());
+        }
+        if (snapshot.planResult().isPresent()) {
+            return LegalEditorialReport.forPlanPromote(
+                    Objects.requireNonNull(release, "release"),
+                    snapshot.planResult().orElseThrow());
+        }
+        if (snapshot.applyResult().isPresent()) {
+            return LegalEditorialReport.forApplyPromote(
+                    Objects.requireNonNull(release, "release"),
+                    snapshot.applyResult().orElseThrow());
+        }
+        if (snapshot.command() == LegalEditorialArguments.Command.APPLY_PROMOTE
+                && snapshot.persisted() == null) {
+            return LegalEditorialReport.forUnknownApply(release);
+        }
+        return LegalEditorialReport.forKnownFailure(
+                snapshot.command(),
+                release,
+                LegalManifestIssue.at(
+                        LegalManifestIssueCode.EDITORIAL_CLI_OPERATION_FAILED,
+                        EDITORIAL_ISSUE_LOCATION));
+    }
+
     private static boolean serializeImportReport(
             LegalManifestImportReport report,
             ByteArrayOutputStream output,
             LegalManifestImportReportWriter writer) {
+        try {
+            writer.write(report, output);
+            output.write('\n');
+            output.flush();
+            return true;
+        } catch (IOException | RuntimeException | LinkageError serializationFailure) {
+            return false;
+        }
+    }
+
+    private static boolean serializeEditorialReport(
+            LegalEditorialReport report,
+            ByteArrayOutputStream output,
+            LegalEditorialReportWriter writer) {
         try {
             writer.write(report, output);
             output.write('\n');
@@ -395,17 +678,25 @@ public final class LegalManifestCli {
         try {
             bufferedReport.writeTo(standardOutput);
             standardOutput.flush();
+            return !(standardOutput instanceof PrintStream printStream)
+                    || !printStream.checkError();
         } catch (IOException | RuntimeException | LinkageError outputFailure) {
             return false;
         }
-        return !(standardOutput instanceof PrintStream printStream)
-                || !printStream.checkError();
     }
 
     private static boolean isRawImportCommand(String[] rawArguments) {
         return rawArguments != null
                 && rawArguments.length > 0
                 && "import".equals(rawArguments[0]);
+    }
+
+    private static LegalEditorialArguments.Command rawEditorialCommand(
+            String[] rawArguments) {
+        if (rawArguments == null || rawArguments.length == 0) {
+            return null;
+        }
+        return LegalEditorialArguments.Command.fromExternalValue(rawArguments[0]);
     }
 
     static ConfigurableApplicationContext openImportContext(
@@ -422,6 +713,33 @@ public final class LegalManifestCli {
                 IMPORT_INTERNAL_PROPERTY_SOURCE,
                 internalProperties);
         return new SpringApplicationBuilder(LegalImportDatabaseConfiguration.class)
+                .main(LegalManifestCli.class)
+                .environment(childEnvironment)
+                .web(WebApplicationType.NONE)
+                .bannerMode(Banner.Mode.OFF)
+                .logStartupInfo(false)
+                .registerShutdownHook(false)
+                .headless(true)
+                .addCommandLineProperties(false)
+                .run();
+    }
+
+    static ConfigurableApplicationContext openEditorialContext(
+            LegalEditorialEnvironment environment) {
+        LegalEditorialEnvironment requiredEnvironment = Objects.requireNonNull(
+                environment,
+                "environment");
+        Map<String, Object> internalProperties = new LinkedHashMap<>(
+                requiredEnvironment.datasourceProperties());
+        internalProperties.put(
+                LegalEditorialDatabaseConfiguration.ENABLED_PROPERTY,
+                "true");
+        addIsolationProperties(internalProperties);
+
+        StandardEnvironment childEnvironment = isolatedEnvironment(
+                EDITORIAL_INTERNAL_PROPERTY_SOURCE,
+                internalProperties);
+        return new SpringApplicationBuilder(LegalEditorialDatabaseConfiguration.class)
                 .main(LegalManifestCli.class)
                 .environment(childEnvironment)
                 .web(WebApplicationType.NONE)

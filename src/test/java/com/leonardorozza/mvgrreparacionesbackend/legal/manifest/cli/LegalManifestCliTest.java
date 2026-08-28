@@ -120,6 +120,30 @@ class LegalManifestCliTest {
     }
 
     @Test
+    void throwingPrintStreamCheckErrorDoesNotAppendAnEmergencyEnvelope() {
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream hostileOutput = new PrintStream(
+                captured,
+                true,
+                StandardCharsets.UTF_8) {
+            @Override
+            public boolean checkError() {
+                throw new IllegalStateException("check-error-canary");
+            }
+        };
+
+        int exitCode = LegalManifestCli.runMain(
+                new String[0],
+                hostileOutput,
+                () -> cli);
+
+        assertThat(exitCode).isEqualTo(3);
+        assertThat(captured.toString(StandardCharsets.UTF_8))
+                .containsOnlyOnce("\"reportVersion\":1")
+                .doesNotContain("check-error-canary");
+    }
+
+    @Test
     void unexpectedInternalFailureBecomesAConstantSafeEnvelope() throws Exception {
         LegalManifestValidator failingValidator = mock(LegalManifestValidator.class);
         when(failingValidator.validate(any(Path.class)))

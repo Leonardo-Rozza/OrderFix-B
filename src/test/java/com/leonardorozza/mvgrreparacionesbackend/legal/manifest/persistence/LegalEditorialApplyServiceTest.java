@@ -46,7 +46,7 @@ class LegalEditorialApplyServiceTest {
     }
 
     @Test
-    void constructorIsTheOnlyAssemblyPathAndRequiresTheExactSchemaPreflight() {
+    void constructorIsTheOnlyAssemblyPathAndRequiresTheExactEditorialPreflights() {
         Harness harness = new Harness();
 
         harness.service();
@@ -54,12 +54,13 @@ class LegalEditorialApplyServiceTest {
         assertThat(LegalEditorialApplyService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(7);
+                    assertThat(constructor.getParameterCount()).isEqualTo(8);
                     assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
                 });
-        verify(harness.gate).requireExactReadinessPreflights(
+        verify(harness.gate).requireExactEditorialPreflights(
                 harness.jdbc,
-                harness.schemaVerifier);
+                harness.schemaVerifier,
+                harness.privilegeVerifier);
     }
 
     @Test
@@ -397,6 +398,8 @@ class LegalEditorialApplyServiceTest {
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
                 mock(LegalEditorialSchemaVerifier.class);
+        private final LegalEditorialPrivilegeVerifier privilegeVerifier =
+                mock(LegalEditorialPrivilegeVerifier.class);
 
         private Harness() {
             when(gate.usesJdbc(jdbc)).thenReturn(true);
@@ -418,7 +421,8 @@ class LegalEditorialApplyServiceTest {
                     promotionCore,
                     readinessCore,
                     failureMapper,
-                    schemaVerifier);
+                    schemaVerifier,
+                    privilegeVerifier);
         }
     }
 }

@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3 y 4 completados
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4 y 5
+completados
 
 Diseño aprobado:
 
@@ -674,7 +675,7 @@ Commit:
 
 ## Corte 5 — CLI inicial, contexto y rol editorial
 
-Estado: pendiente.
+Estado: completado el 2026-08-28.
 
 ### Objetivo
 
@@ -695,11 +696,15 @@ Crear:
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPrivilegeVerifier.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialArgumentsTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialEnvironmentTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialConfirmationTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialReportTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialReportWriterTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialCliExecutionStateTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialPreflightTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialCliTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalCliProcessSupportTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalManifestEditorLauncherTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPrivilegeVerifierTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPrivilegeVerifierIT.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialDatabaseIsolationIT.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRestrictedEditorialRoleFixture.java;
@@ -708,7 +713,15 @@ Crear:
 Modificar:
 
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalManifestCli.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalManifestIssueCode.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalDatabaseBoundaryMarker.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialApplyService.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPlanService.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReadinessService.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalManifestDatabaseGate.java;
+- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalV27EditorialInventory.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/MvgrReparacionesBackendApplicationTests.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalCliProcessSupport.java;
 - tests v1/v2 de CLI, reports y aislamiento.
 
 ### Implementación
@@ -751,8 +764,8 @@ Modificar:
 ### Pruebas y puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialArgumentsTest,LegalEditorialEnvironmentTest,LegalEditorialReportTest,LegalEditorialReportWriterTest,LegalEditorialCliExecutionStateTest,LegalEditorialPreflightTest,LegalEditorialCliTest,LegalManifestCliTest,LegalManifestReportTest,LegalManifestImportReportTest test
-./mvnw -Dit.test=LegalEditorialSchemaVerifierIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestCliIsolationIT verify
+./mvnw -Dtest=LegalEditorialArgumentsTest,LegalEditorialEnvironmentTest,LegalEditorialConfirmationTest,LegalEditorialReportTest,LegalEditorialReportWriterTest,LegalEditorialCliExecutionStateTest,LegalEditorialPreflightTest,LegalEditorialCliTest,LegalCliProcessSupportTest,LegalManifestEditorLauncherTest,LegalManifestCliTest,LegalManifestReportTest,LegalManifestImportReportTest,LegalEditorialPrivilegeVerifierTest,MvgrReparacionesBackendApplicationTests test
+./mvnw -Dit.test=LegalEditorialSchemaVerifierIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
 git diff --check
 git status --short
 ~~~
@@ -760,6 +773,62 @@ git status --short
 Commit:
 
     feat(legal): expone promocion editorial aislada
+
+### Implementación cerrada
+
+- El `legal-cli.jar` despacha `readiness`, `plan-promote` y `apply-promote` por una frontera v3
+  anterior e independiente de los contratos v1/v2. Los tres comandos exigen exactamente la ruta
+  del manifiesto y las dos confirmaciones; ningún mismatch llega a credenciales, Spring o JDBC.
+- El contexto editorial nace únicamente con JDBC y un datasource. Readiness/plan usan un gate
+  `readOnly=true`; apply usa otro mutable. Ambos son `REQUIRES_NEW/READ_COMMITTED`, conservan los
+  presupuestos 75/30/5, comparten el mismo `DataSourceTransactionManager` con
+  `rollbackOnCommitFailure=false` y ejecutan, en ese orden, schema y privilege verifier exactos.
+- La configuración sólo acepta `ORDENFIX_LEGAL_EDITOR_DB_URL`, `USERNAME`, `PASSWORD` y el driver
+  opcional. Rechaza propiedades JVM `spring.datasource.*`; `ORDENFIX_LEGAL_EDITOR_ENABLED=true` se
+  exige únicamente para apply. El entorno aislado no carga web, JPA, Flyway, runners, schedulers,
+  DataLoader, Mercado Pago ni configuración/logging host.
+- El reporte v3 conserva el orden superior congelado y traduce únicamente matrices tipadas. Un
+  apply invocado sin resultado terminal emite `persisted=null/UNKNOWN` sin UUID, timestamp,
+  readiness ni postestado tentativos. Un receipt confirmado sobrevive a errores posteriores de
+  cierre o serialización; un fallo de stdout —incluido `PrintStream.checkError()` adversarial— sólo
+  devuelve exit 3 y no fabrica otro envelope. La evidencia de invocación es monotónica e
+  independiente de la fase de serialización, por lo que un apply bloqueado antes del servicio nunca
+  se degrada falsamente a `UNKNOWN`.
+- El rol editorial efectivo queda cerrado sobre SELECT de las 19 tablas V27 y el historial Flyway,
+  7 tablas con INSERT, 2 con DELETE, las columnas UPDATE técnicas/estatales exactas, 4 sequences y
+  las 23 funciones del call graph. El verificador rechaza ownership —también de bases sin
+  conexiones habilitadas—, memberships, grant options, DDL, TEMP, large objects, parámetros y
+  cualquier capacidad sobre aceptación o tablas host. Además exige los valores efectivos
+  `session_replication_role=origin` y `lo_compat_privileges=off`, y niega las cinco funciones PG16
+  capaces de crear large objects.
+- La cuenta mantiene DML estructural residual porque las funciones V27 son `SECURITY INVOKER`.
+  Por eso el fixture y el protocolo la tratan como credencial offline, temporal, de un solo job y
+  nunca como usuario de la app. El fixture destructivo se niega a operar fuera de una base efímera
+  dedicada `ordenfix_legal_editorial_*`.
+- `scripts/legal-manifest-editor.sh` ejecuta por defecto el jar legal empaquetado, permite overrides
+  operativos explícitos y elimina `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` antes de
+  iniciar la JVM. El soporte de procesos también elimina controles editoriales heredados.
+- La aplicación web normal no activa el contexto ni los tres servicios editoriales aunque reciba
+  hostilmente el flag interno de la herramienta.
+- No se modificaron V27, el rol importador, endpoints, UI, JPA, contenido legal, deploy ni frontend.
+
+### Evidencia de cierre
+
+- Java 21 (Corretto 21.0.10), puerta unitaria focalizada: 170 tests, 0 fallos, 0 errores y 0
+  omitidos.
+- Suite unitaria backend completa: 1038 tests, 0 fallos, 0 errores y 0 omitidos.
+- PostgreSQL 16/H2 y jar empaquetado, integraciones seleccionadas: 34 tests, 0 fallos, 0 errores y
+  0 omitidos
+  (`LegalEditorialSchemaVerifierIT`: 15, `LegalEditorialPrivilegeVerifierIT`: 7,
+  `LegalEditorialDatabaseIsolationIT`: 2, `LegalManifestCliIsolationIT`: 3 y
+  `LegalManifestCliProcessIT`: 7). La última incluye dispatch v3 crudo y regresión v1.
+- El rol restringido acreditó promoción fresca, replay exacto sin avance de sequences, guards de
+  UPDATE técnico y rechazo de expansiones de rol, base, schema, tablas, columnas, sequences,
+  funciones, large objects y parámetros. También probó que un GUC de replicación inseguro bloquea
+  apply sin DML ni avance de sequences, que ownership de una base deshabilitada no queda oculto y
+  que no se puede crear metadata de large objects.
+- `sh -n` del launcher y `git diff --check` limpios; revisión adversarial independiente sin
+  hallazgos P1/P2 pendientes.
 
 ## Corte 6 — Cutover uno a uno, adiciones y reutilización
 

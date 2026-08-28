@@ -32,16 +32,18 @@ public final class LegalEditorialApplyService {
             LegalInitialPromotionCore promotionCore,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialFailureMapper failureMapper,
-            LegalEditorialSchemaVerifier schemaVerifier) {
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.planner = Objects.requireNonNull(planner, "planner");
         this.promotionCore = Objects.requireNonNull(promotionCore, "promotionCore");
         this.readinessCore = Objects.requireNonNull(readinessCore, "readinessCore");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
-        this.databaseGate.requireExactReadinessPreflights(
+        this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
-                Objects.requireNonNull(schemaVerifier, "schemaVerifier"));
+                Objects.requireNonNull(schemaVerifier, "schemaVerifier"),
+                Objects.requireNonNull(privilegeVerifier, "privilegeVerifier"));
     }
 
     /** Applies or confirms the first promotion of one validator-issued sealed release. */

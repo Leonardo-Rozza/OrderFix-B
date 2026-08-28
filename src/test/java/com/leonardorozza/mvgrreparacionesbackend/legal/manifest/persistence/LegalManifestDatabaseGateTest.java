@@ -403,6 +403,63 @@ class LegalManifestDatabaseGateTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void acceptsExactlyTheOrderedEditorialPreflightsOnTheSharedJdbcSession() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                executingTransaction(),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+
+        assertThatCode(() -> gate.requireExactEditorialPreflights(
+                jdbc,
+                schema,
+                privileges)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsMissingExtraReorderedForeignOrUnboundEditorialPreflights() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        JdbcTemplate foreignJdbc = mock(JdbcTemplate.class);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight extra = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(), jdbc, LegalDatabaseBudgets.production(), List.of(schema))
+                .requireExactEditorialPreflights(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(), jdbc, LegalDatabaseBudgets.production(),
+                List.of(schema, privileges, extra))
+                .requireExactEditorialPreflights(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(), jdbc, LegalDatabaseBudgets.production(),
+                List.of(privileges, schema))
+                .requireExactEditorialPreflights(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(), jdbc, LegalDatabaseBudgets.production(),
+                List.of(schema, privileges))
+                .requireExactEditorialPreflights(foreignJdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        when(privileges.usesJdbc(jdbc)).thenReturn(false);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                executingTransaction(), jdbc, LegalDatabaseBudgets.production(),
+                List.of(schema, privileges))
+                .requireExactEditorialPreflights(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static void assertUnsafeTemplate(
             TransactionTemplate transaction,
             DataSource dataSource) {

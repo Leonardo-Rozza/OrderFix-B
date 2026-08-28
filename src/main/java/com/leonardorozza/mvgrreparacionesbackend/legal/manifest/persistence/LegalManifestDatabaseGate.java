@@ -135,6 +135,22 @@ final class LegalManifestDatabaseGate {
         }
     }
 
+    /** Accredits the exact schema/privilege pair used by the isolated editorial context. */
+    void requireExactEditorialPreflights(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema,
+            LegalDatabasePreflight privileges) {
+        if (jdbc != candidate
+                || preflights.size() != 2
+                || preflights.get(0) != schema
+                || preflights.get(1) != privileges
+                || !schema.usesJdbc(candidate)
+                || !privileges.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "El contexto editorial requiere schema y privilegios acreditados y ordenados");
+        }
+    }
+
     private void requireReadOnlyBoundary() {
         Object transactionManager = transactionTemplate.getTransactionManager();
         if (transactionManager == null

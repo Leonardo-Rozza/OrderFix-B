@@ -27,14 +27,16 @@ public final class LegalEditorialPlanService {
             JdbcTemplate jdbc,
             LegalEditorialPlannerCore planner,
             LegalEditorialFailureMapper failureMapper,
-            LegalEditorialSchemaVerifier schemaVerifier) {
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.planner = Objects.requireNonNull(planner, "planner");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
-        this.databaseGate.requireExactReadinessPreflights(
+        this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
-                Objects.requireNonNull(schemaVerifier, "schemaVerifier"));
+                Objects.requireNonNull(schemaVerifier, "schemaVerifier"),
+                Objects.requireNonNull(privilegeVerifier, "privilegeVerifier"));
     }
 
     /** Plans the first promotion of one accredited sealed release. */

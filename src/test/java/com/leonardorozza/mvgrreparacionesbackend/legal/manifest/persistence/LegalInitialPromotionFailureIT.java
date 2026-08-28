@@ -143,7 +143,8 @@ class LegalInitialPromotionFailureIT {
                 sabotagedCore,
                 production.readinessCore(),
                 new LegalEditorialFailureMapper(),
-                production.schemaVerifier());
+                production.schemaVerifier(),
+                production.privilegeVerifier());
 
         LegalEditorialApplyResult result = sabotagedService.applyPromote(target.release());
 
@@ -175,7 +176,8 @@ class LegalInitialPromotionFailureIT {
                 production.promotionCore(),
                 production.readinessCore(),
                 new LegalEditorialFailureMapper(),
-                production.schemaVerifier());
+                production.schemaVerifier(),
+                production.privilegeVerifier());
 
         LegalEditorialApplyResult result = sabotagedService.applyPromote(target.release());
 

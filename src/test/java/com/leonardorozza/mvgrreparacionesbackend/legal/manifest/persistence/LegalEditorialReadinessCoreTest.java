@@ -83,6 +83,8 @@ class LegalEditorialReadinessCoreTest {
         LegalEditorialReadinessCore core = mock(LegalEditorialReadinessCore.class);
         LegalEditorialSchemaVerifier schemaVerifier = mock(
                 LegalEditorialSchemaVerifier.class);
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
         ValidatedRelease release = mock(ValidatedRelease.class);
         OffsetDateTime databaseTimestamp = OffsetDateTime.ofInstant(
                 OBSERVED_AT,
@@ -108,7 +110,8 @@ class LegalEditorialReadinessCoreTest {
                 jdbc,
                 core,
                 new LegalEditorialFailureMapper(),
-                schemaVerifier);
+                schemaVerifier,
+                privilegeVerifier);
 
         LegalEditorialReadinessResult result = service.evaluate(release);
 
@@ -117,9 +120,10 @@ class LegalEditorialReadinessCoreTest {
                 "SELECT transaction_timestamp()",
                 OffsetDateTime.class);
         verify(core, times(1)).evaluate(release, OBSERVED_AT);
-        verify(gate, times(1)).requireExactReadinessPreflights(
+        verify(gate, times(1)).requireExactEditorialPreflights(
                 jdbc,
-                schemaVerifier);
+                schemaVerifier,
+                privilegeVerifier);
     }
 
     @Test
@@ -129,6 +133,8 @@ class LegalEditorialReadinessCoreTest {
         LegalEditorialReadinessCore core = mock(LegalEditorialReadinessCore.class);
         LegalEditorialSchemaVerifier schemaVerifier = mock(
                 LegalEditorialSchemaVerifier.class);
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
         ValidatedRelease release = mock(ValidatedRelease.class);
         when(gate.usesJdbc(jdbc)).thenReturn(true);
         when(core.usesJdbc(jdbc)).thenReturn(true);
@@ -139,7 +145,8 @@ class LegalEditorialReadinessCoreTest {
                 jdbc,
                 core,
                 new LegalEditorialFailureMapper(),
-                schemaVerifier);
+                schemaVerifier,
+                privilegeVerifier);
 
         LegalEditorialReadinessResult result = service.evaluate(release);
 
@@ -151,11 +158,11 @@ class LegalEditorialReadinessCoreTest {
     }
 
     @Test
-    void serviceHasNoAssemblyPathThatCanSkipTheExactSchemaPreflight() {
+    void serviceHasNoAssemblyPathThatCanSkipTheExactEditorialPreflights() {
         assertThat(LegalEditorialReadinessService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> assertThat(constructor.getParameterCount())
-                        .isEqualTo(5));
+                        .isEqualTo(6));
     }
 
     @Test

@@ -54,6 +54,8 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Shared, test-only assembly and PostgreSQL probes for the legal persistence ITs. */
 final class LegalManifestPersistenceITSupport {
@@ -168,6 +170,9 @@ final class LegalManifestPersistenceITSupport {
                 new LegalRequiredSetRevisionCalculator();
         LegalEditorialSchemaVerifier schemaVerifier =
                 new LegalEditorialSchemaVerifier(jdbc, "public");
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
+        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
         LegalManifestOriginGraphVerifier originVerifier =
                 new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
         LegalEditorialReadinessCore core = new LegalEditorialReadinessCore(
@@ -179,19 +184,21 @@ final class LegalManifestPersistenceITSupport {
                 transaction,
                 jdbc,
                 budgets,
-                List.of(schemaVerifier));
+                List.of(schemaVerifier, privilegeVerifier));
         LegalEditorialReadinessService service = new LegalEditorialReadinessService(
                 gate,
                 jdbc,
                 core,
                 new LegalEditorialFailureMapper(),
-                schemaVerifier);
+                schemaVerifier,
+                privilegeVerifier);
         return new ReadinessHarness(
                 dataSource,
                 jdbc,
                 transaction,
                 gate,
                 schemaVerifier,
+                privilegeVerifier,
                 originVerifier,
                 core,
                 service);
@@ -210,13 +217,15 @@ final class LegalManifestPersistenceITSupport {
                 readiness.jdbc(),
                 plannerCore,
                 new LegalEditorialFailureMapper(),
-                readiness.schemaVerifier());
+                readiness.schemaVerifier(),
+                readiness.privilegeVerifier());
         return new PlannerHarness(
                 readiness.dataSource(),
                 readiness.jdbc(),
                 readiness.transaction(),
                 readiness.gate(),
                 readiness.schemaVerifier(),
+                readiness.privilegeVerifier(),
                 readiness.originVerifier(),
                 readiness.core(),
                 readiness.service(),
@@ -241,6 +250,9 @@ final class LegalManifestPersistenceITSupport {
                 new LegalRequiredSetRevisionCalculator();
         LegalEditorialSchemaVerifier schemaVerifier =
                 new LegalEditorialSchemaVerifier(jdbc, "public");
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
+        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
         LegalManifestOriginGraphVerifier originVerifier =
                 new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
         LegalEditorialReadinessCore readinessCore = new LegalEditorialReadinessCore(
@@ -257,7 +269,7 @@ final class LegalManifestPersistenceITSupport {
                 transaction,
                 jdbc,
                 budgets,
-                List.of(schemaVerifier));
+                List.of(schemaVerifier, privilegeVerifier));
         LegalEditorialApplyService service = new LegalEditorialApplyService(
                 gate,
                 jdbc,
@@ -265,13 +277,15 @@ final class LegalManifestPersistenceITSupport {
                 promotionCore,
                 readinessCore,
                 new LegalEditorialFailureMapper(),
-                schemaVerifier);
+                schemaVerifier,
+                privilegeVerifier);
         return new ApplyHarness(
                 dataSource,
                 jdbc,
                 transaction,
                 gate,
                 schemaVerifier,
+                privilegeVerifier,
                 originVerifier,
                 readinessCore,
                 plannerCore,
@@ -859,6 +873,7 @@ final class LegalManifestPersistenceITSupport {
             TransactionTemplate transaction,
             LegalManifestDatabaseGate gate,
             LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier,
             LegalManifestOriginGraphVerifier originVerifier,
             LegalEditorialReadinessCore core,
             LegalEditorialReadinessService service
@@ -870,6 +885,7 @@ final class LegalManifestPersistenceITSupport {
             TransactionTemplate transaction,
             LegalManifestDatabaseGate gate,
             LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier,
             LegalManifestOriginGraphVerifier originVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialReadinessService readinessService,
@@ -883,6 +899,7 @@ final class LegalManifestPersistenceITSupport {
             TransactionTemplate transaction,
             LegalManifestDatabaseGate gate,
             LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier,
             LegalManifestOriginGraphVerifier originVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialPlannerCore plannerCore,

@@ -26,14 +26,16 @@ public final class LegalEditorialReadinessService {
             JdbcTemplate jdbc,
             LegalEditorialReadinessCore core,
             LegalEditorialFailureMapper failureMapper,
-            LegalEditorialSchemaVerifier schemaVerifier) {
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.core = Objects.requireNonNull(core, "core");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
-        this.databaseGate.requireExactReadinessPreflights(
+        this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
-                Objects.requireNonNull(schemaVerifier, "schemaVerifier"));
+                Objects.requireNonNull(schemaVerifier, "schemaVerifier"),
+                Objects.requireNonNull(privilegeVerifier, "privilegeVerifier"));
     }
 
     /** Evaluates the validator-issued release without persisting or taking row locks. */

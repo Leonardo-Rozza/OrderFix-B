@@ -31,7 +31,7 @@ class LegalEditorialPlanServiceTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
 
     @Test
-    void constructorIsTheOnlyAssemblyPathAndRequiresTheExactReadinessPreflights() {
+    void constructorIsTheOnlyAssemblyPathAndRequiresTheExactEditorialPreflights() {
         Harness harness = new Harness();
 
         new LegalEditorialPlanService(
@@ -39,17 +39,19 @@ class LegalEditorialPlanServiceTest {
                 harness.jdbc,
                 harness.planner,
                 harness.failureMapper,
-                harness.schemaVerifier);
+                harness.schemaVerifier,
+                harness.privilegeVerifier);
 
         assertThat(LegalEditorialPlanService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(5);
+                    assertThat(constructor.getParameterCount()).isEqualTo(6);
                     assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
                 });
-        verify(harness.gate).requireExactReadinessPreflights(
+        verify(harness.gate).requireExactEditorialPreflights(
                 harness.jdbc,
-                harness.schemaVerifier);
+                harness.schemaVerifier,
+                harness.privilegeVerifier);
     }
 
     @Test
@@ -161,6 +163,8 @@ class LegalEditorialPlanServiceTest {
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
                 mock(LegalEditorialSchemaVerifier.class);
+        private final LegalEditorialPrivilegeVerifier privilegeVerifier =
+                mock(LegalEditorialPrivilegeVerifier.class);
 
         private Harness() {
             when(gate.usesJdbc(jdbc)).thenReturn(true);
@@ -183,7 +187,8 @@ class LegalEditorialPlanServiceTest {
                     jdbc,
                     planner,
                     failureMapper,
-                    schemaVerifier);
+                    schemaVerifier,
+                    privilegeVerifier);
         }
     }
 }

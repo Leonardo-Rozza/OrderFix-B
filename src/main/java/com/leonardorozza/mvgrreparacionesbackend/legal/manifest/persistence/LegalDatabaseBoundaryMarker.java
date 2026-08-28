@@ -12,7 +12,8 @@ record LegalDatabaseBoundaryMarker(Kind kind) {
 
     enum Kind {
         DRY_RUN,
-        IMPORT
+        IMPORT,
+        EDITORIAL
     }
 
     static final class Guard {

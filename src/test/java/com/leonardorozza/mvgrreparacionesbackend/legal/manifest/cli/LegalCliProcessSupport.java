@@ -42,7 +42,8 @@ final class LegalCliProcessSupport {
             "JAVA_TOOL_OPTIONS",
             "JDK_JAVA_OPTIONS",
             "_JAVA_OPTIONS",
-            LegalImportEnvironment.ENABLED_VARIABLE);
+            LegalImportEnvironment.ENABLED_VARIABLE,
+            LegalEditorialEnvironment.ENABLED_VARIABLE);
 
     private LegalCliProcessSupport() { }
 
@@ -148,10 +149,11 @@ final class LegalCliProcessSupport {
         }
     }
 
-    private static void sanitizeInheritedEnvironment(Map<String, String> environment) {
+    static void sanitizeInheritedEnvironment(Map<String, String> environment) {
         ENVIRONMENT_TO_REMOVE.forEach(environment::remove);
         environment.keySet().removeIf(name -> name != null
-                && name.startsWith("ORDENFIX_LEGAL_IMPORT_DB_"));
+                && (name.startsWith("ORDENFIX_LEGAL_IMPORT_DB_")
+                    || name.startsWith("ORDENFIX_LEGAL_EDITOR_DB_")));
     }
 
     private static CapturedOutput capture(InputStream input) throws IOException {

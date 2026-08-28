@@ -68,6 +68,54 @@ final class LegalV27EditorialInventory {
                     "legal_requisito_conjunto_miembros_id_seq",
                     "legal_requisito_conjunto_miembros.id"));
 
+    /** Tables whose structural rows may be created by the offline editorial protocol. */
+    static final Set<String> INSERT_TABLES = Set.of(
+            "legal_documento_reemplazo_lotes",
+            "legal_documento_reemplazo_anteriores",
+            "legal_documento_reemplazo_sucesoras",
+            "legal_documento_transiciones",
+            "legal_documento_vigentes",
+            "legal_requisito_transiciones",
+            "legal_requisito_conjuntos_actuales");
+
+    /** Current projections are rebuilt atomically; no historical row may be deleted. */
+    static final Set<String> DELETE_TABLES = Set.of(
+            "legal_documento_vigentes",
+            "legal_requisito_conjuntos_actuales");
+
+    /**
+     * Exact column UPDATE surface.
+     *
+     * <p>The {@code id} grants are technical privileges required by PostgreSQL row locks. V27
+     * guards reject direct and no-op updates. State columns are materialized only by the
+     * SECURITY INVOKER transition call graph, except for sealing a replacement batch.</p>
+     */
+    static final Map<String, Set<String>> UPDATE_COLUMNS = Map.of(
+            "legal_publicaciones", Set.of("id"),
+            "legal_documento_lineas", Set.of("id"),
+            "legal_documento_versiones", Set.of(
+                    "id",
+                    "estado",
+                    "estado_cambiado_en",
+                    "ultimo_motivo",
+                    "reemplazo_lote_id"),
+            "legal_requisito_lineas", Set.of("id"),
+            "legal_requisito_versiones", Set.of(
+                    "id",
+                    "estado",
+                    "estado_cambiado_en",
+                    "ultimo_motivo"),
+            "legal_documento_reemplazo_lotes", Set.of(
+                    "estado_construccion",
+                    "sellado_en"));
+
+    /** Only identity sequences reached by editorial transitions and replacement membership. */
+    static final Set<String> WRITABLE_SEQUENCES = Set.of(
+            "legal_documento_reemplazo_anteriores_id_seq",
+            "legal_documento_reemplazo_sucesoras_id_seq",
+            "legal_documento_transiciones_id_seq",
+            "legal_requisito_transiciones_id_seq");
+
     static final Map<String, FunctionSpec> EDITORIAL_FUNCTIONS = Map.ofEntries(
             function("legal_rechazar_update_delete()",
                     "30a38b0d2b76c7f16bc5bcf02ae8c8b2f810c65ad5744553154763a90176c781"),
@@ -147,6 +195,35 @@ final class LegalV27EditorialInventory {
             "legal_validar_slots_documentales()",
             "legal_validar_conjuntos_actuales()",
             "legal_validar_reemplazo_estructura(uuid)");
+
+    /**
+     * Exact SECURITY INVOKER call graph needed by transitions, projections and replacements.
+     * Origin-import and publication-sealing functions deliberately remain excluded.
+     */
+    static final Set<String> PRIVILEGED_FUNCTIONS = Set.of(
+            "legal_rechazar_update_delete()",
+            "legal_exigir_read_committed()",
+            "legal_read_committed_statement_guard()",
+            "legal_publicacion_update_statement_guard()",
+            "legal_bloquear_publicacion_sellada(uuid)",
+            "legal_publicacion_update_guard()",
+            "legal_version_update_interno_guard()",
+            "legal_documento_transicion_before_insert()",
+            "legal_documento_transicion_after_insert()",
+            "legal_requisito_transicion_before_insert()",
+            "legal_requisito_transicion_after_insert()",
+            "legal_documento_slot_insert_guard()",
+            "legal_validar_slots_documentales()",
+            "legal_slots_constraint_guard()",
+            "legal_requisito_actual_insert_guard()",
+            "legal_validar_conjuntos_actuales()",
+            "legal_conjuntos_actuales_constraint_guard()",
+            "legal_reemplazo_lote_insert_guard()",
+            "legal_reemplazo_miembro_insert_guard()",
+            "legal_validar_reemplazo_estructura(uuid)",
+            "legal_reemplazo_lote_before_update()",
+            "legal_reemplazo_lote_after_update()",
+            "legal_reemplazo_constraint_guard()");
 
     /* Filled from a clean PostgreSQL 16 catalog; values are schema-independent. */
     static final CatalogFingerprint EXPECTED_CATALOG = new CatalogFingerprint(

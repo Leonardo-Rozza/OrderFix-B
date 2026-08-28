@@ -68,6 +68,18 @@ class LegalManifestCliProcessIT {
             "dryRun",
             "issues",
             "omittedIssueCount");
+    private static final List<String> EDITORIAL_REPORT_FIELDS = List.of(
+            "reportVersion",
+            "command",
+            "status",
+            "persisted",
+            "publication",
+            "operation",
+            "plan",
+            "readiness",
+            "counts",
+            "issues",
+            "omittedIssueCount");
     private static final List<String> PUBLICATION_FIELDS = List.of(
             "publicationId",
             "schemaVersion",
@@ -101,7 +113,8 @@ class LegalManifestCliProcessIT {
             "SPRING_PROFILES_ACTIVE",
             "JAVA_TOOL_OPTIONS",
             "JDK_JAVA_OPTIONS",
-            "_JAVA_OPTIONS");
+            "_JAVA_OPTIONS",
+            LegalEditorialEnvironment.ENABLED_VARIABLE);
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
@@ -241,6 +254,34 @@ class LegalManifestCliProcessIT {
     }
 
     @Test
+    void rawEditorialCommandUsesItsPackagedV3BoundaryBeforeLegacyParsing()
+            throws Exception {
+        ProcessResult process = executeCli(false, "readiness", copiedManifest);
+
+        assertThat(process.exitCode()).isEqualTo(2);
+        assertThat(process.stderr()).isEmpty();
+        assertThat(process.stdout())
+                .endsWith("\n")
+                .doesNotEndWith("\n\n")
+                .doesNotContain("\r", copiedManifest.toAbsolutePath().toString());
+        JsonNode report = JSON.readTree(process.stdout());
+        assertExactFields(report, EDITORIAL_REPORT_FIELDS);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("readiness");
+        assertThat(report.path("status").textValue()).isEqualTo("BLOCKED");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("publication").isNull()).isTrue();
+        assertThat(report.path("operation").isNull()).isTrue();
+        assertThat(report.path("plan").isNull()).isTrue();
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").isNull()).isTrue();
+        assertThat(report.path("issues")).singleElement().satisfies(issue ->
+                assertThat(issue.path("code").textValue())
+                        .isEqualTo("CLI_ARGUMENTS_INVALID"));
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+    }
+
+    @Test
     void dryRunGoldenReleasePassesAgainstMigratedPostgreSqlV27AndRollsBack()
             throws Exception {
         Flyway.configure()
@@ -292,6 +333,8 @@ class LegalManifestCliProcessIT {
         processBuilder.redirectErrorStream(false);
         Map<String, String> environment = processBuilder.environment();
         ENVIRONMENT_TO_REMOVE.forEach(environment::remove);
+        environment.keySet().removeIf(name -> name != null
+                && name.startsWith("ORDENFIX_LEGAL_EDITOR_DB_"));
         environment.put("ORDENFIX_CLI_PROCESS_SECRET", PROCESS_SECRET);
         environment.put("LOGGING_CONFIG", "file:/private/ordenfix-hostile-logback.xml");
         environment.put("LOGGING_LEVEL_ROOT", "TRACE");
