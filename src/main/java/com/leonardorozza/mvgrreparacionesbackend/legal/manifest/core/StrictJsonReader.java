@@ -33,18 +33,19 @@ public final class StrictJsonReader {
     public static final String DEFAULT_LOCATION = "publication-manifest.json";
     static final String EDITORIAL_PLAN_LOCATION = "editorial-plan.json";
 
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper manifestObjectMapper;
+    private final ObjectMapper editorialPlanObjectMapper;
 
     public StrictJsonReader() {
-        this.objectMapper = createObjectMapper();
+        this.manifestObjectMapper = createObjectMapper(ExternalJsonProfile.MANIFEST);
+        this.editorialPlanObjectMapper = createObjectMapper(ExternalJsonProfile.EDITORIAL_PLAN);
     }
 
     public LegalManifestValidation<StrictJsonDocument> read(byte[] rawBytes) {
         return read(
                 rawBytes,
-                DEFAULT_LOCATION,
-                LegalManifestLimits.MAX_MANIFEST_BYTES,
-                IssueProfile.MANIFEST);
+                ExternalJsonProfile.MANIFEST.defaultLocation,
+                ExternalJsonProfile.MANIFEST);
     }
 
     LegalManifestValidation<StrictJsonDocument> read(
@@ -53,29 +54,26 @@ public final class StrictJsonReader {
         return read(
                 rawBytes,
                 safeLocation,
-                LegalManifestLimits.MAX_MANIFEST_BYTES,
-                IssueProfile.MANIFEST);
+                ExternalJsonProfile.MANIFEST);
     }
 
     LegalManifestValidation<StrictJsonDocument> readEditorialPlan(byte[] rawBytes) {
         return read(
                 rawBytes,
-                EDITORIAL_PLAN_LOCATION,
-                LegalEditorialPlanLimits.MAX_PLAN_BYTES,
-                IssueProfile.EDITORIAL_PLAN);
+                ExternalJsonProfile.EDITORIAL_PLAN.defaultLocation,
+                ExternalJsonProfile.EDITORIAL_PLAN);
     }
 
     private LegalManifestValidation<StrictJsonDocument> read(
             byte[] rawBytes,
             String safeLocation,
-            int maxBytes,
-            IssueProfile issueProfile) {
+            ExternalJsonProfile issueProfile) {
         Objects.requireNonNull(safeLocation, "safeLocation");
         Objects.requireNonNull(issueProfile, "issueProfile");
         if (rawBytes == null || rawBytes.length == 0) {
             return failure(issueProfile.required, safeLocation);
         }
-        if (rawBytes.length > maxBytes) {
+        if (rawBytes.length > issueProfile.maxBytes) {
             return failure(issueProfile.sizeLimitExceeded, safeLocation);
         }
         if (hasUtf8Bom(rawBytes)) {
@@ -101,7 +99,7 @@ public final class StrictJsonReader {
 
         final JsonNode root;
         try {
-            root = objectMapper.readTree(text);
+            root = objectMapper(issueProfile).readTree(text);
         } catch (StreamConstraintsException exception) {
             return failure(issueProfile.jsonLimitExceeded, safeLocation);
         } catch (JsonProcessingException exception) {
@@ -121,33 +119,47 @@ public final class StrictJsonReader {
             return failures(semanticIssues, safeLocation);
         }
 
-        return LegalManifestValidation.pass(new StrictJsonDocument(text, root));
+        return LegalManifestValidation.pass(new StrictJsonDocument(
+                text,
+                root,
+                issueProfile,
+                safeLocation));
     }
 
     StreamReadConstraints readConstraints() {
-        return objectMapper.getFactory().streamReadConstraints();
+        return manifestObjectMapper.getFactory().streamReadConstraints();
+    }
+
+    StreamReadConstraints editorialPlanReadConstraints() {
+        return editorialPlanObjectMapper.getFactory().streamReadConstraints();
     }
 
     boolean isEnabled(JsonReadFeature feature) {
-        return objectMapper.getFactory().isEnabled(feature.mappedFeature());
+        return manifestObjectMapper.getFactory().isEnabled(feature.mappedFeature());
     }
 
     boolean isEnabled(StreamReadFeature feature) {
-        return objectMapper.getFactory().isEnabled(feature.mappedFeature());
+        return manifestObjectMapper.getFactory().isEnabled(feature.mappedFeature());
     }
 
     boolean isEnabled(DeserializationFeature feature) {
-        return objectMapper.isEnabled(feature);
+        return manifestObjectMapper.isEnabled(feature);
     }
 
-    private static ObjectMapper createObjectMapper() {
+    private ObjectMapper objectMapper(ExternalJsonProfile issueProfile) {
+        return issueProfile == ExternalJsonProfile.MANIFEST
+                ? manifestObjectMapper
+                : editorialPlanObjectMapper;
+    }
+
+    private static ObjectMapper createObjectMapper(ExternalJsonProfile issueProfile) {
         StreamReadConstraints constraints = StreamReadConstraints.builder()
-                .maxDocumentLength(LegalManifestLimits.MAX_MANIFEST_BYTES)
-                .maxTokenCount(LegalManifestLimits.MAX_JSON_TOKENS)
-                .maxNestingDepth(LegalManifestLimits.MAX_JSON_DEPTH)
-                .maxStringLength(LegalManifestLimits.MAX_JSON_STRING_LENGTH)
-                .maxNameLength(LegalManifestLimits.MAX_JSON_NAME_LENGTH)
-                .maxNumberLength(LegalManifestLimits.MAX_JSON_NUMBER_LENGTH)
+                .maxDocumentLength(issueProfile.maxBytes)
+                .maxTokenCount(issueProfile.maxJsonTokens)
+                .maxNestingDepth(issueProfile.maxJsonDepth)
+                .maxStringLength(issueProfile.maxJsonStringLength)
+                .maxNameLength(issueProfile.maxJsonNameLength)
+                .maxNumberLength(issueProfile.maxJsonNumberLength)
                 .build();
 
         var factoryBuilder = JsonFactory.builder()
@@ -181,7 +193,7 @@ public final class StrictJsonReader {
     private static void inspectDecodedTree(
             JsonNode root,
             EnumSet<LegalManifestIssueCode> issues,
-            IssueProfile issueProfile) {
+            ExternalJsonProfile issueProfile) {
         Deque<JsonNode> pending = new ArrayDeque<>();
         pending.add(root);
 
@@ -209,7 +221,7 @@ public final class StrictJsonReader {
     private static void inspectUnicodeString(
             String value,
             EnumSet<LegalManifestIssueCode> issues,
-            IssueProfile issueProfile) {
+            ExternalJsonProfile issueProfile) {
         if (value.indexOf('\r') >= 0) {
             issues.add(issueProfile.crForbidden);
         }
@@ -268,8 +280,15 @@ public final class StrictJsonReader {
         return LegalManifestValidation.failure(issues);
     }
 
-    private enum IssueProfile {
+    enum ExternalJsonProfile {
         MANIFEST(
+                DEFAULT_LOCATION,
+                LegalManifestLimits.MAX_MANIFEST_BYTES,
+                LegalManifestLimits.MAX_JSON_DEPTH,
+                LegalManifestLimits.MAX_JSON_TOKENS,
+                LegalManifestLimits.MAX_JSON_STRING_LENGTH,
+                LegalManifestLimits.MAX_JSON_NAME_LENGTH,
+                LegalManifestLimits.MAX_JSON_NUMBER_LENGTH,
                 LegalManifestIssueCode.MANIFEST_REQUIRED,
                 LegalManifestIssueCode.MANIFEST_SIZE_LIMIT_EXCEEDED,
                 LegalManifestIssueCode.MANIFEST_UTF8_INVALID,
@@ -281,8 +300,17 @@ public final class StrictJsonReader {
                 LegalManifestIssueCode.MANIFEST_JSON_LIMIT_EXCEEDED,
                 LegalManifestIssueCode.MANIFEST_JSON_INVALID,
                 LegalManifestIssueCode.MANIFEST_IJSON_NUMBER_INVALID,
-                LegalManifestIssueCode.MANIFEST_JSON_READER_ERROR),
+                LegalManifestIssueCode.MANIFEST_JSON_READER_ERROR,
+                LegalManifestIssueCode.MANIFEST_RFC8785_INVALID,
+                LegalManifestIssueCode.MANIFEST_CANONICALIZATION_ERROR),
         EDITORIAL_PLAN(
+                EDITORIAL_PLAN_LOCATION,
+                LegalEditorialPlanLimits.MAX_PLAN_BYTES,
+                LegalEditorialPlanLimits.MAX_JSON_DEPTH,
+                LegalEditorialPlanLimits.MAX_JSON_TOKENS,
+                LegalEditorialPlanLimits.MAX_JSON_STRING_LENGTH,
+                LegalEditorialPlanLimits.MAX_JSON_NAME_LENGTH,
+                LegalEditorialPlanLimits.MAX_JSON_NUMBER_LENGTH,
                 LegalManifestIssueCode.EDITORIAL_PLAN_REQUIRED,
                 LegalManifestIssueCode.EDITORIAL_PLAN_SIZE_LIMIT_EXCEEDED,
                 LegalManifestIssueCode.EDITORIAL_PLAN_UTF8_INVALID,
@@ -294,8 +322,17 @@ public final class StrictJsonReader {
                 LegalManifestIssueCode.EDITORIAL_PLAN_JSON_LIMIT_EXCEEDED,
                 LegalManifestIssueCode.EDITORIAL_PLAN_JSON_INVALID,
                 LegalManifestIssueCode.EDITORIAL_PLAN_IJSON_NUMBER_INVALID,
-                LegalManifestIssueCode.EDITORIAL_PLAN_JSON_READER_ERROR);
+                LegalManifestIssueCode.EDITORIAL_PLAN_JSON_READER_ERROR,
+                LegalManifestIssueCode.EDITORIAL_PLAN_RFC8785_INVALID,
+                LegalManifestIssueCode.EDITORIAL_PLAN_CANONICALIZATION_ERROR);
 
+        private final String defaultLocation;
+        private final int maxBytes;
+        private final int maxJsonDepth;
+        private final long maxJsonTokens;
+        private final int maxJsonStringLength;
+        private final int maxJsonNameLength;
+        private final int maxJsonNumberLength;
         private final LegalManifestIssueCode required;
         private final LegalManifestIssueCode sizeLimitExceeded;
         private final LegalManifestIssueCode utf8Invalid;
@@ -308,8 +345,17 @@ public final class StrictJsonReader {
         private final LegalManifestIssueCode jsonInvalid;
         private final LegalManifestIssueCode ijsonNumberInvalid;
         private final LegalManifestIssueCode jsonReaderError;
+        private final LegalManifestIssueCode rfc8785Invalid;
+        private final LegalManifestIssueCode canonicalizationError;
 
-        IssueProfile(
+        ExternalJsonProfile(
+                String defaultLocation,
+                int maxBytes,
+                int maxJsonDepth,
+                long maxJsonTokens,
+                int maxJsonStringLength,
+                int maxJsonNameLength,
+                int maxJsonNumberLength,
                 LegalManifestIssueCode required,
                 LegalManifestIssueCode sizeLimitExceeded,
                 LegalManifestIssueCode utf8Invalid,
@@ -321,7 +367,16 @@ public final class StrictJsonReader {
                 LegalManifestIssueCode jsonLimitExceeded,
                 LegalManifestIssueCode jsonInvalid,
                 LegalManifestIssueCode ijsonNumberInvalid,
-                LegalManifestIssueCode jsonReaderError) {
+                LegalManifestIssueCode jsonReaderError,
+                LegalManifestIssueCode rfc8785Invalid,
+                LegalManifestIssueCode canonicalizationError) {
+            this.defaultLocation = Objects.requireNonNull(defaultLocation, "defaultLocation");
+            this.maxBytes = maxBytes;
+            this.maxJsonDepth = maxJsonDepth;
+            this.maxJsonTokens = maxJsonTokens;
+            this.maxJsonStringLength = maxJsonStringLength;
+            this.maxJsonNameLength = maxJsonNameLength;
+            this.maxJsonNumberLength = maxJsonNumberLength;
             this.required = required;
             this.sizeLimitExceeded = sizeLimitExceeded;
             this.utf8Invalid = utf8Invalid;
@@ -334,6 +389,16 @@ public final class StrictJsonReader {
             this.jsonInvalid = jsonInvalid;
             this.ijsonNumberInvalid = ijsonNumberInvalid;
             this.jsonReaderError = jsonReaderError;
+            this.rfc8785Invalid = rfc8785Invalid;
+            this.canonicalizationError = canonicalizationError;
+        }
+
+        LegalManifestIssueCode rfc8785Invalid() {
+            return rfc8785Invalid;
+        }
+
+        LegalManifestIssueCode canonicalizationError() {
+            return canonicalizationError;
         }
     }
 
@@ -344,10 +409,18 @@ public final class StrictJsonReader {
 
         private final String text;
         private final JsonNode root;
+        private final ExternalJsonProfile profile;
+        private final String safeLocation;
 
-        private StrictJsonDocument(String text, JsonNode root) {
+        private StrictJsonDocument(
+                String text,
+                JsonNode root,
+                ExternalJsonProfile profile,
+                String safeLocation) {
             this.text = text;
             this.root = root.deepCopy();
+            this.profile = Objects.requireNonNull(profile, "profile");
+            this.safeLocation = Objects.requireNonNull(safeLocation, "safeLocation");
         }
 
         public String text() {
@@ -356,6 +429,14 @@ public final class StrictJsonReader {
 
         public JsonNode root() {
             return root.deepCopy();
+        }
+
+        ExternalJsonProfile profile() {
+            return profile;
+        }
+
+        String safeLocation() {
+            return safeLocation;
         }
     }
 }

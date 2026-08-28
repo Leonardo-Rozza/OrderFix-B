@@ -26,40 +26,36 @@ final class Rfc8785Canonicalizer {
             StrictJsonReader.StrictJsonDocument document) {
         return canonicalizeExternalDocument(
                 document,
-                LegalManifestIssueCode.MANIFEST_RFC8785_INVALID,
-                LegalManifestIssueCode.MANIFEST_CANONICALIZATION_ERROR,
-                StrictJsonReader.DEFAULT_LOCATION);
+                StrictJsonReader.ExternalJsonProfile.MANIFEST);
     }
 
     LegalManifestValidation<CanonicalJson> canonicalizeEditorialPlan(
             StrictJsonReader.StrictJsonDocument document) {
         return canonicalizeExternalDocument(
                 document,
-                LegalManifestIssueCode.EDITORIAL_PLAN_RFC8785_INVALID,
-                LegalManifestIssueCode.EDITORIAL_PLAN_CANONICALIZATION_ERROR,
-                StrictJsonReader.EDITORIAL_PLAN_LOCATION);
+                StrictJsonReader.ExternalJsonProfile.EDITORIAL_PLAN);
     }
 
     private static LegalManifestValidation<CanonicalJson> canonicalizeExternalDocument(
             StrictJsonReader.StrictJsonDocument document,
-            LegalManifestIssueCode invalidCode,
-            LegalManifestIssueCode errorCode,
-            String safeLocation) {
+            StrictJsonReader.ExternalJsonProfile expectedProfile) {
         Objects.requireNonNull(document, "document");
-        Objects.requireNonNull(invalidCode, "invalidCode");
-        Objects.requireNonNull(errorCode, "errorCode");
-        Objects.requireNonNull(safeLocation, "safeLocation");
+        Objects.requireNonNull(expectedProfile, "expectedProfile");
+        if (document.profile() != expectedProfile) {
+            throw new IllegalArgumentException(
+                    "El documento JSON estricto no pertenece al perfil esperado");
+        }
 
         try {
             return LegalManifestValidation.pass(canonicalizeText(document.text()));
         } catch (IOException exception) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
-                    invalidCode,
-                    safeLocation));
+                    expectedProfile.rfc8785Invalid(),
+                    document.safeLocation()));
         } catch (RuntimeException exception) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
-                    errorCode,
-                    safeLocation));
+                    expectedProfile.canonicalizationError(),
+                    document.safeLocation()));
         }
     }
 

@@ -178,8 +178,26 @@ class LegalEditorialPlanValidatorTest {
                         LegalManifestIssueCode.EDITORIAL_PLAN_SCHEMA_INVALID);
     }
 
+    @Test
+    void rejectsANulReasonBeforeEmittingTheOpaqueToken() throws IOException {
+        ObjectNode plan = fixture("retire-valid-v1/editorial-plan.json");
+        ((ObjectNode) plan.path("documentRetirements").get(0))
+                .put("reason", "Retiro\u0000inválido");
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = validator.validate(write(plan));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.value()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsAnyOf(
+                        LegalManifestIssueCode.RETIREMENT_REASON_REQUIRED,
+                        LegalManifestIssueCode.EDITORIAL_PLAN_SCHEMA_INVALID);
+    }
+
     private Path write(ObjectNode plan) throws IOException {
-        Path path = temporaryDirectory.resolve(ConfinedEditorialPlanReader.PLAN_FILENAME);
+        Path path = temporaryDirectory.toRealPath()
+                .resolve(ConfinedEditorialPlanReader.PLAN_FILENAME);
         Files.write(path, JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(plan));
         return path;
     }

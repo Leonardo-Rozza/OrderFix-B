@@ -517,13 +517,45 @@ Commit:
 - PROMOTE, replay, REPLACE mixto, RETIRE exclusivamente documental, fingerprint incorrecto,
   historia previa, estado parcial y overflow preservan exactamente las 19 tablas y 10 secuencias
   editoriales durante plan.
-- La auditoría cruzada detectó y cerró dos regresiones antes del commit: replay con transiciones en
-  instantes distintos y REPLACE addition-only sobre una publicación source aún BORRADOR. No quedan
-  hallazgos P1/P2 confirmados.
+- La auditoría cruzada inicial detectó y cerró dos regresiones antes del commit: replay con
+  transiciones en instantes distintos y REPLACE addition-only sobre una publicación source aún
+  BORRADOR. La auditoría posterior al cierre encontró tres defensas adicionales, registradas y
+  cerradas a continuación.
 - El core no contiene DML, row locks, función de validación sellada ni reloj propio; el service abre
   un único gate read-only y ejecuta un único `transaction_timestamp()` después del lock.
 - V27, inventario/verifier/importador de 2.3B, publication-manifest.schema.json, endpoints,
   frontend y configuración de despliegue no se modificaron. `git diff --check` quedó limpio.
+
+### Endurecimiento posterior del Corte 3
+
+Estado: completado el 2026-08-28, antes de iniciar las mutaciones del Corte 4.
+
+Una revisión adversarial posterior confirmó dos hallazgos P1 y uno P2 que no cambian la semántica
+editorial, pero sí fortalecen la frontera previa a PostgreSQL:
+
+- `ConfinedEditorialPlanReader` ya no reabre la ruta para consumir bytes. Recorre cada componente
+  sin seguir symlinks mediante `SecureDirectoryStream` cuando el proveedor lo permite; el fallback
+  portable toma snapshots de toda la ruta, exige `fileKey`, abre un único channel, relee ese mismo
+  handle y compara bytes, identidad, tamaño y timestamps. Las pruebas cubren symlink en un padre y
+  sustitución ABA con restauración del nombre original.
+- `reason` rechaza U+0000 tanto en el schema como en el validator antes de emitir el token opaco,
+  porque PostgreSQL no puede persistir ese carácter en `varchar`. El schema editorial queda fijado
+  en 8.891 bytes y SHA-256
+  `160af4f4b5a6e1b9eedae90dfe52fabad8a12f0cfa15b00743c67fba28a70fac`; los SHA de los planes
+  golden no cambian.
+- `StrictJsonDocument` conserva su perfil de origen y ubicación segura; manifest y plan editorial
+  usan límites y mappers separados, y `Rfc8785Canonicalizer` rechaza cruzar ambos perfiles. Se
+  preserva la API pública histórica del reader.
+
+Evidencia: Java 21 (Corretto 21.0.10), 111 tests focalizados, 0 fallos, 0 errores y 0 omitidos;
+`git diff --check` limpio. Límite explícito: Java NIO portable no expone el `fileKey` del channel ya
+abierto, por lo que un actor capaz de restaurar simultáneamente bytes y todos los timestamps entre
+observaciones queda fuera de las garantías portables. No quedan hallazgos P1/P2 confirmados en este
+hardening.
+
+Commit local:
+
+    fix(legal): endurece planes editoriales
 
 ## Corte 4 — Primera promoción transaccional
 

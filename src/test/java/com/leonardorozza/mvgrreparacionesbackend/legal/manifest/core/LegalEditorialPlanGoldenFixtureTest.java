@@ -63,7 +63,7 @@ class LegalEditorialPlanGoldenFixtureTest {
             assertThat(parsed.editorialPlanSha256()).isEqualTo(expectedSha);
             assertThat(expectedSha).isEqualTo(sha256(expectedCanonical));
 
-            Path path = temporaryDirectory.resolve(fixtureName)
+            Path path = temporaryDirectory.toRealPath().resolve(fixtureName)
                     .resolve(ConfinedEditorialPlanReader.PLAN_FILENAME);
             Files.createDirectories(path.getParent());
             Files.write(path, raw);
@@ -123,7 +123,7 @@ class LegalEditorialPlanGoldenFixtureTest {
     }
 
     private ValidatedEditorialPlan validate(String directory, byte[] raw) throws IOException {
-        Path path = temporaryDirectory.resolve(directory)
+        Path path = temporaryDirectory.toRealPath().resolve(directory)
                 .resolve(ConfinedEditorialPlanReader.PLAN_FILENAME);
         Files.createDirectories(path.getParent());
         Files.write(path, raw);

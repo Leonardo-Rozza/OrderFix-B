@@ -21,9 +21,9 @@ public final class LegalEditorialPlanSchema {
 
     public static final String RESOURCE_PATH =
             "/legal/editorial/v1/editorial-plan.schema.json";
-    public static final int EXPECTED_SIZE_BYTES = 8_871;
+    public static final int EXPECTED_SIZE_BYTES = 8_891;
     public static final String EXPECTED_SHA256 =
-            "4c8ba93eb8e9065854e714af7b4f3155320d52d25b613364bc060f0a4c0a1268";
+            "160af4f4b5a6e1b9eedae90dfe52fabad8a12f0cfa15b00743c67fba28a70fac";
 
     private static final Schema SCHEMA = loadVerifiedSchema();
 

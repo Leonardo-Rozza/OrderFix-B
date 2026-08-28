@@ -191,19 +191,25 @@ class Rfc8785CanonicalizerTest {
     @Test
     void editorialPlanUsesTheSameRawJcsBytesThroughANamedClosedProfile() {
         byte[] input = "{\"z\":[2,1],\"a\":true}".getBytes(StandardCharsets.UTF_8);
-        StrictJsonReader.StrictJsonDocument document = reader.readEditorialPlan(input)
+        StrictJsonReader.StrictJsonDocument editorialDocument = reader.readEditorialPlan(input)
+                .value().orElseThrow();
+        StrictJsonReader.StrictJsonDocument manifestDocument = reader.read(input)
                 .value().orElseThrow();
 
         Rfc8785Canonicalizer.CanonicalJson editorial = canonicalizer
-                .canonicalizeEditorialPlan(document)
+                .canonicalizeEditorialPlan(editorialDocument)
                 .value().orElseThrow();
         Rfc8785Canonicalizer.CanonicalJson manifest = canonicalizer
-                .canonicalize(document)
+                .canonicalize(manifestDocument)
                 .value().orElseThrow();
 
         assertThat(editorial).isEqualTo(manifest);
         assertThat(editorial.utf8()).asString(StandardCharsets.UTF_8)
                 .isEqualTo("{\"a\":true,\"z\":[2,1]}");
+        assertThatThrownBy(() -> canonicalizer.canonicalize(editorialDocument))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> canonicalizer.canonicalizeEditorialPlan(manifestDocument))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

@@ -188,6 +188,7 @@ public final class LegalEditorialPlanValidator {
             String location,
             List<LegalManifestIssue> issues) {
         boolean valid = !reason.isEmpty()
+                && reason.indexOf('\u0000') < 0
                 && reason.codePointCount(0, reason.length())
                     <= LegalEditorialPlanLimits.MAX_REASON_CODE_POINTS
                 && !isBoundaryWhitespace(reason.codePointAt(0))

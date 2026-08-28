@@ -37,6 +37,8 @@ class StrictJsonReaderTest {
         assertThat(document.text()).isEqualTo(json);
         assertThat(document.root().path("a").asInt()).isEqualTo(1);
         assertThat(document.root().path("emoji").asText()).isEqualTo("😀");
+        assertThat(document.profile()).isEqualTo(StrictJsonReader.ExternalJsonProfile.MANIFEST);
+        assertThat(document.safeLocation()).isEqualTo(StrictJsonReader.DEFAULT_LOCATION);
 
         ((ObjectNode) document.root()).put("mutated", true);
         assertThat(document.root().has("mutated")).isFalse();
@@ -45,6 +47,7 @@ class StrictJsonReaderTest {
     @Test
     void freezesParserLimitsDuplicateDetectionAndAllJsonExtensionsOff() {
         var constraints = reader.readConstraints();
+        var editorialConstraints = reader.editorialPlanReadConstraints();
 
         assertThat(constraints.getMaxDocumentLength())
                 .isEqualTo(LegalManifestLimits.MAX_MANIFEST_BYTES);
@@ -58,6 +61,18 @@ class StrictJsonReaderTest {
                 .isEqualTo(LegalManifestLimits.MAX_JSON_NAME_LENGTH);
         assertThat(constraints.getMaxNumberLength())
                 .isEqualTo(LegalManifestLimits.MAX_JSON_NUMBER_LENGTH);
+        assertThat(editorialConstraints.getMaxDocumentLength())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_PLAN_BYTES);
+        assertThat(editorialConstraints.getMaxTokenCount())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_JSON_TOKENS);
+        assertThat(editorialConstraints.getMaxNestingDepth())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_JSON_DEPTH);
+        assertThat(editorialConstraints.getMaxStringLength())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_JSON_STRING_LENGTH);
+        assertThat(editorialConstraints.getMaxNameLength())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_JSON_NAME_LENGTH);
+        assertThat(editorialConstraints.getMaxNumberLength())
+                .isEqualTo(LegalEditorialPlanLimits.MAX_JSON_NUMBER_LENGTH);
         assertThat(reader.isEnabled(StreamReadFeature.STRICT_DUPLICATE_DETECTION)).isTrue();
         assertThat(reader.isEnabled(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY)).isTrue();
         assertThat(reader.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)).isTrue();
@@ -104,6 +119,12 @@ class StrictJsonReaderTest {
         assertThat(malformed.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.EDITORIAL_PLAN_JSON_INVALID);
+
+        StrictJsonReader.StrictJsonDocument document = reader.readEditorialPlan(
+                "{}".getBytes(StandardCharsets.UTF_8)).value().orElseThrow();
+        assertThat(document.profile())
+                .isEqualTo(StrictJsonReader.ExternalJsonProfile.EDITORIAL_PLAN);
+        assertThat(document.safeLocation()).isEqualTo(StrictJsonReader.EDITORIAL_PLAN_LOCATION);
     }
 
     @Test

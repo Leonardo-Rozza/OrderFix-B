@@ -233,6 +233,11 @@ class LegalEditorialPlanSchemaTest {
         assertThat(LegalEditorialPlanSchema.validate(plan))
                 .extracting(Error::getKeyword)
                 .contains("pattern");
+
+        retirement.put("reason", "Retiro" + Character.toString(0) + "inválido");
+        assertThat(LegalEditorialPlanSchema.validate(plan))
+                .extracting(Error::getKeyword)
+                .contains("pattern");
     }
 
     @Test
