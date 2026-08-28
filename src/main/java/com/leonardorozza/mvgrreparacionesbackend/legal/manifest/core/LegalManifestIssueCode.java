@@ -294,7 +294,58 @@ public enum LegalManifestIssueCode {
             "No se pudo completar la operación de base de la importación legal."),
     IMPORT_DB_COMMIT_UNKNOWN(
             LegalManifestStatus.ERROR,
-            "No se pudo determinar si la importación legal fue confirmada.");
+            "No se pudo determinar si la importación legal fue confirmada."),
+    PUBLICATION_NOT_SEALED(
+            LegalManifestStatus.BLOCKED,
+            "La publicación legal objetivo no está sellada."),
+    PUBLICATION_CONTENT_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "La publicación legal persistida no coincide con el release confirmado."),
+    EFFECTIVE_DATE_NOT_REACHED(
+            LegalManifestStatus.BLOCKED,
+            "Una versión legal todavía no alcanzó su fecha de vigencia."),
+    CURRENT_STATE_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El estado editorial actual no coincide con el estado esperado."),
+    SOURCE_FINGERPRINT_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El fingerprint editorial de origen no coincide con el confirmado."),
+    INITIAL_PROJECTION_ALREADY_EXISTS(
+            LegalManifestStatus.BLOCKED,
+            "Ya existe una proyección o historia editorial que impide la primera promoción."),
+    SCOPE_COVERAGE_INCOMPLETE(
+            LegalManifestStatus.BLOCKED,
+            "La cobertura editorial de scopes no está completa."),
+    REPLACEMENT_MAPPING_INVALID(
+            LegalManifestStatus.BLOCKED,
+            "El mapeo editorial de reemplazo no es válido."),
+    RETIREMENT_REASON_REQUIRED(
+            LegalManifestStatus.BLOCKED,
+            "El retiro editorial requiere un motivo no vacío."),
+    EXPECTED_READINESS_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "El readiness editorial esperado no coincide con la operación solicitada."),
+    FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED(
+            LegalManifestStatus.BLOCKED,
+            "El hueco legal fail-closed no fue reconocido explícitamente."),
+    REVISION_MISMATCH(
+            LegalManifestStatus.BLOCKED,
+            "La revisión legal persistida no coincide con la revisión esperada."),
+    CONCURRENT_OPERATION(
+            LegalManifestStatus.ERROR,
+            "La operación editorial no pudo completarse por un conflicto concurrente."),
+    ROLE_PRIVILEGE_DRIFT(
+            LegalManifestStatus.ERROR,
+            "La credencial editorial no posee el perfil PostgreSQL mínimo exacto requerido."),
+    SCHEMA_DRIFT(
+            LegalManifestStatus.ERROR,
+            "La base no posee el schema legal V27 editorial exacto requerido."),
+    POSTCONDITION_NOT_READY(
+            LegalManifestStatus.ERROR,
+            "La operación editorial no alcanzó el readiness requerido."),
+    COMMIT_OUTCOME_UNKNOWN(
+            LegalManifestStatus.ERROR,
+            "No se pudo determinar si la operación editorial fue confirmada.");
 
     private final LegalManifestStatus severity;
     private final String safeMessage;

@@ -223,7 +223,8 @@ class Rfc8785CanonicalizerTest {
                 .extracting(method -> method.getParameterTypes()[0])
                 .containsExactlyInAnyOrder(
                         StrictJsonReader.StrictJsonDocument.class,
-                        LegalRequiredSetProjection.class);
+                        LegalRequiredSetProjection.class,
+                        LegalEditorialStateProjection.class);
     }
 
     private static Stream<String> compatibleOfficialVectorNames() {

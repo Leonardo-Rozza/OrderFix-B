@@ -1,0 +1,241 @@
+{
+  "fingerprintVersion" : 1,
+  "currentPublication" : {
+    "id" : "00000000-0000-0000-0000-0000000000c1",
+    "publicationExternalId" : "ordenfix-legal-v1 \"estable\" \\ 😀",
+    "manifestSha256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "buildState" : "SELLADO",
+    "sealedAt" : "2026-09-01T03:00:00.123400Z"
+  },
+  "documentSlots" : [ {
+    "type" : "POLITICA_PRIVACIDAD",
+    "locale" : "es-AR",
+    "context" : "REGISTRO",
+    "documentVersionId" : "80000000-0000-0000-0000-000000000000",
+    "documentLineId" : "30000000-0000-0000-0000-000000000001",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "documentState" : "VIGENTE"
+  }, {
+    "type" : "POLITICA_PRIVACIDAD",
+    "locale" : "es-AR",
+    "context" : "USO_CONTINUADO",
+    "documentVersionId" : "90000000-0000-0000-0000-000000000004",
+    "documentLineId" : "30000000-0000-0000-0000-000000000002",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "documentState" : "VIGENTE"
+  }, {
+    "type" : "TERMINOS_SERVICIO",
+    "locale" : "es-AR",
+    "context" : "REGISTRO",
+    "documentVersionId" : "a0000000-0000-0000-0000-000000000006",
+    "documentLineId" : "30000000-0000-0000-0000-000000000003",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "documentState" : "VIGENTE"
+  }, {
+    "type" : "TERMINOS_SERVICIO",
+    "locale" : "es-AR",
+    "context" : "USO_CONTINUADO",
+    "documentVersionId" : "a0000000-0000-0000-0000-000000000006",
+    "documentLineId" : "30000000-0000-0000-0000-000000000003",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "documentState" : "VIGENTE"
+  } ],
+  "requiredSetPointers" : [ {
+    "locale" : "es-AR",
+    "context" : "REGISTRO",
+    "audience" : "ADMIN_TITULAR",
+    "requiredSetId" : "60000000-0000-0000-0000-000000000001",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "requiredSetRevision" : "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "updatedAt" : "2026-09-01T03:00:01.123456Z",
+    "members" : [ {
+      "manifestOrdinal" : 2,
+      "requirementVersionId" : "40000000-0000-0000-0000-000000000001",
+      "requirementLineId" : "50000000-0000-0000-0000-000000000001",
+      "documentReferences" : [ {
+        "documentOrdinal" : 1,
+        "documentVersionId" : "80000000-0000-0000-0000-000000000000"
+      } ]
+    }, {
+      "manifestOrdinal" : 10,
+      "requirementVersionId" : "40000000-0000-0000-0000-000000000002",
+      "requirementLineId" : "50000000-0000-0000-0000-000000000002",
+      "documentReferences" : [ {
+        "documentOrdinal" : 2,
+        "documentVersionId" : "80000000-0000-0000-0000-000000000000"
+      }, {
+        "documentOrdinal" : 10,
+        "documentVersionId" : "a0000000-0000-0000-0000-000000000006"
+      } ]
+    } ]
+  }, {
+    "locale" : "es-AR",
+    "context" : "REGISTRO",
+    "audience" : "USER",
+    "requiredSetId" : "60000000-0000-0000-0000-000000000002",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "requiredSetRevision" : "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "updatedAt" : "2026-09-01T03:00:01.123456Z",
+    "members" : [ {
+      "manifestOrdinal" : 2,
+      "requirementVersionId" : "40000000-0000-0000-0000-000000000001",
+      "requirementLineId" : "50000000-0000-0000-0000-000000000001",
+      "documentReferences" : [ {
+        "documentOrdinal" : 1,
+        "documentVersionId" : "80000000-0000-0000-0000-000000000000"
+      } ]
+    } ]
+  }, {
+    "locale" : "es-AR",
+    "context" : "USO_CONTINUADO",
+    "audience" : "USER",
+    "requiredSetId" : "60000000-0000-0000-0000-000000000003",
+    "publicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "requiredSetRevision" : "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "updatedAt" : "2026-09-01T03:00:02.123456Z",
+    "members" : [ {
+      "manifestOrdinal" : 20,
+      "requirementVersionId" : "40000000-0000-0000-0000-000000000003",
+      "requirementLineId" : "50000000-0000-0000-0000-000000000003",
+      "documentReferences" : [ {
+        "documentOrdinal" : 2,
+        "documentVersionId" : "90000000-0000-0000-0000-000000000004"
+      }, {
+        "documentOrdinal" : 10,
+        "documentVersionId" : "a0000000-0000-0000-0000-000000000006"
+      } ]
+    } ]
+  } ],
+  "documentVersions" : [ {
+    "documentVersionId" : "10000000-0000-0000-0000-000000000005",
+    "documentLineId" : "30000000-0000-0000-0000-000000000003",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c2",
+    "lineageOrdinal" : 1,
+    "sha256" : "5555555555555555555555555555555555555555555555555555555555555555",
+    "state" : "REEMPLAZADA",
+    "stateChangedAt" : "2026-09-01T03:00:02.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000002"
+  }, {
+    "documentVersionId" : "70000000-0000-0000-0000-000000000003",
+    "documentLineId" : "30000000-0000-0000-0000-000000000002",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c2",
+    "lineageOrdinal" : 1,
+    "sha256" : "2222222222222222222222222222222222222222222222222222222222222222",
+    "state" : "REEMPLAZADA",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000001"
+  }, {
+    "documentVersionId" : "7fffffff-ffff-ffff-ffff-ffffffffffff",
+    "documentLineId" : "30000000-0000-0000-0000-000000000001",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c2",
+    "lineageOrdinal" : 1,
+    "sha256" : "1111111111111111111111111111111111111111111111111111111111111111",
+    "state" : "REEMPLAZADA",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000001"
+  }, {
+    "documentVersionId" : "80000000-0000-0000-0000-000000000000",
+    "documentLineId" : "30000000-0000-0000-0000-000000000001",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 2,
+    "sha256" : "3333333333333333333333333333333333333333333333333333333333333333",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000001"
+  }, {
+    "documentVersionId" : "90000000-0000-0000-0000-000000000004",
+    "documentLineId" : "30000000-0000-0000-0000-000000000002",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 2,
+    "sha256" : "4444444444444444444444444444444444444444444444444444444444444444",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000001"
+  }, {
+    "documentVersionId" : "a0000000-0000-0000-0000-000000000006",
+    "documentLineId" : "30000000-0000-0000-0000-000000000003",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 2,
+    "sha256" : "6666666666666666666666666666666666666666666666666666666666666666",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:02.123456Z",
+    "lastReason" : null,
+    "replacementBatchId" : "20000000-0000-0000-0000-000000000002"
+  }, {
+    "documentVersionId" : "b0000000-0000-0000-0000-000000000007",
+    "documentLineId" : "30000000-0000-0000-0000-000000000004",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c2",
+    "lineageOrdinal" : 1,
+    "sha256" : "7777777777777777777777777777777777777777777777777777777777777777",
+    "state" : "RETIRADA",
+    "stateChangedAt" : "2026-09-01T03:00:00.123456Z",
+    "lastReason" : "Retiro documental \"operativo\"\nCierre 😀",
+    "replacementBatchId" : null
+  } ],
+  "requirementVersions" : [ {
+    "requirementVersionId" : "40000000-0000-0000-0000-000000000001",
+    "requirementLineId" : "50000000-0000-0000-0000-000000000001",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 1,
+    "statementSha256" : "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null
+  }, {
+    "requirementVersionId" : "40000000-0000-0000-0000-000000000002",
+    "requirementLineId" : "50000000-0000-0000-0000-000000000002",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 1,
+    "statementSha256" : "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:01.123456Z",
+    "lastReason" : null
+  }, {
+    "requirementVersionId" : "40000000-0000-0000-0000-000000000003",
+    "requirementLineId" : "50000000-0000-0000-0000-000000000003",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c1",
+    "lineageOrdinal" : 1,
+    "statementSha256" : "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "state" : "VIGENTE",
+    "stateChangedAt" : "2026-09-01T03:00:02.123456Z",
+    "lastReason" : null
+  }, {
+    "requirementVersionId" : "40000000-0000-0000-0000-000000000004",
+    "requirementLineId" : "50000000-0000-0000-0000-000000000004",
+    "introductionPublicationId" : "00000000-0000-0000-0000-0000000000c2",
+    "lineageOrdinal" : 1,
+    "statementSha256" : "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "state" : "RETIRADA",
+    "stateChangedAt" : "2026-09-01T03:00:00.123456Z",
+    "lastReason" : "Retiro de requisito \"operativo\"\nCierre 😀"
+  } ],
+  "replacementBatches" : [ {
+    "id" : "20000000-0000-0000-0000-000000000001",
+    "buildState" : "SELLADO",
+    "createdAt" : "2026-09-01T03:00:00.123456Z",
+    "sealedAt" : "2026-09-01T03:00:01.123456Z",
+    "predecessorDocumentVersionIds" : [ "70000000-0000-0000-0000-000000000003", "7fffffff-ffff-ffff-ffff-ffffffffffff" ],
+    "successors" : [ {
+      "documentVersionId" : "80000000-0000-0000-0000-000000000000",
+      "publicationId" : "00000000-0000-0000-0000-0000000000c1"
+    }, {
+      "documentVersionId" : "90000000-0000-0000-0000-000000000004",
+      "publicationId" : "00000000-0000-0000-0000-0000000000c1"
+    } ]
+  }, {
+    "id" : "20000000-0000-0000-0000-000000000002",
+    "buildState" : "SELLADO",
+    "createdAt" : "2026-09-01T03:00:01.123456Z",
+    "sealedAt" : "2026-09-01T03:00:02.123456Z",
+    "predecessorDocumentVersionIds" : [ "10000000-0000-0000-0000-000000000005" ],
+    "successors" : [ {
+      "documentVersionId" : "a0000000-0000-0000-0000-000000000006",
+      "publicationId" : "00000000-0000-0000-0000-0000000000c1"
+    } ]
+  } ]
+}

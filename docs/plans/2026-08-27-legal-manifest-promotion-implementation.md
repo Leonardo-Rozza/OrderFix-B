@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución pendiente
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Corte 1 completado
 
 Diseño aprobado:
 
@@ -174,7 +174,7 @@ Los reportes v1 y v2 no reciben campos, orden, mensajes ni nulls nuevos.
 
 ## Corte 1 — Contrato de readiness y fingerprint editorial
 
-Estado: pendiente.
+Estado: completado el 2026-08-28.
 
 ### Objetivo
 
@@ -230,7 +230,7 @@ ante distinto orden de entrada; listas defensivas; matrices inválidas no constr
 observación y NOT_READY con observación.
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialStateFingerprintCalculatorTest,LegalEditorialReadinessResultTest,LegalManifestReportTest,LegalManifestImportReportTest test
+./mvnw -Dtest=LegalEditorialStateFingerprintCalculatorTest,LegalEditorialReadinessResultTest,Rfc8785CanonicalizerTest,LegalRequiredSetRevisionCalculatorTest,LegalManifestReportTest,LegalManifestReportWriterTest,LegalManifestImportReportTest,LegalManifestImportReportWriterTest test
 git diff --check
 git status --short
 ~~~
@@ -238,6 +238,16 @@ git status --short
 Commit:
 
     feat(legal): define readiness editorial
+
+### Evidencia de cierre
+
+- Java 21 (Corretto 21.0.10), puerta enfocada: 95 tests, 0 fallos, 0 errores y 0 omitidos.
+- Suite unitaria backend completa: 752 tests, 0 fallos, 0 errores y 0 omitidos.
+- Golden RFC 8785 congelado en
+  `sha256:d2cb96b3e9300f2febf428e875fd552d8e4700e76847c4b76a3680cfdb187b78`.
+- Reportes históricos validate/dry-run v1 e import v2 permanecen byte-compatibles.
+- `git diff --check` limpio. Este corte no abre PostgreSQL, no ejecuta DML y no modifica V27,
+  endpoints, frontend ni configuración de despliegue.
 
 ## Corte 2 — Evaluador PostgreSQL read-only
 
