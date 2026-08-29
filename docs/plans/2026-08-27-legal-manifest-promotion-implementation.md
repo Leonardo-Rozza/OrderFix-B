@@ -834,6 +834,10 @@ Commit:
 
 Estado: pendiente.
 
+Diseño específico aprobado:
+
+- docs/plans/2026-08-29-legal-replace-cutover-design.md.
+
 ### Objetivo
 
 Aplicar REPLACE completo con documentos uno a uno, adiciones, reutilizaciones y delta explícito de
