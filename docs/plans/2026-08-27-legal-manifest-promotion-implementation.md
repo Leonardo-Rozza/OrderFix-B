@@ -838,6 +838,10 @@ Diseño específico aprobado:
 
 - docs/plans/2026-08-29-legal-replace-cutover-design.md.
 
+Plan detallado de ejecución:
+
+- docs/plans/2026-08-29-legal-replace-cutover-implementation.md.
+
 ### Objetivo
 
 Aplicar REPLACE completo con documentos uno a uno, adiciones, reutilizaciones y delta explícito de
