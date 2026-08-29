@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
@@ -95,6 +96,48 @@ class LegalEditorialCliExecutionStateTest {
         assertThat(readiness.snapshot().persisted()).isFalse();
         assertThat(plan.snapshot().planResult()).containsSame(planResult);
         assertThat(plan.snapshot().persisted()).isFalse();
+    }
+
+    @Test
+    void confirmedReplacePlanSurvivesContextCloseAndSerializationFailure() {
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
+        LegalEditorialPlanResult result = mock(LegalEditorialPlanResult.class);
+        LegalEditorialCliExecutionState state =
+                LegalEditorialCliExecutionState.recognized(Command.PLAN_REPLACE);
+        state.releaseValidated(release);
+        state.editorialPlanConfirmed(editorialPlan);
+        state.contextOpened();
+        state.operationInvocationStarted();
+        state.resultReceived(result);
+        state.contextClosed();
+        state.reportSerializationStarted();
+        state.reportSerializationFailed();
+
+        LegalEditorialCliExecutionState.Snapshot snapshot = state.snapshot();
+        assertThat(snapshot.editorialPlan()).containsSame(editorialPlan);
+        assertThat(snapshot.planResult()).containsSame(result);
+        assertThat(snapshot.persisted()).isFalse();
+    }
+
+    @Test
+    void replaceCannotOpenContextBeforePlanConfirmationOrConfirmAnotherCommand() {
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
+        LegalEditorialCliExecutionState replace =
+                LegalEditorialCliExecutionState.recognized(Command.PLAN_REPLACE);
+        replace.releaseValidated(release);
+
+        assertThatThrownBy(replace::contextOpened).isInstanceOf(IllegalStateException.class);
+        replace.editorialPlanConfirmed(editorialPlan);
+        assertThatThrownBy(() -> replace.editorialPlanConfirmed(editorialPlan))
+                .isInstanceOf(IllegalStateException.class);
+
+        LegalEditorialCliExecutionState promote =
+                LegalEditorialCliExecutionState.recognized(Command.PLAN_PROMOTE);
+        promote.releaseValidated(release);
+        assertThatThrownBy(() -> promote.editorialPlanConfirmed(editorialPlan))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

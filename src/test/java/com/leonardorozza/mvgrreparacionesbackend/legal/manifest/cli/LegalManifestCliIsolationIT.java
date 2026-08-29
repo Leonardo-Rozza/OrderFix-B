@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReplaceScopeGuard;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalImportDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestImportService;
@@ -291,6 +292,8 @@ class LegalManifestCliIsolationIT {
                         .hasSize(1);
                 assertThat(context.getBeansOfType(LegalEditorialPlanService.class)).hasSize(1);
                 assertThat(context.getBeansOfType(LegalEditorialApplyService.class)).hasSize(1);
+                assertThat(context.getBeansOfType(LegalEditorialReplaceScopeGuard.class))
+                        .hasSize(1);
                 assertThat(context.getBeansOfType(LegalManifestImportService.class)).isEmpty();
                 assertThat(context.getBeansOfType(LegalManifestDryRunService.class)).isEmpty();
 

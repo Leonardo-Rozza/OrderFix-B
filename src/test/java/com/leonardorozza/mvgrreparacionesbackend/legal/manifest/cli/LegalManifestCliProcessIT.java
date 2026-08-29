@@ -48,6 +48,20 @@ class LegalManifestCliProcessIT {
             "mvgr-reparaciones-backend-0.0.1-SNAPSHOT";
     private static final String GOLDEN_MANIFEST =
             "/legal/manifest/release-valid-v1/publication-manifest.json";
+    private static final String GOLDEN_MANIFEST_SHA256 =
+            "b3b452c8f6f4deb459c31524466936f50265c165c772d50ea75364b8c9c6f3e1";
+    private static final String REPLACE_PLAN =
+            "/legal/editorial/replace-valid-v1/editorial-plan.json";
+    private static final String REPLACE_OPERATION_ID =
+            "00000000-0000-0000-0000-000000000010";
+    private static final String REPLACE_PLAN_SHA256 =
+            "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
+    private static final String ONE_TO_ONE_REPLACE_PLAN =
+            "/legal/editorial/replace-one-to-one-release-valid-v1/editorial-plan.json";
+    private static final String ONE_TO_ONE_REPLACE_OPERATION_ID =
+            "00000000-0000-0000-0000-000000000012";
+    private static final String ONE_TO_ONE_REPLACE_PLAN_SHA256 =
+            "00af762750acea6e03a6bb43896a4411c8f725910cc0933f225113fb39d49bd0";
     private static final String NORMAL_START_CLASS =
             "com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication";
     private static final String LEGAL_CLI_START_CLASS =
@@ -282,6 +296,118 @@ class LegalManifestCliProcessIT {
     }
 
     @Test
+    void packagedPlanReplaceBlocksPlanBundleMismatchBeforeEnvironment()
+            throws Exception {
+        Path editorialPlan = Path.of(Objects.requireNonNull(
+                LegalManifestCliProcessIT.class.getResource(REPLACE_PLAN)).toURI());
+        ProcessResult process = executeCli(
+                false,
+                List.of(
+                        "plan-replace",
+                        "--manifest=" + copiedManifest.toAbsolutePath(),
+                        "--editorial-plan=" + editorialPlan.toAbsolutePath(),
+                        "--confirm-publication-id=release-valid-v1",
+                        "--confirm-manifest-sha256=" + GOLDEN_MANIFEST_SHA256,
+                        "--confirm-operation-id=" + REPLACE_OPERATION_ID,
+                        "--confirm-editorial-plan-sha256=" + REPLACE_PLAN_SHA256),
+                Map.of());
+
+        assertThat(process.exitCode()).isEqualTo(2);
+        assertThat(process.stderr()).isEmpty();
+        JsonNode report = JSON.readTree(process.stdout());
+        assertExactFields(report, EDITORIAL_REPORT_FIELDS);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("plan-replace");
+        assertThat(report.path("status").textValue()).isEqualTo("BLOCKED");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("BLOCKED");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(REPLACE_OPERATION_ID);
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(REPLACE_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("READY");
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(report.path("issues")).singleElement().satisfies(issue -> {
+            assertThat(issue.path("code").textValue())
+                    .isEqualTo("REPLACEMENT_MAPPING_INVALID");
+            assertThat(issue.path("location").textValue())
+                    .isEqualTo("cli/editorial/plan-binding");
+        });
+        assertThat(process.stdout()).doesNotContain(
+                copiedManifest.toAbsolutePath().toString(),
+                editorialPlan.toAbsolutePath().toString());
+    }
+
+    @Test
+    void packagedPlanReplacePassesOneToOneScopeAndStopsAtEnvironmentBoundary()
+            throws Exception {
+        Path editorialPlan = Path.of(Objects.requireNonNull(
+                LegalManifestCliProcessIT.class.getResource(ONE_TO_ONE_REPLACE_PLAN)).toURI());
+        ProcessResult process = executeCli(
+                false,
+                List.of(
+                        "plan-replace",
+                        "--manifest=" + copiedManifest.toAbsolutePath(),
+                        "--editorial-plan=" + editorialPlan.toAbsolutePath(),
+                        "--confirm-publication-id=release-valid-v1",
+                        "--confirm-manifest-sha256=" + GOLDEN_MANIFEST_SHA256,
+                        "--confirm-operation-id=" + ONE_TO_ONE_REPLACE_OPERATION_ID,
+                        "--confirm-editorial-plan-sha256="
+                                + ONE_TO_ONE_REPLACE_PLAN_SHA256),
+                Map.of());
+
+        assertThat(process.exitCode()).isEqualTo(3);
+        assertThat(process.stderr()).isEmpty();
+        assertThat(process.stdout())
+                .endsWith("\n")
+                .doesNotEndWith("\n\n")
+                .doesNotContain(
+                        "\r",
+                        PROCESS_SECRET,
+                        copiedManifest.toAbsolutePath().toString(),
+                        editorialPlan.toAbsolutePath().toString());
+        JsonNode report = JSON.readTree(process.stdout());
+        assertExactFields(report, EDITORIAL_REPORT_FIELDS);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("plan-replace");
+        assertThat(report.path("status").textValue()).isEqualTo("ERROR");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("publication").path("publicationId").textValue())
+                .isEqualTo("release-valid-v1");
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(ONE_TO_ONE_REPLACE_OPERATION_ID);
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(ONE_TO_ONE_REPLACE_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("READY");
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(report.path("issues")).singleElement().satisfies(issue -> {
+            assertThat(issue.path("code").textValue())
+                    .isEqualTo("EDITORIAL_DB_CONFIGURATION_INVALID");
+            assertThat(issue.path("location").textValue())
+                    .isEqualTo("cli/editorial/environment");
+        });
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+    }
+
+    @Test
     void dryRunGoldenReleasePassesAgainstMigratedPostgreSqlV27AndRollsBack()
             throws Exception {
         Flyway.configure()
@@ -323,12 +449,22 @@ class LegalManifestCliProcessIT {
             String command,
             Path manifest,
             Map<String, String> environmentOverrides) throws Exception {
-        ProcessBuilder processBuilder = new ProcessBuilder(
+        return executeCli(
+                configureDatabase,
+                List.of(command, "--manifest=" + manifest.toAbsolutePath()),
+                environmentOverrides);
+    }
+
+    private ProcessResult executeCli(
+            boolean configureDatabase,
+            List<String> arguments,
+            Map<String, String> environmentOverrides) throws Exception {
+        List<String> processCommand = new ArrayList<>(List.of(
                 javaExecutable.toString(),
                 "-jar",
-                legalCliJar.toString(),
-                command,
-                "--manifest=" + manifest.toAbsolutePath());
+                legalCliJar.toString()));
+        processCommand.addAll(arguments);
+        ProcessBuilder processBuilder = new ProcessBuilder(processCommand);
         processBuilder.directory(temporaryDirectory.toFile());
         processBuilder.redirectErrorStream(false);
         Map<String, String> environment = processBuilder.environment();

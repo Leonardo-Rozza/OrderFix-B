@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-29
 
-Estado: en ejecución — Subcorte 6A completado
+Estado: en ejecución — Subcortes 6A y 6B completados
 
 Diseño aprobado:
 
@@ -104,6 +104,8 @@ Commit:
 
 ## Subcorte 6B — Plan REPLACE y contrato CLI
 
+Estado: completado el 2026-08-29.
+
 ### Objetivo
 
 Exponer `plan-replace` sin escritura, con segunda ruta, cuatro confirmaciones y reporte v3 exacto.
@@ -149,6 +151,36 @@ git status --short
 Commit:
 
     feat(legal): expone plan de cutover editorial
+
+### Evidencia de cierre 6B
+
+- `plan-replace` es estrictamente read-only y exige exactamente siete tokens: comando, dos rutas
+  y cuatro confirmaciones literales. El parser acepta cualquier orden de los seis argumentos
+  nombrados y rechaza duplicados, extras, aliases, forma separada, UUID no canónico y SHA-256 que
+  no sea lowercase de 64 caracteres.
+- El preflight acredita bundle, plan, confirmaciones, binding target plan↔bundle y alcance 1→1
+  antes de resolver entorno, abrir Spring o tocar JDBC. Una discrepancia de target se bloquea en
+  `cli/editorial/plan-binding`; la defensa equivalente del planner permanece en profundidad.
+- La CLI invoca únicamente `LegalEditorialPlanService.planReplace`. No se agregó `apply-replace`,
+  DML ni otra ruta mutante. El estado conserva la identidad del plan sólo después de confirmar
+  tipo, operationId y SHA, y `persisted` permanece siempre en `false` para este comando.
+- El reporte v3 emite `operationType=REPLACE`. `APPLICABLE` contiene observación y delta; los
+  fallos posteriores a la confirmación conservan sólo la identidad input-safe del plan y dejan
+  nulos UUID, observación, readiness y conteos derivados de base. PROMOTE y los reportes v1/v2
+  conservaron su contrato y sus bytes acreditados.
+- TDD: el primer focal falló por los símbolos todavía ausentes; la prueba adicional de binding
+  falló porque alcanzaba el entorno antes del fix. Puerta focal final en Java 21: 885 tests, 0
+  fallos, 0 errores y 0 omitidos.
+- JAR empaquetado y aislamiento: suite unitaria completa de 1.810 tests y 12 integraciones
+  seleccionadas, todas verdes. `LegalManifestCliProcessIT` cubre tanto el rechazo plan↔bundle
+  como un plan REPLACE 1→1 válido que supera el guard y se detiene de forma segura en el límite de
+  entorno, sin filtrar rutas ni secretos.
+- Regresión integral final: 1.810 tests unitarios y 169 tests de integración sobre H2,
+  PostgreSQL 16/Flyway V27 y procesos empaquetados, sin fallos, errores ni omitidos. También pasó
+  el control de ausencia de propiedades secretas en los JAR.
+- La auditoría inicial detectó los huecos de binding temprano y proceso 1→1; ambos se corrigieron
+  antes del commit. Tres reauditorías independientes cerraron sin hallazgos P0–P2. No se
+  modificaron V27, grants, endpoints, JPA, frontend, contenido legal ni despliegue; no hubo push.
 
 ## Subcorte 6C — Writers y postestado común
 

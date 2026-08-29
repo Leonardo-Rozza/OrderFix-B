@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
@@ -8,6 +9,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyReceipt;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
@@ -39,6 +42,10 @@ class LegalEditorialReportTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
     private static final String FINGERPRINT =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final UUID OPERATION_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000010");
+    private static final String PLAN_SHA256 =
+            "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
 
     private static ValidatedRelease release;
 
@@ -134,6 +141,51 @@ class LegalEditorialReportTest {
     }
 
     @Test
+    void planReplaceRetainsConfirmedIdentityButOnlyApplicableHasObservationMetadata() {
+        ValidatedEditorialPlan editorialPlan = validatedReplacePlan();
+        LegalEditorialReport applicable = LegalEditorialReport.forPlanReplace(
+                release,
+                editorialPlan,
+                planResult(
+                        LegalManifestStatus.PASS,
+                        LegalEditorialPlanResult.Outcome.APPLICABLE,
+                        List.of()));
+        LegalEditorialReport blocked = LegalEditorialReport.forPlanReplace(
+                release,
+                editorialPlan,
+                planResult(
+                        LegalManifestStatus.BLOCKED,
+                        LegalEditorialPlanResult.Outcome.BLOCKED,
+                        List.of(issue(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+
+        assertThat(applicable.command()).isEqualTo("plan-replace");
+        assertThat(applicable.persisted()).isFalse();
+        assertThat(applicable.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.REPLACE);
+        assertThat(applicable.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.APPLICABLE);
+        assertThat(applicable.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(applicable.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(applicable.plan().changeRequired()).isTrue();
+        assertThat(applicable.plan().observedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(applicable.publication().publicationUuid()).isEqualTo(PUBLICATION_UUID);
+        assertThat(applicable.readiness().value()).isEqualTo(LegalEditorialReadiness.READY);
+        assertThat(applicable.counts().delta()).isEqualTo(deltaCounts());
+
+        assertThat(blocked.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(blocked.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(blocked.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(blocked.plan().changeRequired()).isNull();
+        assertThat(blocked.plan().observedAt()).isNull();
+        assertThat(blocked.readiness()).isNull();
+        assertThat(blocked.publication().publicationUuid()).isNull();
+        assertThat(blocked.counts().state()).isNull();
+        assertThat(blocked.counts().delta()).isNull();
+    }
+
+    @Test
     void applyPromoteKeepsSuccessRollbackAndUnknownPersistenceDistinct() {
         LegalEditorialReport applied = LegalEditorialReport.forApplyPromote(
                 release,
@@ -198,7 +250,7 @@ class LegalEditorialReportTest {
     }
 
     @Test
-    void knownPreflightFailuresRemainTypedForAllThreeCommands() {
+    void knownPreflightFailuresRemainTypedForAllFourCommands() {
         LegalManifestIssue blockedIssue = issue(
                 LegalManifestIssueCode.CLI_ARGUMENTS_INVALID,
                 "cli/editorial/arguments");
@@ -208,6 +260,11 @@ class LegalEditorialReportTest {
                 Command.PLAN_PROMOTE, null, blockedIssue);
         LegalEditorialReport apply = LegalEditorialReport.forKnownFailure(
                 Command.APPLY_PROMOTE, null, blockedIssue);
+        LegalEditorialReport replaceBeforeConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.PLAN_REPLACE,
+                        null,
+                        blockedIssue);
 
         assertThat(readiness.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(readiness.persisted()).isFalse();
@@ -216,10 +273,33 @@ class LegalEditorialReportTest {
                 .isEqualTo(LegalEditorialReport.Outcome.BLOCKED);
         assertThat(apply.operation().outcome())
                 .isEqualTo(LegalEditorialReport.Outcome.BLOCKED);
-        for (LegalEditorialReport failure : List.of(readiness, plan, apply)) {
+        assertThat(replaceBeforeConfirmation.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.REPLACE);
+        assertThat(replaceBeforeConfirmation.plan()).isNull();
+        for (LegalEditorialReport failure : List.of(
+                readiness,
+                plan,
+                apply,
+                replaceBeforeConfirmation)) {
             assertThat(failure.publication()).isNull();
             assertThat(failure.counts()).isNull();
         }
+
+        ValidatedEditorialPlan editorialPlan = validatedReplacePlan();
+        LegalEditorialReport replaceAfterConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.PLAN_REPLACE,
+                        release,
+                        editorialPlan,
+                        issue(
+                                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                                "documentReplacementBatches"));
+        assertThat(replaceAfterConfirmation.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(replaceAfterConfirmation.plan().editorialPlanSha256())
+                .isEqualTo(PLAN_SHA256);
+        assertThat(replaceAfterConfirmation.plan().changeRequired()).isNull();
+        assertThat(replaceAfterConfirmation.plan().observedAt()).isNull();
+        assertNoDatabaseMetadata(replaceAfterConfirmation);
 
         LegalEditorialReport operational = LegalEditorialReport.forKnownFailure(
                 Command.APPLY_PROMOTE,
@@ -338,6 +418,17 @@ class LegalEditorialReportTest {
         when(result.issues()).thenReturn(issues);
         when(result.omittedIssueCount()).thenReturn(0);
         return result;
+    }
+
+    private static ValidatedEditorialPlan validatedReplacePlan() {
+        LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
+        when(model.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
+        when(plan.plan()).thenReturn(model);
+        when(plan.operationType()).thenReturn(OperationType.REPLACE);
+        when(plan.operationId()).thenReturn(OPERATION_ID);
+        when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
+        return plan;
     }
 
     private static LegalEditorialReadinessObservation observation() {

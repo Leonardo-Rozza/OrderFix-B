@@ -1,5 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
@@ -14,6 +16,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReplaceScopeGuard;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalImportDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestDryRunService.DryRunResult;
@@ -48,6 +51,8 @@ public final class LegalManifestCli {
             "ordenfix-legal-editorial-cli-internal";
     private static final String IMPORT_ISSUE_LOCATION = "cli/import";
     private static final String EDITORIAL_ISSUE_LOCATION = "cli/editorial";
+    private static final String EDITORIAL_PLAN_BINDING_LOCATION =
+            "cli/editorial/plan-binding";
     private static final String EMERGENCY_REPORT =
             "{\"reportVersion\":1,\"command\":null,\"status\":\"ERROR\","
                     + "\"persisted\":false,\"publication\":null,\"counts\":null,"
@@ -69,6 +74,8 @@ public final class LegalManifestCli {
     private final Function<LegalImportEnvironment, ConfigurableApplicationContext>
             importContextFactory;
     private final LegalEditorialReportWriter editorialReportWriter;
+    private final LegalEditorialPlanValidator editorialPlanValidator;
+    private final LegalEditorialReplaceScopeGuard editorialReplaceScopeGuard;
     private final Function<LegalEditorialArguments.Command,
             LegalManifestValidation<LegalEditorialEnvironment>>
             editorialEnvironmentResolver;
@@ -83,6 +90,8 @@ public final class LegalManifestCli {
                 LegalImportEnvironment::resolve,
                 LegalManifestCli::openImportContext,
                 new LegalEditorialReportWriter(),
+                new LegalEditorialPlanValidator(),
+                new LegalEditorialReplaceScopeGuard(),
                 LegalEditorialEnvironment::resolve,
                 LegalManifestCli::openEditorialContext);
     }
@@ -97,6 +106,8 @@ public final class LegalManifestCli {
                 LegalImportEnvironment::resolve,
                 LegalManifestCli::openImportContext,
                 new LegalEditorialReportWriter(),
+                new LegalEditorialPlanValidator(),
+                new LegalEditorialReplaceScopeGuard(),
                 LegalEditorialEnvironment::resolve,
                 LegalManifestCli::openEditorialContext);
     }
@@ -116,6 +127,8 @@ public final class LegalManifestCli {
                 importEnvironmentResolver,
                 importContextFactory,
                 new LegalEditorialReportWriter(),
+                new LegalEditorialPlanValidator(),
+                new LegalEditorialReplaceScopeGuard(),
                 LegalEditorialEnvironment::resolve,
                 LegalManifestCli::openEditorialContext);
     }
@@ -129,6 +142,35 @@ public final class LegalManifestCli {
             Function<LegalImportEnvironment, ConfigurableApplicationContext>
                     importContextFactory,
             LegalEditorialReportWriter editorialReportWriter,
+            Function<LegalEditorialArguments.Command,
+                    LegalManifestValidation<LegalEditorialEnvironment>>
+                    editorialEnvironmentResolver,
+            Function<LegalEditorialEnvironment, ConfigurableApplicationContext>
+                    editorialContextFactory) {
+        this(
+                validator,
+                reportWriter,
+                importReportWriter,
+                importEnvironmentResolver,
+                importContextFactory,
+                editorialReportWriter,
+                new LegalEditorialPlanValidator(),
+                new LegalEditorialReplaceScopeGuard(),
+                editorialEnvironmentResolver,
+                editorialContextFactory);
+    }
+
+    LegalManifestCli(
+            LegalManifestValidator validator,
+            LegalManifestReportWriter reportWriter,
+            LegalManifestImportReportWriter importReportWriter,
+            Supplier<LegalManifestValidation<LegalImportEnvironment>>
+                    importEnvironmentResolver,
+            Function<LegalImportEnvironment, ConfigurableApplicationContext>
+                    importContextFactory,
+            LegalEditorialReportWriter editorialReportWriter,
+            LegalEditorialPlanValidator editorialPlanValidator,
+            LegalEditorialReplaceScopeGuard editorialReplaceScopeGuard,
             Function<LegalEditorialArguments.Command,
                     LegalManifestValidation<LegalEditorialEnvironment>>
                     editorialEnvironmentResolver,
@@ -148,6 +190,12 @@ public final class LegalManifestCli {
         this.editorialReportWriter = Objects.requireNonNull(
                 editorialReportWriter,
                 "editorialReportWriter");
+        this.editorialPlanValidator = Objects.requireNonNull(
+                editorialPlanValidator,
+                "editorialPlanValidator");
+        this.editorialReplaceScopeGuard = Objects.requireNonNull(
+                editorialReplaceScopeGuard,
+                "editorialReplaceScopeGuard");
         this.editorialEnvironmentResolver = Objects.requireNonNull(
                 editorialEnvironmentResolver,
                 "editorialEnvironmentResolver");
@@ -446,6 +494,20 @@ public final class LegalManifestCli {
 
         ValidatedRelease release = staticValidation.value().orElseThrow();
         executionState.releaseValidated(release);
+        ValidatedEditorialPlan editorialPlan = null;
+        if (command.requiresEditorialPlan()) {
+            LegalManifestValidation<ValidatedEditorialPlan> planValidation =
+                    editorialPlanValidator.validate(
+                            arguments.editorialPlanPath().orElseThrow());
+            if (!planValidation.passed()) {
+                return LegalEditorialReport.forKnownFailure(
+                        command,
+                        release,
+                        planValidation);
+            }
+            editorialPlan = planValidation.value().orElseThrow();
+        }
+
         LegalManifestValidation<ValidatedRelease> confirmation =
                 arguments.confirmation().verify(release);
         if (!confirmation.passed()) {
@@ -453,6 +515,45 @@ public final class LegalManifestCli {
                     command,
                     release,
                     confirmation);
+        }
+
+        if (editorialPlan != null) {
+            LegalManifestValidation<ValidatedEditorialPlan> planConfirmation =
+                    arguments.planConfirmation()
+                            .orElseThrow()
+                            .verify(
+                                    command.editorialPlanOperationType().orElseThrow(),
+                                    editorialPlan);
+            if (!planConfirmation.passed()) {
+                return LegalEditorialReport.forKnownFailure(
+                        command,
+                        release,
+                        planConfirmation);
+            }
+            editorialPlan = planConfirmation.value().orElseThrow();
+            executionState.editorialPlanConfirmed(editorialPlan);
+
+            LegalManifestValidation<ValidatedEditorialPlan> planBinding =
+                    verifyEditorialPlanBinding(release, editorialPlan);
+            if (!planBinding.passed()) {
+                return LegalEditorialReport.forKnownFailure(
+                        command,
+                        release,
+                        editorialPlan,
+                        planBinding);
+            }
+            editorialPlan = planBinding.value().orElseThrow();
+
+            LegalManifestValidation<ValidatedEditorialPlan> supportedScope =
+                    editorialReplaceScopeGuard.validate(editorialPlan);
+            if (!supportedScope.passed()) {
+                return LegalEditorialReport.forKnownFailure(
+                        command,
+                        release,
+                        editorialPlan,
+                        supportedScope);
+            }
+            editorialPlan = supportedScope.value().orElseThrow();
         }
 
         LegalManifestValidation<LegalEditorialEnvironment> environmentValidation =
@@ -463,6 +564,7 @@ public final class LegalManifestCli {
             return LegalEditorialReport.forKnownFailure(
                     command,
                     release,
+                    editorialPlan,
                     environmentValidation);
         }
 
@@ -471,15 +573,40 @@ public final class LegalManifestCli {
                 editorialContextFactory.apply(environment),
                 "editorial context")) {
             executionState.contextOpened();
-            invokeEditorialOperation(command, release, context, executionState);
+            invokeEditorialOperation(
+                    command,
+                    release,
+                    editorialPlan,
+                    context,
+                    executionState);
         }
         executionState.contextClosed();
         return fallbackEditorialReport(executionState);
     }
 
+    private static LegalManifestValidation<ValidatedEditorialPlan>
+            verifyEditorialPlanBinding(
+                    ValidatedRelease release,
+                    ValidatedEditorialPlan editorialPlan) {
+        ValidatedRelease requiredRelease = Objects.requireNonNull(release, "release");
+        ValidatedEditorialPlan requiredPlan = Objects.requireNonNull(
+                editorialPlan,
+                "editorialPlan");
+        if (!requiredRelease.plan().manifest().publicationId()
+                        .equals(requiredPlan.plan().targetPublicationId())
+                || !requiredRelease.plan().manifestSha256()
+                        .equals(requiredPlan.plan().targetManifestSha256())) {
+            return LegalManifestValidation.failure(LegalManifestIssue.at(
+                    LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                    EDITORIAL_PLAN_BINDING_LOCATION));
+        }
+        return LegalManifestValidation.pass(requiredPlan);
+    }
+
     private static void invokeEditorialOperation(
             LegalEditorialArguments.Command command,
             ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan,
             ConfigurableApplicationContext context,
             LegalEditorialCliExecutionState executionState) {
         switch (command) {
@@ -502,6 +629,15 @@ public final class LegalManifestCli {
                         context.getBean(LegalEditorialApplyService.class);
                 executionState.operationInvocationStarted();
                 LegalEditorialApplyResult result = service.applyPromote(release);
+                executionState.resultReceived(result);
+            }
+            case PLAN_REPLACE -> {
+                LegalEditorialPlanService service =
+                        context.getBean(LegalEditorialPlanService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialPlanResult result = service.planReplace(
+                        release,
+                        Objects.requireNonNull(editorialPlan, "editorialPlan"));
                 executionState.resultReceived(result);
             }
         }
@@ -623,9 +759,17 @@ public final class LegalManifestCli {
                     snapshot.readinessResult().orElseThrow());
         }
         if (snapshot.planResult().isPresent()) {
-            return LegalEditorialReport.forPlanPromote(
-                    Objects.requireNonNull(release, "release"),
-                    snapshot.planResult().orElseThrow());
+            return switch (snapshot.command()) {
+                case PLAN_PROMOTE -> LegalEditorialReport.forPlanPromote(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.planResult().orElseThrow());
+                case PLAN_REPLACE -> LegalEditorialReport.forPlanReplace(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.editorialPlan().orElseThrow(),
+                        snapshot.planResult().orElseThrow());
+                default -> throw new IllegalStateException(
+                        "Un resultado de plan no coincide con el comando editorial");
+            };
         }
         if (snapshot.applyResult().isPresent()) {
             return LegalEditorialReport.forApplyPromote(
@@ -639,6 +783,7 @@ public final class LegalManifestCli {
         return LegalEditorialReport.forKnownFailure(
                 snapshot.command(),
                 release,
+                snapshot.editorialPlan().orElse(null),
                 LegalManifestIssue.at(
                         LegalManifestIssueCode.EDITORIAL_CLI_OPERATION_FAILED,
                         EDITORIAL_ISSUE_LOCATION));

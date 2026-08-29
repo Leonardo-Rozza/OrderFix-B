@@ -44,7 +44,9 @@ class LegalEditorialEnvironmentTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = Command.class, names = {"READINESS", "PLAN_PROMOTE"})
+    @EnumSource(
+            value = Command.class,
+            names = {"READINESS", "PLAN_PROMOTE", "PLAN_REPLACE"})
     void readOnlyCommandsDoNotRequireOrInterpretTheMutationEnableFlag(Command command) {
         Map<String, String> environment = baseEnvironment();
         environment.put(LegalEditorialEnvironment.ENABLED_VARIABLE, "hostile-non-boolean");

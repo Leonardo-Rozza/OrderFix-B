@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "operationId": "00000000-0000-0000-0000-000000000012",
+  "operationType": "REPLACE",
+  "expectedCurrentPublicationId": "source-process-v1",
+  "expectedCurrentManifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expectedEditorialStateFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "targetPublicationId": "release-valid-v1",
+  "targetManifestSha256": "b3b452c8f6f4deb459c31524466936f50265c165c772d50ea75364b8c9c6f3e1",
+  "documentAdditions": [],
+  "documentReuses": [],
+  "documentReplacementBatches": [
+    {
+      "replacementBatchId": "00000000-0000-0000-0000-000000001002",
+      "contexts": ["REGISTRO"],
+      "predecessors": [
+        {
+          "documentVersionId": "00000000-0000-0000-0000-000000000110",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "successors": [
+        {
+          "documentVersionId": "00000000-0000-0000-0000-000000000210",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ]
+    }
+  ],
+  "documentRetirements": [],
+  "requirementAdditions": [],
+  "requirementReuses": [],
+  "requirementReplacements": [],
+  "requirementRetirements": [],
+  "expectedReadinessAfter": "READY",
+  "acknowledgeFailClosedGap": false
+}

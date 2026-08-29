@@ -832,7 +832,7 @@ Commit:
 
 ## Corte 6 — Cutover uno a uno, adiciones y reutilización
 
-Estado: en ejecución; Subcorte 6A completado el 2026-08-29.
+Estado: en ejecución; Subcortes 6A y 6B completados el 2026-08-29.
 
 Diseño específico aprobado:
 

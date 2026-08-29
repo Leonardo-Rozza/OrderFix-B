@@ -95,7 +95,7 @@ public final class LegalEditorialReportWriter {
                 "operationId",
                 plan.operationId() == null ? null : plan.operationId().toString());
         writeNullableString(json, "editorialPlanSha256", plan.editorialPlanSha256());
-        json.writeBooleanField("changeRequired", plan.changeRequired());
+        writeNullableBoolean(json, "changeRequired", plan.changeRequired());
         writeNullableInstant(json, "observedAt", plan.observedAt());
         json.writeStringField(
                 "expectedReadinessAfter",

@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
@@ -21,6 +22,7 @@ final class LegalEditorialCliExecutionState {
     enum Phase {
         COMMAND_RECOGNIZED,
         RELEASE_VALIDATED,
+        EDITORIAL_PLAN_CONFIRMED,
         CONTEXT_OPENED,
         OPERATION_INVOCATION_STARTED,
         RESULT_RECEIVED,
@@ -32,6 +34,7 @@ final class LegalEditorialCliExecutionState {
     private final Command command;
     private Phase phase = Phase.COMMAND_RECOGNIZED;
     private ValidatedRelease release;
+    private ValidatedEditorialPlan editorialPlan;
     private LegalEditorialReadinessResult readinessResult;
     private LegalEditorialPlanResult planResult;
     private LegalEditorialApplyResult applyResult;
@@ -53,8 +56,17 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void contextOpened() {
-        requirePhase(Phase.RELEASE_VALIDATED);
+        requirePhase(command.requiresEditorialPlan()
+                ? Phase.EDITORIAL_PLAN_CONFIRMED
+                : Phase.RELEASE_VALIDATED);
         phase = Phase.CONTEXT_OPENED;
+    }
+
+    synchronized void editorialPlanConfirmed(ValidatedEditorialPlan validatedPlan) {
+        requireCommand(Command.PLAN_REPLACE);
+        requirePhase(Phase.RELEASE_VALIDATED);
+        editorialPlan = Objects.requireNonNull(validatedPlan, "editorialPlan");
+        phase = Phase.EDITORIAL_PLAN_CONFIRMED;
     }
 
     synchronized void operationInvocationStarted() {
@@ -71,7 +83,9 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void resultReceived(LegalEditorialPlanResult result) {
-        requireCommand(Command.PLAN_PROMOTE);
+        if (command != Command.PLAN_PROMOTE && command != Command.PLAN_REPLACE) {
+            throw invalidTransition();
+        }
         requireInvocation();
         planResult = Objects.requireNonNull(result, "result");
         phase = Phase.RESULT_RECEIVED;
@@ -109,6 +123,7 @@ final class LegalEditorialCliExecutionState {
                 command,
                 phase,
                 release,
+                editorialPlan,
                 readinessResult,
                 planResult,
                 applyResult,
@@ -142,6 +157,7 @@ final class LegalEditorialCliExecutionState {
         private final Command command;
         private final Phase phase;
         private final ValidatedRelease release;
+        private final ValidatedEditorialPlan editorialPlan;
         private final LegalEditorialReadinessResult readinessResult;
         private final LegalEditorialPlanResult planResult;
         private final LegalEditorialApplyResult applyResult;
@@ -151,6 +167,7 @@ final class LegalEditorialCliExecutionState {
                 Command command,
                 Phase phase,
                 ValidatedRelease release,
+                ValidatedEditorialPlan editorialPlan,
                 LegalEditorialReadinessResult readinessResult,
                 LegalEditorialPlanResult planResult,
                 LegalEditorialApplyResult applyResult,
@@ -158,6 +175,7 @@ final class LegalEditorialCliExecutionState {
             this.command = Objects.requireNonNull(command, "command");
             this.phase = Objects.requireNonNull(phase, "phase");
             this.release = release;
+            this.editorialPlan = editorialPlan;
             this.readinessResult = readinessResult;
             this.planResult = planResult;
             this.applyResult = applyResult;
@@ -174,6 +192,10 @@ final class LegalEditorialCliExecutionState {
 
         Optional<ValidatedRelease> release() {
             return Optional.ofNullable(release);
+        }
+
+        Optional<ValidatedEditorialPlan> editorialPlan() {
+            return Optional.ofNullable(editorialPlan);
         }
 
         Optional<LegalEditorialReadinessResult> readinessResult() {
@@ -196,8 +218,7 @@ final class LegalEditorialCliExecutionState {
             if (readinessResult != null || planResult != null) {
                 return Boolean.FALSE;
             }
-            boolean applyMayHaveReachedItsTransaction =
-                    command == Command.APPLY_PROMOTE && operationInvoked;
+            boolean applyMayHaveReachedItsTransaction = command.mutating() && operationInvoked;
             return applyMayHaveReachedItsTransaction ? null : Boolean.FALSE;
         }
     }

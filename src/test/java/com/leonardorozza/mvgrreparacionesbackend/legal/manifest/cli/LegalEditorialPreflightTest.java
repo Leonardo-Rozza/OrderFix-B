@@ -1,15 +1,21 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReplaceScopeGuard;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -27,6 +33,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -41,11 +48,21 @@ class LegalEditorialPreflightTest {
 
     private static final String GOLDEN_MANIFEST =
             "/legal/manifest/release-valid-v1/publication-manifest.json";
+    private static final Path EDITORIAL_PLAN_PATH =
+            Path.of("replace-one-to-one-v1", "editorial-plan.json");
+    private static final UUID OPERATION_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000010");
+    private static final String EDITORIAL_PLAN_SHA256 =
+            "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
 
     private static ValidatedRelease release;
     private static Path manifestPath;
 
     private LegalManifestValidator validator;
+    private LegalEditorialPlanValidator editorialPlanValidator;
+    private LegalEditorialReplaceScopeGuard replaceScopeGuard;
+    private LegalEditorialPlanV1 editorialPlanModel;
+    private ValidatedEditorialPlan editorialPlan;
     private Function<Command, LegalManifestValidation<LegalEditorialEnvironment>>
             environmentResolver;
     private Function<LegalEditorialEnvironment, ConfigurableApplicationContext>
@@ -71,6 +88,20 @@ class LegalEditorialPreflightTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         validator = mock(LegalManifestValidator.class);
+        editorialPlanValidator = mock(LegalEditorialPlanValidator.class);
+        replaceScopeGuard = mock(LegalEditorialReplaceScopeGuard.class);
+        editorialPlanModel = mock(LegalEditorialPlanV1.class);
+        when(editorialPlanModel.expectedReadinessAfter())
+                .thenReturn(LegalEditorialReadiness.READY);
+        when(editorialPlanModel.targetPublicationId())
+                .thenReturn(release.plan().manifest().publicationId());
+        when(editorialPlanModel.targetManifestSha256())
+                .thenReturn(release.plan().manifestSha256());
+        editorialPlan = mock(ValidatedEditorialPlan.class);
+        when(editorialPlan.plan()).thenReturn(editorialPlanModel);
+        when(editorialPlan.operationType()).thenReturn(OperationType.REPLACE);
+        when(editorialPlan.operationId()).thenReturn(OPERATION_ID);
+        when(editorialPlan.editorialPlanSha256()).thenReturn(EDITORIAL_PLAN_SHA256);
         environmentResolver = mock(Function.class);
         contextFactory = mock(Function.class);
         context = mock(ConfigurableApplicationContext.class);
@@ -95,6 +126,8 @@ class LegalEditorialPreflightTest {
                 .contains(LegalManifestIssueCode.CLI_ARGUMENTS_INVALID.name());
         verifyNoInteractions(
                 validator,
+                editorialPlanValidator,
+                replaceScopeGuard,
                 environmentResolver,
                 contextFactory,
                 context,
@@ -116,6 +149,7 @@ class LegalEditorialPreflightTest {
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .contains(LegalManifestIssueCode.MANIFEST_SCHEMA_INVALID.name());
         verify(validator).validate(manifestPath);
+        verifyNoInteractions(editorialPlanValidator, replaceScopeGuard);
         verifyNoEnvironmentContextOrServiceInteractions();
     }
 
@@ -126,6 +160,7 @@ class LegalEditorialPreflightTest {
             ConfirmationMismatch mismatch) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
+        stubSuccessfulPlanPreflight(command);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         int exitCode = cli().runSafely(mismatchedArguments(command, mismatch), output);
@@ -134,6 +169,12 @@ class LegalEditorialPreflightTest {
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .contains(LegalManifestIssueCode.EDITORIAL_CONFIRMATION_MISMATCH.name());
         verify(validator).validate(manifestPath);
+        if (command.requiresEditorialPlan()) {
+            verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+        } else {
+            verifyNoInteractions(editorialPlanValidator);
+        }
+        verifyNoInteractions(replaceScopeGuard);
         verifyNoEnvironmentContextOrServiceInteractions();
     }
 
@@ -142,6 +183,7 @@ class LegalEditorialPreflightTest {
     void environmentFailureStopsBeforeContextAndService(Command command) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
+        stubSuccessfulPlanPreflight(command);
         Map<String, String> variables = command.mutating()
                 ? databaseEnvironment(false)
                 : Map.of();
@@ -156,8 +198,16 @@ class LegalEditorialPreflightTest {
 
         assertThat(exitCode).isEqualTo(LegalManifestStatus.ERROR.exitCode());
         assertThat(output.toString(StandardCharsets.UTF_8)).contains(expectedCode.name());
-        InOrder order = inOrder(validator, environmentResolver);
+        InOrder order = inOrder(
+                validator,
+                editorialPlanValidator,
+                replaceScopeGuard,
+                environmentResolver);
         order.verify(validator).validate(manifestPath);
+        if (command.requiresEditorialPlan()) {
+            order.verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+            order.verify(replaceScopeGuard).validate(editorialPlan);
+        }
         order.verify(environmentResolver).apply(command);
         verifyNoInteractions(
                 contextFactory,
@@ -180,6 +230,7 @@ class LegalEditorialPreflightTest {
                 .orElseThrow();
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
+        stubSuccessfulPlanPreflight(command);
         when(environmentResolver.apply(command))
                 .thenReturn(LegalManifestValidation.pass(environment));
         when(contextFactory.apply(environment)).thenReturn(context);
@@ -191,15 +242,146 @@ class LegalEditorialPreflightTest {
         assertThat(exitCode).isEqualTo(LegalManifestStatus.ERROR.exitCode());
         InOrder order = inOrder(
                 validator,
+                editorialPlanValidator,
+                replaceScopeGuard,
                 environmentResolver,
                 contextFactory,
                 context,
                 serviceFor(command));
         order.verify(validator).validate(manifestPath);
+        if (command.requiresEditorialPlan()) {
+            order.verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+            order.verify(replaceScopeGuard).validate(editorialPlan);
+        }
         order.verify(environmentResolver).apply(command);
         order.verify(contextFactory).apply(environment);
         verifyServiceInvocationInOrder(command, order);
         order.verify(context).close();
+    }
+
+    @ParameterizedTest
+    @EnumSource(PlanConfirmationMismatch.class)
+    void replacePlanConfirmationMismatchStopsBeforeScopeEnvironmentAndSpring(
+            PlanConfirmationMismatch mismatch) {
+        when(validator.validate(manifestPath))
+                .thenReturn(LegalManifestValidation.pass(release));
+        ValidatedEditorialPlan mismatched = mismatchedPlan(mismatch);
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.pass(mismatched));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exitCode = cli().runSafely(
+                validArguments(Command.PLAN_REPLACE),
+                output);
+
+        assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains(LegalManifestIssueCode.EDITORIAL_CONFIRMATION_MISMATCH.name(),
+                        "\"plan\":null");
+        verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+        verifyNoInteractions(
+                replaceScopeGuard,
+                environmentResolver,
+                contextFactory,
+                context,
+                planService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Command.class, names = "PLAN_REPLACE")
+    void planValidationFailureWinsBeforeBundleConfirmationScopeAndEnvironment(Command command) {
+        when(validator.validate(manifestPath))
+                .thenReturn(LegalManifestValidation.pass(release));
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.failure(issue(
+                        LegalManifestIssueCode.EDITORIAL_PLAN_SCHEMA_INVALID,
+                        "editorial-plan.json")));
+        String[] arguments = validArguments(command);
+        arguments[2] = "--confirm-publication-id=wrong-must-not-win";
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exitCode = cli().runSafely(arguments, output);
+
+        assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains(LegalManifestIssueCode.EDITORIAL_PLAN_SCHEMA_INVALID.name())
+                .contains("\"plan\":null")
+                .doesNotContain("wrong-must-not-win");
+        verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+        verifyNoInteractions(replaceScopeGuard, environmentResolver, contextFactory, planService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(PlanTargetMismatch.class)
+    void replaceTargetBindingMismatchStopsBeforeScopeEnvironmentSpringAndJdbc(
+            PlanTargetMismatch mismatch) {
+        when(validator.validate(manifestPath))
+                .thenReturn(LegalManifestValidation.pass(release));
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        String mismatchedValue = switch (mismatch) {
+            case PUBLICATION_ID -> {
+                String value = "release-for-a-different-bundle";
+                when(editorialPlanModel.targetPublicationId()).thenReturn(value);
+                yield value;
+            }
+            case MANIFEST_SHA256 -> {
+                String value = differentSha256();
+                when(editorialPlanModel.targetManifestSha256()).thenReturn(value);
+                yield value;
+            }
+        };
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exitCode = cli().runSafely(
+                validArguments(Command.PLAN_REPLACE),
+                output);
+
+        assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json)
+                .contains(
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID.name(),
+                        "cli/editorial/plan-binding",
+                        OPERATION_ID.toString(),
+                        EDITORIAL_PLAN_SHA256,
+                        "\"publicationUuid\":null",
+                        "\"changeRequired\":null",
+                        "\"observedAt\":null")
+                .doesNotContain(mismatchedValue, "jdbc:postgresql");
+        verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
+        verifyNoInteractions(
+                replaceScopeGuard,
+                environmentResolver,
+                contextFactory,
+                context,
+                planService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Command.class, names = "PLAN_REPLACE")
+    void unsupportedReplaceScopeRetainsConfirmedIdentityWithoutResolvingEnvironment(
+            Command command) {
+        when(validator.validate(manifestPath))
+                .thenReturn(LegalManifestValidation.pass(release));
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        when(replaceScopeGuard.validate(editorialPlan))
+                .thenReturn(LegalManifestValidation.failure(issue(
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                        "documentReplacementBatches")));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exitCode = cli().runSafely(validArguments(command), output);
+
+        assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json)
+                .contains(OPERATION_ID.toString(), EDITORIAL_PLAN_SHA256)
+                .contains("\"changeRequired\":null", "\"observedAt\":null")
+                .doesNotContain("publicationUuid\":\"", "jdbc:postgresql");
+        verify(replaceScopeGuard).validate(editorialPlan);
+        verifyNoInteractions(environmentResolver, contextFactory, context, planService);
     }
 
     private LegalManifestCli cli() {
@@ -214,6 +396,8 @@ class LegalEditorialPreflightTest {
                     throw new AssertionError("El contexto import no debe participar");
                 },
                 new LegalEditorialReportWriter(),
+                editorialPlanValidator,
+                replaceScopeGuard,
                 environmentResolver,
                 contextFactory);
     }
@@ -237,6 +421,12 @@ class LegalEditorialPreflightTest {
                         .thenReturn(applyService);
                 when(applyService.applyPromote(release)).thenThrow(expectedBoundary);
             }
+            case PLAN_REPLACE -> {
+                when(context.getBean(LegalEditorialPlanService.class))
+                        .thenReturn(planService);
+                when(planService.planReplace(release, editorialPlan))
+                        .thenThrow(expectedBoundary);
+            }
         }
     }
 
@@ -254,6 +444,10 @@ class LegalEditorialPreflightTest {
                 order.verify(context).getBean(LegalEditorialApplyService.class);
                 order.verify(applyService).applyPromote(release);
             }
+            case PLAN_REPLACE -> {
+                order.verify(context).getBean(LegalEditorialPlanService.class);
+                order.verify(planService).planReplace(release, editorialPlan);
+            }
         }
     }
 
@@ -262,6 +456,7 @@ class LegalEditorialPreflightTest {
             case READINESS -> readinessService;
             case PLAN_PROMOTE -> planService;
             case APPLY_PROMOTE -> applyService;
+            case PLAN_REPLACE -> planService;
         };
     }
 
@@ -276,12 +471,53 @@ class LegalEditorialPreflightTest {
     }
 
     private static String[] validArguments(Command command) {
+        if (command.requiresEditorialPlan()) {
+            return new String[]{
+                    command.externalValue(),
+                    "--manifest=" + manifestPath,
+                    "--confirm-publication-id=" + release.plan().manifest().publicationId(),
+                    "--confirm-manifest-sha256=" + release.plan().manifestSha256(),
+                    "--editorial-plan=" + EDITORIAL_PLAN_PATH,
+                    "--confirm-operation-id=" + OPERATION_ID,
+                    "--confirm-editorial-plan-sha256=" + EDITORIAL_PLAN_SHA256
+            };
+        }
         return new String[]{
                 command.externalValue(),
                 "--manifest=" + manifestPath,
                 "--confirm-publication-id=" + release.plan().manifest().publicationId(),
                 "--confirm-manifest-sha256=" + release.plan().manifestSha256()
         };
+    }
+
+    private void stubSuccessfulPlanPreflight(Command command) {
+        if (!command.requiresEditorialPlan()) {
+            return;
+        }
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        when(replaceScopeGuard.validate(editorialPlan))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+    }
+
+    private ValidatedEditorialPlan mismatchedPlan(PlanConfirmationMismatch mismatch) {
+        LegalEditorialPlanV1 planModel = mock(LegalEditorialPlanV1.class);
+        when(planModel.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        ValidatedEditorialPlan mismatched = mock(ValidatedEditorialPlan.class);
+        when(mismatched.plan()).thenReturn(planModel);
+        when(mismatched.operationType()).thenReturn(
+                mismatch == PlanConfirmationMismatch.TYPE
+                        ? OperationType.RETIRE
+                        : OperationType.REPLACE);
+        when(mismatched.operationId()).thenReturn(
+                mismatch == PlanConfirmationMismatch.OPERATION_ID
+                        ? UUID.fromString("00000000-0000-0000-0000-000000000011")
+                        : OPERATION_ID);
+        when(mismatched.editorialPlanSha256()).thenReturn(
+                mismatch == PlanConfirmationMismatch.SHA256
+                        ? "a".repeat(64)
+                        : EDITORIAL_PLAN_SHA256);
+        return mismatched;
     }
 
     private static String[] mismatchedArguments(
@@ -330,6 +566,17 @@ class LegalEditorialPreflightTest {
     }
 
     private enum ConfirmationMismatch {
+        PUBLICATION_ID,
+        MANIFEST_SHA256
+    }
+
+    private enum PlanConfirmationMismatch {
+        TYPE,
+        OPERATION_ID,
+        SHA256
+    }
+
+    private enum PlanTargetMismatch {
         PUBLICATION_ID,
         MANIFEST_SHA256
     }

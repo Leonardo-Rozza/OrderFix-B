@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
@@ -11,6 +13,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyReceipt;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
@@ -46,6 +50,10 @@ class LegalEditorialReportWriterTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
     private static final String FINGERPRINT =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final UUID OPERATION_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000010");
+    private static final String PLAN_SHA256 =
+            "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static ValidatedRelease release;
@@ -130,6 +138,40 @@ class LegalEditorialReportWriterTest {
     }
 
     @Test
+    void writesConfirmedReplaceIdentityWithoutInventingObservationMetadata() throws IOException {
+        ValidatedEditorialPlan editorialPlan = validatedReplacePlan();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(
+                LegalEditorialReport.forKnownFailure(
+                        Command.PLAN_REPLACE,
+                        release,
+                        editorialPlan,
+                        LegalManifestIssue.at(
+                                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                                "documentReplacementBatches")),
+                output);
+
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json).isEqualTo("{\"reportVersion\":3,\"command\":\"plan-replace\","
+                + "\"status\":\"BLOCKED\",\"persisted\":false,\"publication\":{"
+                + "\"publicationId\":\"release-valid-v1\",\"schemaVersion\":1,"
+                + "\"manifestSha256\":\"" + GOLDEN_SHA + "\",\"publicationUuid\":null},"
+                + "\"operation\":{\"operationType\":\"REPLACE\",\"outcome\":\"BLOCKED\","
+                + "\"appliedAt\":null},\"plan\":{\"operationId\":\"" + OPERATION_ID + "\","
+                + "\"editorialPlanSha256\":\"" + PLAN_SHA256 + "\","
+                + "\"changeRequired\":null,\"observedAt\":null,"
+                + "\"expectedReadinessAfter\":\"READY\"},\"readiness\":null,"
+                + "\"counts\":{\"release\":{\"documents\":11,\"requirements\":6,"
+                + "\"scopes\":8},\"state\":null,\"delta\":null},\"issues\":[{"
+                + "\"severity\":\"BLOCKED\",\"code\":\"REPLACEMENT_MAPPING_INVALID\","
+                + "\"location\":\"documentReplacementBatches\","
+                + "\"message\":\"El mapeo editorial de reemplazo no es válido.\"}],"
+                + "\"omittedIssueCount\":0}");
+        assertExactlyOneJsonObject(output.toByteArray());
+    }
+
+    @Test
     void writesUnknownWithExplicitNullDatabaseMetadata() throws IOException {
         LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
         when(result.status()).thenReturn(LegalManifestStatus.ERROR);
@@ -204,6 +246,17 @@ class LegalEditorialReportWriterTest {
                 OBSERVED_AT,
                 FINGERPRINT,
                 11, 6, 34, 12, 11, 8, 0);
+    }
+
+    private static ValidatedEditorialPlan validatedReplacePlan() {
+        LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
+        when(model.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
+        when(plan.plan()).thenReturn(model);
+        when(plan.operationType()).thenReturn(OperationType.REPLACE);
+        when(plan.operationId()).thenReturn(OPERATION_ID);
+        when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
+        return plan;
     }
 
     private static void assertExactlyOneJsonObject(byte[] bytes) throws IOException {

@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
@@ -8,6 +9,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyReceipt;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
@@ -75,8 +77,21 @@ public final class LegalEditorialReport {
             Command command,
             ValidatedRelease release,
             LegalManifestValidation<?> failure) {
+        return forKnownFailure(command, release, null, failure);
+    }
+
+    /** Builds a known failure while retaining only a previously confirmed plan identity. */
+    public static LegalEditorialReport forKnownFailure(
+            Command command,
+            ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan,
+            LegalManifestValidation<?> failure) {
         Command requiredCommand = Objects.requireNonNull(command, "command");
         LegalManifestValidation<?> required = requireFailure(failure);
+        if (editorialPlan != null
+                && (requiredCommand != Command.PLAN_REPLACE || release == null)) {
+            throw invalidMatrix();
+        }
         if (required.issues().stream()
                 .anyMatch(issue -> issue.code() == LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN)) {
             throw new IllegalArgumentException(
@@ -90,6 +105,12 @@ public final class LegalEditorialReport {
                             ? Outcome.BLOCKED
                             : Outcome.ERROR,
                     null);
+            case PLAN_REPLACE -> new Operation(
+                    OperationType.REPLACE,
+                    required.status() == LegalManifestStatus.BLOCKED
+                            ? Outcome.BLOCKED
+                            : Outcome.ERROR,
+                    null);
         };
         return new LegalEditorialReport(
                 requiredCommand,
@@ -97,7 +118,7 @@ public final class LegalEditorialReport {
                 Boolean.FALSE,
                 release == null ? null : Publication.from(release, null),
                 operation,
-                null,
+                editorialPlan == null ? null : Plan.identity(editorialPlan),
                 null,
                 release == null ? null : Counts.releaseOnly(release),
                 IssueSet.from(required.issues(), required.omittedIssueCount()));
@@ -111,6 +132,19 @@ public final class LegalEditorialReport {
         return forKnownFailure(
                 command,
                 release,
+                LegalManifestValidation.failure(Objects.requireNonNull(issue, "issue")));
+    }
+
+    /** Convenience overload retaining one confirmed plan identity and one constant safe issue. */
+    public static LegalEditorialReport forKnownFailure(
+            Command command,
+            ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan,
+            LegalManifestIssue issue) {
+        return forKnownFailure(
+                command,
+                release,
+                editorialPlan,
                 LegalManifestValidation.failure(Objects.requireNonNull(issue, "issue")));
     }
 
@@ -181,6 +215,45 @@ public final class LegalEditorialReport {
                 plan,
                 readiness,
                 Counts.fromPlan(requiredRelease, requiredResult.deltaCounts().orElse(null)),
+                IssueSet.from(requiredResult.issues(), requiredResult.omittedIssueCount()));
+    }
+
+    /** Maps one deterministic read-only replacement planning result. */
+    public static LegalEditorialReport forPlanReplace(
+            ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan,
+            LegalEditorialPlanResult result) {
+        ValidatedRelease requiredRelease = Objects.requireNonNull(release, "release");
+        ValidatedEditorialPlan requiredPlan = Objects.requireNonNull(
+                editorialPlan,
+                "editorialPlan");
+        LegalEditorialPlanResult requiredResult = Objects.requireNonNull(result, "result");
+        Outcome outcome = switch (requiredResult.outcome()) {
+            case APPLICABLE -> Outcome.APPLICABLE;
+            case BLOCKED -> Outcome.BLOCKED;
+            case ERROR -> Outcome.ERROR;
+        };
+        boolean applicable = outcome == Outcome.APPLICABLE;
+        UUID publicationUuid = applicable
+                ? requiredResult.targetPublicationUuid().orElseThrow()
+                : null;
+        Plan reportPlan = applicable
+                ? Plan.fromReplace(requiredPlan, requiredResult)
+                : Plan.identity(requiredPlan);
+        Readiness readiness = applicable
+                ? Readiness.expected(requiredResult.expectedReadinessAfter().orElseThrow())
+                : null;
+        return new LegalEditorialReport(
+                Command.PLAN_REPLACE,
+                requiredResult.status(),
+                Boolean.FALSE,
+                Publication.from(requiredRelease, publicationUuid),
+                new Operation(OperationType.REPLACE, outcome, null),
+                reportPlan,
+                readiness,
+                Counts.fromPlan(
+                        requiredRelease,
+                        applicable ? requiredResult.deltaCounts().orElseThrow() : null),
                 IssueSet.from(requiredResult.issues(), requiredResult.omittedIssueCount()));
     }
 
@@ -287,8 +360,9 @@ public final class LegalEditorialReport {
 
         switch (command) {
             case READINESS -> requireReadinessMatrix();
-            case PLAN_PROMOTE -> requirePlanMatrix();
+            case PLAN_PROMOTE -> requirePlanPromoteMatrix();
             case APPLY_PROMOTE -> requireApplyMatrix();
+            case PLAN_REPLACE -> requirePlanReplaceMatrix();
         }
     }
 
@@ -323,7 +397,7 @@ public final class LegalEditorialReport {
         }
     }
 
-    private void requirePlanMatrix() {
+    private void requirePlanPromoteMatrix() {
         if (!Boolean.FALSE.equals(persisted)
                 || operation == null
                 || operation.operationType() != OperationType.PROMOTE
@@ -352,6 +426,44 @@ public final class LegalEditorialReport {
         if (!valid) {
             throw invalidMatrix();
         }
+    }
+
+    private void requirePlanReplaceMatrix() {
+        if (!Boolean.FALSE.equals(persisted)
+                || operation == null
+                || operation.operationType() != OperationType.REPLACE
+                || operation.appliedAt() != null
+                || counts != null && counts.state() != null) {
+            throw invalidMatrix();
+        }
+        boolean valid = switch (operation.outcome()) {
+            case APPLICABLE -> status == LegalManifestStatus.PASS
+                    && publication != null
+                    && publication.publicationUuid() != null
+                    && plan != null
+                    && plan.hasExternalIdentity()
+                    && plan.hasObservation()
+                    && readiness != null
+                    && readiness.value() == LegalEditorialReadiness.READY
+                    && !readiness.hasDatabaseMetadata()
+                    && counts != null
+                    && counts.delta() != null;
+            case BLOCKED -> status == LegalManifestStatus.BLOCKED
+                    && validReplaceFailureMetadata();
+            case ERROR -> status == LegalManifestStatus.ERROR
+                    && validReplaceFailureMetadata();
+            default -> false;
+        };
+        if (!valid) {
+            throw invalidMatrix();
+        }
+    }
+
+    private boolean validReplaceFailureMetadata() {
+        return (plan == null || plan.hasExternalIdentity() && !plan.hasObservation())
+                && (publication == null || publication.publicationUuid() == null)
+                && readiness == null
+                && (counts == null || counts.delta() == null);
     }
 
     private void requireApplyMatrix() {
@@ -422,7 +534,8 @@ public final class LegalEditorialReport {
     }
 
     enum OperationType {
-        PROMOTE
+        PROMOTE,
+        REPLACE
     }
 
     enum Outcome {
@@ -460,21 +573,23 @@ public final class LegalEditorialReport {
     record Plan(
             UUID operationId,
             String editorialPlanSha256,
-            boolean changeRequired,
+            Boolean changeRequired,
             Instant observedAt,
             LegalEditorialReadiness expectedReadinessAfter
     ) {
         Plan {
-            if (operationId != null || editorialPlanSha256 != null) {
+            if ((operationId == null) != (editorialPlanSha256 == null)) {
                 throw new IllegalArgumentException(
-                        "PROMOTE no admite identidad de plan editorial externo");
+                        "La identidad del plan editorial debe ser completa o ausente");
             }
-            requirePostgresPrecision(
-                    Objects.requireNonNull(observedAt, "observedAt"),
-                    "observedAt");
+            if ((changeRequired == null) != (observedAt == null)) {
+                throw new IllegalArgumentException(
+                        "La observación del plan editorial debe ser completa o ausente");
+            }
+            requirePostgresPrecision(observedAt, "observedAt");
             if (expectedReadinessAfter != LegalEditorialReadiness.READY) {
                 throw new IllegalArgumentException(
-                        "plan-promote sólo admite readiness esperado READY");
+                        "El plan editorial sólo admite readiness esperado READY");
             }
         }
 
@@ -485,6 +600,43 @@ public final class LegalEditorialReport {
                     result.changeRequired().orElseThrow(),
                     result.observedAt().orElseThrow(),
                     result.expectedReadinessAfter().orElseThrow());
+        }
+
+        private static Plan identity(ValidatedEditorialPlan editorialPlan) {
+            ValidatedEditorialPlan required = Objects.requireNonNull(
+                    editorialPlan,
+                    "editorialPlan");
+            if (required.operationType()
+                    != LegalEditorialPlanV1.OperationType.REPLACE) {
+                throw new IllegalArgumentException(
+                        "plan-replace sólo admite planes REPLACE");
+            }
+            return new Plan(
+                    required.operationId(),
+                    required.editorialPlanSha256(),
+                    null,
+                    null,
+                    required.plan().expectedReadinessAfter());
+        }
+
+        private static Plan fromReplace(
+                ValidatedEditorialPlan editorialPlan,
+                LegalEditorialPlanResult result) {
+            Plan identity = identity(editorialPlan);
+            return new Plan(
+                    identity.operationId(),
+                    identity.editorialPlanSha256(),
+                    result.changeRequired().orElseThrow(),
+                    result.observedAt().orElseThrow(),
+                    identity.expectedReadinessAfter());
+        }
+
+        private boolean hasExternalIdentity() {
+            return operationId != null && editorialPlanSha256 != null;
+        }
+
+        private boolean hasObservation() {
+            return changeRequired != null && observedAt != null;
         }
     }
 

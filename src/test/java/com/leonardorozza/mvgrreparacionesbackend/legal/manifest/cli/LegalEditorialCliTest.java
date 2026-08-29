@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialArguments.Command;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
@@ -10,6 +12,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyReceipt;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyService;
@@ -18,6 +22,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessObservation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReplaceScopeGuard;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -62,12 +67,21 @@ class LegalEditorialCliTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
     private static final String FINGERPRINT =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final Path EDITORIAL_PLAN_PATH =
+            Path.of("replace-one-to-one-v1", "editorial-plan.json");
+    private static final UUID OPERATION_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000010");
+    private static final String EDITORIAL_PLAN_SHA256 =
+            "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static ValidatedRelease release;
     private static Path manifestPath;
 
     private LegalManifestValidator validator;
+    private LegalEditorialPlanValidator editorialPlanValidator;
+    private LegalEditorialReplaceScopeGuard replaceScopeGuard;
+    private ValidatedEditorialPlan editorialPlan;
     private LegalManifestReportWriter v1Writer;
     private LegalManifestImportReportWriter v2Writer;
     private Supplier<LegalManifestValidation<LegalImportEnvironment>> importEnvironment;
@@ -96,6 +110,19 @@ class LegalEditorialCliTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         validator = mock(LegalManifestValidator.class);
+        editorialPlanValidator = mock(LegalEditorialPlanValidator.class);
+        replaceScopeGuard = mock(LegalEditorialReplaceScopeGuard.class);
+        LegalEditorialPlanV1 planModel = mock(LegalEditorialPlanV1.class);
+        when(planModel.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        when(planModel.targetPublicationId())
+                .thenReturn(release.plan().manifest().publicationId());
+        when(planModel.targetManifestSha256())
+                .thenReturn(release.plan().manifestSha256());
+        editorialPlan = mock(ValidatedEditorialPlan.class);
+        when(editorialPlan.plan()).thenReturn(planModel);
+        when(editorialPlan.operationType()).thenReturn(OperationType.REPLACE);
+        when(editorialPlan.operationId()).thenReturn(OPERATION_ID);
+        when(editorialPlan.editorialPlanSha256()).thenReturn(EDITORIAL_PLAN_SHA256);
         v1Writer = mock(LegalManifestReportWriter.class);
         v2Writer = mock(LegalManifestImportReportWriter.class);
         importEnvironment = mock(Supplier.class);
@@ -269,6 +296,74 @@ class LegalEditorialCliTest {
     }
 
     @Test
+    void dispatchesPlanReplaceAndEmitsConfirmedApplicableV3WithoutWriting()
+            throws IOException {
+        LegalEditorialPlanService service = mock(LegalEditorialPlanService.class);
+        LegalEditorialPlanResult result = applicablePlanResult();
+        when(service.planReplace(release, editorialPlan)).thenReturn(result);
+        prepareSuccessfulContext(
+                Command.PLAN_REPLACE,
+                LegalEditorialPlanService.class,
+                service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.PLAN_REPLACE), output);
+
+        JsonNode report = assertSuccessfulV3(
+                output,
+                "plan-replace",
+                "APPLICABLE",
+                "READY");
+        assertThat(exit).isZero();
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(EDITORIAL_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").booleanValue()).isTrue();
+        assertThat(report.path("plan").path("observedAt").textValue())
+                .isEqualTo(OBSERVED_AT.toString());
+        verify(service).planReplace(release, editorialPlan);
+    }
+
+    @Test
+    void replaceEnvironmentFailureRetainsOnlyConfirmedInputIdentity() throws IOException {
+        when(validator.validate(manifestPath))
+                .thenReturn(LegalManifestValidation.pass(release));
+        when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        when(replaceScopeGuard.validate(editorialPlan))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        when(editorialEnvironment.apply(Command.PLAN_REPLACE))
+                .thenReturn(LegalManifestValidation.failure(issue(
+                        LegalManifestIssueCode.EDITORIAL_DB_CONFIGURATION_INVALID,
+                        "cli/editorial/environment")));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.PLAN_REPLACE), output);
+
+        JsonNode report = report(output);
+        assertThat(exit).isEqualTo(3);
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(EDITORIAL_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        verify(editorialContext, never()).apply(any());
+    }
+
+    @Test
     void dispatchesApplyPromoteAndEmitsConfirmedV3() throws IOException {
         LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
         LegalEditorialApplyResult result = appliedResult();
@@ -311,6 +406,31 @@ class LegalEditorialCliTest {
                 .isEqualTo("ERROR");
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .doesNotContain("constructor-canary");
+    }
+
+    @Test
+    void rawPlanReplaceConstructorFailureUsesV3WithoutUnconfirmedPlanIdentity()
+            throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = LegalManifestCli.runMain(
+                validArguments(Command.PLAN_REPLACE),
+                output,
+                () -> {
+                    throw new IllegalStateException("replace-constructor-canary");
+                });
+
+        JsonNode report = report(output);
+        assertThat(exit).isEqualTo(3);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("plan-replace");
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("plan").isNull()).isTrue();
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .doesNotContain("replace-constructor-canary", OPERATION_ID.toString());
     }
 
     @Test
@@ -459,6 +579,8 @@ class LegalEditorialCliTest {
                 importEnvironment,
                 importContext,
                 editorialWriter,
+                editorialPlanValidator,
+                replaceScopeGuard,
                 editorialEnvironment,
                 editorialContext);
     }
@@ -469,6 +591,12 @@ class LegalEditorialCliTest {
             T service) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
+        if (command.requiresEditorialPlan()) {
+            when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
+                    .thenReturn(LegalManifestValidation.pass(editorialPlan));
+            when(replaceScopeGuard.validate(editorialPlan))
+                    .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        }
         when(editorialEnvironment.apply(command))
                 .thenReturn(LegalManifestValidation.pass(environment));
         when(editorialContext.apply(environment)).thenReturn(context);
@@ -516,6 +644,18 @@ class LegalEditorialCliTest {
     }
 
     private static String[] validArguments(Command command) {
+        if (command.requiresEditorialPlan()) {
+            return new String[]{
+                    command.externalValue(),
+                    "--manifest=" + manifestPath,
+                    "--confirm-publication-id="
+                            + release.plan().manifest().publicationId(),
+                    "--confirm-manifest-sha256=" + release.plan().manifestSha256(),
+                    "--editorial-plan=" + EDITORIAL_PLAN_PATH,
+                    "--confirm-operation-id=" + OPERATION_ID,
+                    "--confirm-editorial-plan-sha256=" + EDITORIAL_PLAN_SHA256
+            };
+        }
         return new String[]{
                 command.externalValue(),
                 "--manifest=" + manifestPath,
