@@ -61,6 +61,8 @@ final class LegalEditorialPlannerCore {
 
     private static final Comparator<UUID> UUID_TEXT_ORDER =
             Comparator.comparing(UUID::toString);
+    private static final LegalEditorialReplaceScopeGuard REPLACE_SCOPE_GUARD =
+            new LegalEditorialReplaceScopeGuard();
 
     private final JdbcTemplate jdbc;
     private final LegalEditorialReadinessCore readinessCore;
@@ -148,6 +150,10 @@ final class LegalEditorialPlannerCore {
             Instant observedAt) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(validatedPlan, "validatedPlan");
+        var scopedPlan = REPLACE_SCOPE_GUARD.validate(validatedPlan);
+        if (scopedPlan.value().isEmpty()) {
+            return LegalEditorialPlanResult.blocked(scopedPlan.issues());
+        }
         Instant timestamp = requirePostgresInstant(observedAt);
         LegalEditorialPlanV1 plan = validatedPlan.plan();
         LegalEditorialPlanResult bindingFailure = requirePlanBinding(
@@ -496,6 +502,8 @@ final class LegalEditorialPlannerCore {
                         requirementStates,
                         documentTransitions,
                         requirementTransitions,
+                        List.of(),
+                        List.of(),
                         slots,
                         pointers,
                         List.of(),
@@ -517,6 +525,7 @@ final class LegalEditorialPlannerCore {
                 Optional.empty(),
                 Optional.empty(),
                 observedAt,
+                transitionAt,
                 LegalEditorialReadiness.READY,
                 false,
                 changeRequired,
@@ -803,12 +812,25 @@ final class LegalEditorialPlannerCore {
                                 pointer.key(),
                                 pointer.requiredSetId()))
                         .toList();
+        Optional<PreexistingTransitionHistory> preexistingHistory =
+                preexistingTransitionHistory(
+                        snapshot,
+                        documentStates,
+                        requirementStates,
+                        documentTransitions,
+                        requirementTransitions,
+                        phase);
+        if (preexistingHistory.isEmpty()) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         LegalEditorialExecutionPlan.ExpectedPostState postState =
                 new LegalEditorialExecutionPlan.ExpectedPostState(
                         documentStates,
                         requirementStates,
                         documentTransitions,
                         requirementTransitions,
+                        preexistingHistory.orElseThrow().documentTransitions(),
+                        preexistingHistory.orElseThrow().requirementTransitions(),
                         finalSlots,
                         finalPointers,
                         batches,
@@ -846,6 +868,7 @@ final class LegalEditorialPlannerCore {
                 Optional.of(validated.operationId()),
                 Optional.of(validated.editorialPlanSha256()),
                 observedAt,
+                operationAt,
                 LegalEditorialReadiness.READY,
                 false,
                 changeRequired,
@@ -946,12 +969,25 @@ final class LegalEditorialPlannerCore {
                                                 pointer.requiredSetId()))
                                 .toList()
                         : List.of();
+        Optional<PreexistingTransitionHistory> preexistingHistory =
+                preexistingTransitionHistory(
+                        snapshot,
+                        documentStates,
+                        requirementStates,
+                        documentTransitions,
+                        requirementTransitions,
+                        phase);
+        if (preexistingHistory.isEmpty()) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         LegalEditorialExecutionPlan.ExpectedPostState postState =
                 new LegalEditorialExecutionPlan.ExpectedPostState(
                         documentStates,
                         requirementStates,
                         documentTransitions,
                         requirementTransitions,
+                        preexistingHistory.orElseThrow().documentTransitions(),
+                        preexistingHistory.orElseThrow().requirementTransitions(),
                         List.of(),
                         List.of(),
                         List.of(),
@@ -976,6 +1012,7 @@ final class LegalEditorialPlannerCore {
                 Optional.of(validated.operationId()),
                 Optional.of(validated.editorialPlanSha256()),
                 observedAt,
+                operationAt,
                 LegalEditorialReadiness.NOT_READY,
                 true,
                 changeRequired,
@@ -2087,6 +2124,81 @@ final class LegalEditorialPlannerCore {
                 .toList();
     }
 
+    private static Optional<PreexistingTransitionHistory> preexistingTransitionHistory(
+            PlannerSnapshot snapshot,
+            List<LegalEditorialExecutionPlan.ExpectedDocumentState> documentStates,
+            List<LegalEditorialExecutionPlan.ExpectedRequirementState> requirementStates,
+            List<LegalEditorialExecutionPlan.DocumentTransition> documentDelta,
+            List<LegalEditorialExecutionPlan.RequirementTransition> requirementDelta,
+            Phase phase) {
+        Set<UUID> documentIds = documentStates.stream()
+                .map(LegalEditorialExecutionPlan.ExpectedDocumentState::documentVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        Set<UUID> requirementIds = requirementStates.stream()
+                .map(LegalEditorialExecutionPlan.ExpectedRequirementState::requirementVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        List<LegalEditorialExecutionPlan.DocumentTransition> observedDocuments =
+                snapshot.documentTransitions().stream()
+                        .filter(transition -> documentIds.contains(transition.versionId()))
+                        .map(LegalEditorialPlannerCore::documentTransition)
+                        .toList();
+        List<LegalEditorialExecutionPlan.RequirementTransition> observedRequirements =
+                snapshot.requirementTransitions().stream()
+                        .filter(transition -> requirementIds.contains(transition.versionId()))
+                        .map(LegalEditorialPlannerCore::requirementTransition)
+                        .toList();
+        Optional<List<LegalEditorialExecutionPlan.DocumentTransition>> documents =
+                subtractCutoverDelta(observedDocuments, documentDelta, phase);
+        Optional<List<LegalEditorialExecutionPlan.RequirementTransition>> requirements =
+                subtractCutoverDelta(observedRequirements, requirementDelta, phase);
+        if (documents.isEmpty() || requirements.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new PreexistingTransitionHistory(
+                documents.orElseThrow(),
+                requirements.orElseThrow()));
+    }
+
+    private static LegalEditorialExecutionPlan.DocumentTransition documentTransition(
+            DocumentTransitionEvidence evidence) {
+        return documentTransition(
+                evidence.versionId(),
+                evidence.previousState(),
+                evidence.newState(),
+                evidence.reason(),
+                evidence.replacementBatchId(),
+                evidence.occurredAt());
+    }
+
+    private static LegalEditorialExecutionPlan.RequirementTransition requirementTransition(
+            RequirementTransitionEvidence evidence) {
+        return requirementTransition(
+                evidence.versionId(),
+                evidence.previousState(),
+                evidence.newState(),
+                evidence.reason(),
+                evidence.occurredAt());
+    }
+
+    private static <T> Optional<List<T>> subtractCutoverDelta(
+            List<T> observedHistory,
+            List<T> cutoverDelta,
+            Phase phase) {
+        List<T> preexisting = new ArrayList<>(observedHistory);
+        if (phase == Phase.SOURCE_STATE) {
+            if (preexisting.stream().anyMatch(Set.copyOf(cutoverDelta)::contains)) {
+                return Optional.empty();
+            }
+            return Optional.of(List.copyOf(preexisting));
+        }
+        for (T expectedTransition : cutoverDelta) {
+            if (!preexisting.remove(expectedTransition)) {
+                return Optional.empty();
+            }
+        }
+        return Optional.of(List.copyOf(preexisting));
+    }
+
     private static List<TransitionEvidence> histories(
             List<? extends TransitionEvidence> transitions,
             UUID versionId) {
@@ -2130,6 +2242,16 @@ final class LegalEditorialPlannerCore {
     private record MappingCheck(boolean valid) {
         static final MappingCheck VALID = new MappingCheck(true);
         static final MappingCheck INVALID = new MappingCheck(false);
+    }
+
+    private record PreexistingTransitionHistory(
+            List<LegalEditorialExecutionPlan.DocumentTransition> documentTransitions,
+            List<LegalEditorialExecutionPlan.RequirementTransition> requirementTransitions) {
+
+        private PreexistingTransitionHistory {
+            documentTransitions = List.copyOf(documentTransitions);
+            requirementTransitions = List.copyOf(requirementTransitions);
+        }
     }
 
     private record PlanAttempt(

@@ -326,6 +326,8 @@ class LegalEditorialPlanResultTest {
                         List.of(),
                         List.of(),
                         List.of(),
+                        List.of(),
+                        List.of(),
                         LegalEditorialExecutionPlan.V27TriggerEffects.empty());
         return new LegalEditorialExecutionPlan(
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
@@ -336,6 +338,7 @@ class LegalEditorialPlanResultTest {
                         SHA),
                 Optional.empty(),
                 Optional.empty(),
+                OBSERVED_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,

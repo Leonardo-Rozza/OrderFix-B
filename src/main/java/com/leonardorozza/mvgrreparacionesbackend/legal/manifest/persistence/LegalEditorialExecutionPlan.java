@@ -35,6 +35,7 @@ record LegalEditorialExecutionPlan(
         Optional<UUID> operationId,
         Optional<String> planSha256,
         Instant observedAt,
+        Instant expectedAppliedAt,
         LegalEditorialReadiness expectedReadinessAfter,
         boolean acknowledgeFailClosedGap,
         boolean changeRequired,
@@ -93,6 +94,11 @@ record LegalEditorialExecutionPlan(
         planSha256 = Objects.requireNonNull(planSha256, "planSha256")
                 .map(value -> requireSha256(value, "planSha256"));
         observedAt = requirePostgresInstant(observedAt, "observedAt");
+        expectedAppliedAt = requirePostgresInstant(expectedAppliedAt, "expectedAppliedAt");
+        if (expectedAppliedAt.isAfter(observedAt)) {
+            throw new IllegalArgumentException(
+                    "expectedAppliedAt no puede ser posterior a observedAt");
+        }
         expectedReadinessAfter = Objects.requireNonNull(
                 expectedReadinessAfter,
                 "expectedReadinessAfter");
@@ -110,12 +116,17 @@ record LegalEditorialExecutionPlan(
                 expectedPostState,
                 mutationCommands);
         requireExpectedStateConsistency(expectedPostState);
+        requireExpectedDeltaTimeConsistency(expectedAppliedAt, expectedPostState);
         if (changeRequired) {
+            if (!expectedAppliedAt.equals(observedAt)) {
+                throw new IllegalArgumentException(
+                        "Una mutación fresca requiere expectedAppliedAt igual a observedAt");
+            }
             if (mutationCommands.isEmpty()) {
                 throw new IllegalArgumentException(
                         "changeRequired=true requiere al menos un comando mutante");
             }
-            requireCommandPlanConsistency(observedAt, expectedPostState, mutationCommands);
+            requireCommandPlanConsistency(expectedPostState, mutationCommands);
         } else if (!mutationCommands.isEmpty()) {
             throw new IllegalArgumentException(
                     "changeRequired=false requiere un conjunto de comandos vacío");
@@ -176,6 +187,8 @@ record LegalEditorialExecutionPlan(
             List<ExpectedRequirementState> requirementStates,
             List<DocumentTransition> documentTransitions,
             List<RequirementTransition> requirementTransitions,
+            List<DocumentTransition> preexistingDocumentTransitions,
+            List<RequirementTransition> preexistingRequirementTransitions,
             List<ExpectedDocumentSlot> documentSlots,
             List<ExpectedRequiredSetPointer> requiredSetPointers,
             List<ReplacementBatch> replacementBatches,
@@ -199,6 +212,14 @@ record LegalEditorialExecutionPlan(
                     requirementTransitions,
                     REQUIREMENT_TRANSITION_ORDER,
                     "requirementTransitions");
+            preexistingDocumentTransitions = sortedCopy(
+                    preexistingDocumentTransitions,
+                    DOCUMENT_TRANSITION_ORDER,
+                    "preexistingDocumentTransitions");
+            preexistingRequirementTransitions = sortedCopy(
+                    preexistingRequirementTransitions,
+                    REQUIREMENT_TRANSITION_ORDER,
+                    "preexistingRequirementTransitions");
             documentSlots = sortedCopy(
                     documentSlots,
                     DOCUMENT_SLOT_ORDER,
@@ -232,6 +253,22 @@ record LegalEditorialExecutionPlan(
                     Function.identity(),
                     "requirementTransitions contiene una transición duplicada");
             rejectDuplicateKeys(
+                    preexistingDocumentTransitions,
+                    Function.identity(),
+                    "preexistingDocumentTransitions contiene una transición duplicada");
+            rejectDuplicateKeys(
+                    preexistingRequirementTransitions,
+                    Function.identity(),
+                    "preexistingRequirementTransitions contiene una transición duplicada");
+            rejectOverlap(
+                    preexistingDocumentTransitions,
+                    documentTransitions,
+                    "Una transición documental no puede ser preexistente y parte del delta");
+            rejectOverlap(
+                    preexistingRequirementTransitions,
+                    requirementTransitions,
+                    "Una transición de requisito no puede ser preexistente y parte del delta");
+            rejectDuplicateKeys(
                     documentSlots,
                     ExpectedDocumentSlot::key,
                     "documentSlots contiene una PK duplicada");
@@ -254,6 +291,8 @@ record LegalEditorialExecutionPlan(
 
         static ExpectedPostState empty() {
             return new ExpectedPostState(
+                    List.of(),
+                    List.of(),
                     List.of(),
                     List.of(),
                     List.of(),
@@ -714,6 +753,8 @@ record LegalEditorialExecutionPlan(
                         || planSha256.isPresent()
                         || expectedReadinessAfter != LegalEditorialReadiness.READY
                         || acknowledgeFailClosedGap
+                        || !expectedPostState.preexistingDocumentTransitions().isEmpty()
+                        || !expectedPostState.preexistingRequirementTransitions().isEmpty()
                         || !expectedPostState.replacementBatches().isEmpty()
                         || !expectedPostState.v27TriggerEffects().isEmpty()
                         || !mutationCommands.replacementBatchesToCreateAndSeal().isEmpty()
@@ -806,10 +847,12 @@ record LegalEditorialExecutionPlan(
     }
 
     private static void requireExpectedStateConsistency(ExpectedPostState postState) {
-        requireDocumentStateConsistency(postState.documentStates(), postState.documentTransitions());
+        requireDocumentStateConsistency(
+                postState.documentStates(),
+                completeDocumentHistory(postState));
         requireRequirementStateConsistency(
                 postState.requirementStates(),
-                postState.requirementTransitions());
+                completeRequirementHistory(postState));
 
         Set<DocumentTransition> allDocumentTransitions = Set.copyOf(
                 postState.documentTransitions());
@@ -909,7 +952,6 @@ record LegalEditorialExecutionPlan(
     }
 
     private static void requireCommandPlanConsistency(
-            Instant observedAt,
             ExpectedPostState postState,
             MutationCommands commands) {
         Set<DocumentTransition> derivedTransitions = Set.copyOf(
@@ -945,37 +987,54 @@ record LegalEditorialExecutionPlan(
             throw new IllegalArgumentException(
                     "Un slot derivado por V27 no puede eliminarse también de forma directa");
         }
+    }
 
-        requireAllAtObservedAt(
-                observedAt,
-                commands.documentTransitions().stream()
+    private static void requireExpectedDeltaTimeConsistency(
+            Instant expectedAppliedAt,
+            ExpectedPostState postState) {
+        requireAllAtExpectedAppliedAt(
+                expectedAppliedAt,
+                postState.documentTransitions().stream()
                         .map(DocumentTransition::occurredAt)
                         .toList(),
-                "commands.documentTransitions");
-        requireAllAtObservedAt(
-                observedAt,
-                commands.requirementTransitions().stream()
+                "documentTransitions");
+        requireAllAtExpectedAppliedAt(
+                expectedAppliedAt,
+                postState.requirementTransitions().stream()
                         .map(RequirementTransition::occurredAt)
                         .toList(),
-                "commands.requirementTransitions");
-        requireAllAtObservedAt(
-                observedAt,
-                commands.requiredSetPointerInserts().stream()
+                "requirementTransitions");
+        requireAllAtExpectedAppliedAt(
+                expectedAppliedAt,
+                postState.requiredSetPointers().stream()
                         .map(ExpectedRequiredSetPointer::updatedAt)
                         .toList(),
-                "commands.requiredSetPointerInserts");
-        requireAllAtObservedAt(
-                observedAt,
-                postState.v27TriggerEffects().documentTransitions().stream()
-                        .map(DocumentTransition::occurredAt)
-                        .toList(),
-                "v27.documentTransitions");
-        for (ReplacementBatch batch : commands.replacementBatchesToCreateAndSeal()) {
-            if (!batch.createdAt().equals(observedAt) || !batch.sealedAt().equals(observedAt)) {
+                "requiredSetPointers");
+        for (ReplacementBatch batch : postState.replacementBatches()) {
+            if (!batch.createdAt().equals(expectedAppliedAt)
+                    || !batch.sealedAt().equals(expectedAppliedAt)) {
                 throw new IllegalArgumentException(
-                        "Los lotes nuevos deben usar el único timestamp PostgreSQL observado");
+                        "Los lotes esperados deben usar expectedAppliedAt");
             }
         }
+    }
+
+    private static List<DocumentTransition> completeDocumentHistory(
+            ExpectedPostState postState) {
+        List<DocumentTransition> history = new ArrayList<>(
+                postState.preexistingDocumentTransitions());
+        history.addAll(postState.documentTransitions());
+        history.sort(DOCUMENT_TRANSITION_ORDER);
+        return List.copyOf(history);
+    }
+
+    private static List<RequirementTransition> completeRequirementHistory(
+            ExpectedPostState postState) {
+        List<RequirementTransition> history = new ArrayList<>(
+                postState.preexistingRequirementTransitions());
+        history.addAll(postState.requirementTransitions());
+        history.sort(REQUIREMENT_TRANSITION_ORDER);
+        return List.copyOf(history);
     }
 
     private static void requireDocumentStateConsistency(
@@ -998,7 +1057,12 @@ record LegalEditorialExecutionPlan(
             List<DocumentTransition> chain = transitionsById.getOrDefault(
                     state.documentVersionId(),
                     List.of());
-            if (!chain.isEmpty()) {
+            if (chain.isEmpty()) {
+                if (state.state() != EstadoVersionLegal.BORRADOR) {
+                    throw new IllegalArgumentException(
+                            "Todo estado documental no borrador requiere su historia completa");
+                }
+            } else {
                 requireDocumentTransitionChain(state, chain);
             }
         }
@@ -1024,7 +1088,12 @@ record LegalEditorialExecutionPlan(
             List<RequirementTransition> chain = transitionsById.getOrDefault(
                     state.requirementVersionId(),
                     List.of());
-            if (!chain.isEmpty()) {
+            if (chain.isEmpty()) {
+                if (state.state() != EstadoVersionLegal.BORRADOR) {
+                    throw new IllegalArgumentException(
+                            "Todo estado de requisito no borrador requiere su historia completa");
+                }
+            } else {
                 requireRequirementTransitionChain(state, chain);
             }
         }
@@ -1035,6 +1104,10 @@ record LegalEditorialExecutionPlan(
             List<DocumentTransition> transitions) {
         List<DocumentTransition> chain = new ArrayList<>(transitions);
         chain.sort(DOCUMENT_TRANSITION_ORDER);
+        if (chain.getFirst().previousState() != EstadoVersionLegal.BORRADOR) {
+            throw new IllegalArgumentException(
+                    "La historia documental no comienza en BORRADOR");
+        }
         for (int index = 1; index < chain.size(); index++) {
             if (chain.get(index - 1).newState() != chain.get(index).previousState()) {
                 throw new IllegalArgumentException(
@@ -1056,6 +1129,10 @@ record LegalEditorialExecutionPlan(
             List<RequirementTransition> transitions) {
         List<RequirementTransition> chain = new ArrayList<>(transitions);
         chain.sort(REQUIREMENT_TRANSITION_ORDER);
+        if (chain.getFirst().previousState() != EstadoVersionLegal.BORRADOR) {
+            throw new IllegalArgumentException(
+                    "La historia de requisito no comienza en BORRADOR");
+        }
         for (int index = 1; index < chain.size(); index++) {
             if (chain.get(index - 1).newState() != chain.get(index).previousState()) {
                 throw new IllegalArgumentException(
@@ -1165,13 +1242,13 @@ record LegalEditorialExecutionPlan(
         }
     }
 
-    private static void requireAllAtObservedAt(
-            Instant observedAt,
+    private static void requireAllAtExpectedAppliedAt(
+            Instant expectedAppliedAt,
             List<Instant> instants,
             String field) {
-        if (instants.stream().anyMatch(value -> !value.equals(observedAt))) {
+        if (instants.stream().anyMatch(value -> !value.equals(expectedAppliedAt))) {
             throw new IllegalArgumentException(
-                    field + " no usa el único timestamp PostgreSQL observado");
+                    field + " no usa expectedAppliedAt");
         }
     }
 
@@ -1264,6 +1341,16 @@ record LegalEditorialExecutionPlan(
             if (!seen.add(keyExtractor.apply(value))) {
                 throw new IllegalArgumentException(message);
             }
+        }
+    }
+
+    private static <T> void rejectOverlap(
+            List<T> left,
+            List<T> right,
+            String message) {
+        Set<T> seen = new HashSet<>(left);
+        if (right.stream().anyMatch(seen::contains)) {
+            throw new IllegalArgumentException(message);
         }
     }
 

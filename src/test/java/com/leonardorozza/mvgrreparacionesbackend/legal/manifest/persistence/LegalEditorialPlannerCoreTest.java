@@ -7,6 +7,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRef;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRetirement;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentScopedRef;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1;
@@ -23,6 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -127,6 +130,7 @@ class LegalEditorialPlannerCoreTest {
                 .satisfies(plan -> {
                     assertThat(plan.operationType())
                             .isEqualTo(LegalEditorialExecutionPlan.OperationType.PROMOTE);
+                    assertThat(plan.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
                     assertThat(plan.mutationCommands().documentTransitions()).hasSize(2);
                     assertThat(plan.mutationCommands().documentSlotInserts()).hasSize(1);
                 });
@@ -150,6 +154,8 @@ class LegalEditorialPlannerCoreTest {
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
         assertThat(result.executionPlan()).get().satisfies(plan -> {
+            assertThat(plan.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(plan.expectedAppliedAt()).isEqualTo(APPLIED_AT);
             assertThat(plan.mutationCommands().isEmpty()).isTrue();
             assertThat(plan.expectedPostState().documentTransitions())
                     .extracting(LegalEditorialExecutionPlan.DocumentTransition::occurredAt)
@@ -222,6 +228,37 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void replaceScopeGuardBlocksMultipleAndSplitMergeBatchesBeforeReadingDatabaseState() {
+        List<List<DocumentReplacementBatch>> unsupportedMappings = List.of(
+                List.of(batchWithCardinality(1, 1), batchWithCardinality(1, 1)),
+                List.of(batchWithCardinality(1, 2)),
+                List.of(batchWithCardinality(2, 1)));
+
+        for (List<DocumentReplacementBatch> batches : unsupportedMappings) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            ValidatedEditorialPlan token = replacementToken(List.of(), List.of());
+            when(token.plan().documentReplacementBatches()).thenReturn(batches);
+
+            LegalEditorialPlanResult result = harness.core().planReplace(
+                    harness.release,
+                    token,
+                    OBSERVED_AT);
+
+            assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).isEmpty();
+            assertThat(result.issues())
+                    .extracting(LegalManifestIssue::code)
+                    .containsExactly(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+            verify(harness.reader, never()).publication(any());
+            verify(harness.reader, never()).snapshot(
+                    any(), any(), anySet(), anySet(), anySet());
+            verify(harness.readiness, never()).evaluate(any(), any());
+            verify(harness.readiness, never()).observeState(any(), any());
+            verify(harness.origin, never()).verify(any(), any());
+        }
+    }
+
+    @Test
     void replaceRejectsAPendingTargetReviewBeforeReadingDatabaseState() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.PENDING);
         ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
@@ -288,12 +325,116 @@ class LegalEditorialPlannerCoreTest {
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
         assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
             assertThat(execution.mutationCommands().documentSlotDeletes()).hasSize(1);
             assertThat(execution.mutationCommands().requiredSetPointerDeletes())
                     .singleElement()
                     .satisfies(pointer -> assertThat(pointer.expectedRequiredSetId())
                             .isEqualTo(REQUIRED_SET_ID));
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .singleElement()
+                    .satisfies(transition -> {
+                        assertThat(transition.previousState())
+                                .isEqualTo(EstadoVersionLegal.VIGENTE);
+                        assertThat(transition.newState())
+                                .isEqualTo(EstadoVersionLegal.RETIRADA);
+                        assertThat(transition.occurredAt()).isEqualTo(OBSERVED_AT);
+                    });
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(2)
+                    .extracting(LegalEditorialExecutionPlan.DocumentTransition::occurredAt)
+                    .containsOnly(APPLIED_AT);
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .isEmpty();
         });
+    }
+
+    @Test
+    void replacementReplayWithoutBatchPreservesReuseHistoryAndHistoricalApplyTime() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        DocumentScopedRef reuse = new DocumentScopedRef(
+                DOCUMENT_ID,
+                "c".repeat(64),
+                List.of(ContextoLegal.REGISTRO));
+        DocumentScopedRef addition = new DocumentScopedRef(
+                ADDED_DOCUMENT_ID,
+                "d".repeat(64),
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        ValidatedEditorialPlan token = replacementToken(List.of(addition), List.of(reuse));
+        Instant reuseActivation = APPLIED_AT.minusSeconds(86_400);
+        LegalEditorialPlannerCore.DocumentEvidence reusedDocument = evidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                "c".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                reuseActivation,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence addedDocument = evidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                APPLIED_AT,
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.PlannerSnapshot snapshot = new LegalEditorialPlannerCore
+                .PlannerSnapshot(
+                List.of(DOCUMENT_ID, ADDED_DOCUMENT_ID),
+                List.of(),
+                List.of(DOCUMENT_ID),
+                List.of(),
+                Map.of(
+                        DOCUMENT_ID, reusedDocument,
+                        ADDED_DOCUMENT_ID, addedDocument),
+                Map.of(),
+                List.of(),
+                List.of(
+                        slot(reusedDocument, ContextoLegal.REGISTRO, TARGET_PUBLICATION_ID),
+                        slot(addedDocument, ContextoLegal.CIERRE_CUENTA, TARGET_PUBLICATION_ID)),
+                List.of(),
+                List.of(
+                        transition(1, DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, reuseActivation),
+                        transition(2, DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, reuseActivation),
+                        transition(3, ADDED_DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, APPLIED_AT),
+                        transition(4, ADDED_DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, APPLIED_AT)),
+                List.of(),
+                Map.of());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(snapshot);
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.ready(observation(2, 4, 0, 2, 0)));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .hasSize(2)
+                    .extracting(LegalEditorialExecutionPlan.DocumentTransition::documentVersionId)
+                    .containsOnly(ADDED_DOCUMENT_ID);
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(2)
+                    .allSatisfy(transition -> {
+                        assertThat(transition.documentVersionId()).isEqualTo(DOCUMENT_ID);
+                        assertThat(transition.occurredAt()).isEqualTo(reuseActivation);
+                    });
+            assertThat(execution.expectedPostState().replacementBatches()).isEmpty();
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
     }
 
     @Test
@@ -589,6 +730,19 @@ class LegalEditorialPlannerCoreTest {
         when(plan.requirementReplacements()).thenReturn(List.of());
         when(plan.requirementRetirements()).thenReturn(List.of());
         return token;
+    }
+
+    private static DocumentReplacementBatch batchWithCardinality(
+            int predecessorCount,
+            int successorCount) {
+        DocumentReplacementBatch batch = mock(DocumentReplacementBatch.class);
+        when(batch.predecessors()).thenReturn(Collections.nCopies(
+                predecessorCount,
+                mock(DocumentRef.class)));
+        when(batch.successors()).thenReturn(Collections.nCopies(
+                successorCount,
+                mock(DocumentRef.class)));
+        return batch;
     }
 
     private static void stubReplacementPublications(Harness harness) {

@@ -216,6 +216,7 @@ final class LegalManifestPersistenceITSupport {
                 readiness.gate(),
                 readiness.jdbc(),
                 plannerCore,
+                new LegalEditorialReplaceScopeGuard(),
                 new LegalEditorialFailureMapper(),
                 readiness.schemaVerifier(),
                 readiness.privilegeVerifier());

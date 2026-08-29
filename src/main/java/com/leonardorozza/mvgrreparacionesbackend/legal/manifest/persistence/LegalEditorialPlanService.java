@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditor
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -20,18 +21,23 @@ public final class LegalEditorialPlanService {
     private final LegalManifestDatabaseGate databaseGate;
     private final JdbcTemplate jdbc;
     private final LegalEditorialPlannerCore planner;
+    private final LegalEditorialReplaceScopeGuard replaceScopeGuard;
     private final LegalEditorialFailureMapper failureMapper;
 
     LegalEditorialPlanService(
             LegalManifestDatabaseGate databaseGate,
             JdbcTemplate jdbc,
             LegalEditorialPlannerCore planner,
+            LegalEditorialReplaceScopeGuard replaceScopeGuard,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier) {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.planner = Objects.requireNonNull(planner, "planner");
+        this.replaceScopeGuard = Objects.requireNonNull(
+                replaceScopeGuard,
+                "replaceScopeGuard");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
         this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
@@ -51,7 +57,13 @@ public final class LegalEditorialPlanService {
             ValidatedEditorialPlan editorialPlan) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(editorialPlan, "editorialPlan");
-        return execute(observedAt -> planner.planReplace(target, editorialPlan, observedAt));
+        LegalManifestValidation<ValidatedEditorialPlan> supportedScope =
+                replaceScopeGuard.validate(editorialPlan);
+        if (!supportedScope.passed()) {
+            return LegalEditorialPlanResult.blocked(supportedScope.issues());
+        }
+        ValidatedEditorialPlan supportedPlan = supportedScope.value().orElseThrow();
+        return execute(observedAt -> planner.planReplace(target, supportedPlan, observedAt));
     }
 
     /** Plans an explicit fail-closed retirement of the accredited current release. */

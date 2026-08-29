@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditor
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
@@ -38,6 +39,7 @@ class LegalEditorialPlanServiceTest {
                 harness.gate,
                 harness.jdbc,
                 harness.planner,
+                harness.replaceScopeGuard,
                 harness.failureMapper,
                 harness.schemaVerifier,
                 harness.privilegeVerifier);
@@ -45,7 +47,7 @@ class LegalEditorialPlanServiceTest {
         assertThat(LegalEditorialPlanService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(6);
+                    assertThat(constructor.getParameterCount()).isEqualTo(7);
                     assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
                 });
         verify(harness.gate).requireExactEditorialPreflights(
@@ -89,11 +91,34 @@ class LegalEditorialPlanServiceTest {
         verify(replaceHarness.jdbc).queryForObject(
                 "SELECT transaction_timestamp()",
                 OffsetDateTime.class);
+        verify(replaceHarness.replaceScopeGuard).validate(token);
         verify(retireHarness.jdbc).queryForObject(
                 "SELECT transaction_timestamp()",
                 OffsetDateTime.class);
         verify(replaceHarness.planner).planReplace(release, token, OBSERVED_AT);
         verify(retireHarness.planner).planRetire(release, token, OBSERVED_AT);
+    }
+
+    @Test
+    void unsupportedReplaceScopeIsBlockedBeforeOpeningTheReadOnlyTransaction() {
+        Harness harness = new Harness();
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
+        LegalManifestIssue issue = LegalManifestIssue.at(
+                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                "documentReplacementBatches");
+        when(harness.replaceScopeGuard.validate(token))
+                .thenReturn(LegalManifestValidation.failure(issue));
+
+        LegalEditorialPlanResult result = harness.service().planReplace(release, token);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues()).containsExactly(issue);
+        verify(harness.gate, never()).executeReadOnly(any());
+        verify(harness.jdbc, never()).queryForObject(any(String.class), any(Class.class));
+        verify(harness.planner, never()).usesJdbc(any());
+        verify(harness.planner, never()).planReplace(any(), any(), any());
     }
 
     @Test
@@ -159,6 +184,8 @@ class LegalEditorialPlanServiceTest {
         private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
         private final LegalManifestDatabaseGate gate = mock(LegalManifestDatabaseGate.class);
         private final LegalEditorialPlannerCore planner = mock(LegalEditorialPlannerCore.class);
+        private final LegalEditorialReplaceScopeGuard replaceScopeGuard =
+                mock(LegalEditorialReplaceScopeGuard.class);
         private final LegalEditorialFailureMapper failureMapper =
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
@@ -169,6 +196,8 @@ class LegalEditorialPlanServiceTest {
         private Harness() {
             when(gate.usesJdbc(jdbc)).thenReturn(true);
             when(planner.usesJdbc(jdbc)).thenReturn(true);
+            when(replaceScopeGuard.validate(any())).thenAnswer(invocation ->
+                    LegalManifestValidation.pass(invocation.getArgument(0)));
             when(jdbc.queryForObject(
                     "SELECT transaction_timestamp()",
                     OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
@@ -186,6 +215,7 @@ class LegalEditorialPlanServiceTest {
                     gate,
                     jdbc,
                     planner,
+                    replaceScopeGuard,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);

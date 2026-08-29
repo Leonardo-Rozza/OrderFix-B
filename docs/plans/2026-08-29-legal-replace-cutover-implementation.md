@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-29
 
-Estado: listo para ejecución
+Estado: en ejecución — Subcorte 6A completado
 
 Diseño aprobado:
 
@@ -28,6 +28,8 @@ por sus pruebas, termina con diff limpio y se registra en un commit local atómi
 10. `UNKNOWN` conserva identidad input-safe, pero nunca metadata tentativa derivada de DB.
 
 ## Subcorte 6A — Capacidad, tiempo e historia esperada
+
+Estado: completado el 2026-08-29.
 
 ### Objetivo
 
@@ -80,6 +82,25 @@ git status --short
 Commit:
 
     fix(legal): delimita cutover editorial uno a uno
+
+### Evidencia de cierre 6A
+
+- `LegalEditorialReplaceScopeGuard` admite cero lotes o uno 1→1 y bloquea múltiples lotes,
+  split y merge con `BLOCKED/REPLACEMENT_MAPPING_INVALID` antes del gate read-only, del timestamp
+  y de cualquier lectura JDBC. `PlannerCore` conserva la misma defensa antes de acreditar estado.
+- `LegalEditorialExecutionPlan` separa `observedAt` de `expectedAppliedAt`; una mutación fresca
+  exige igualdad y un replay conserva el instante histórico, siempre anterior o igual al actual.
+- El postestado transporta la prehistoria documental y de requisitos separada del delta. Cada
+  cadena completa comienza en `BORRADOR`; comandos, efectos V27 y conteos continúan describiendo
+  únicamente el cutover, nunca la historia previa.
+- Java 21 (Corretto 21.0.10): puerta unitaria focal de 54 tests, 0 fallos, 0 errores y 0 omitidos.
+- Puerta `verify`: suite unitaria backend completa de 1.049 tests y 28 tests de integración sobre
+  PostgreSQL 16/Flyway V27, todos sin fallos, errores ni omitidos. Incluye planner, privilegios,
+  aislamiento, promoción inicial y rollback tardío.
+- El fixture del planner resuelve únicamente el padre real de `@TempDir` para que el test generado
+  no herede el alias `/var` de macOS; el reader confinado productivo no fue relajado.
+- Tres revisiones estáticas independientes cerraron sin hallazgos P0–P2. No se modificaron V27,
+  grants, endpoints, JPA, frontend, contenido legal ni despliegue; no hubo push.
 
 ## Subcorte 6B — Plan REPLACE y contrato CLI
 

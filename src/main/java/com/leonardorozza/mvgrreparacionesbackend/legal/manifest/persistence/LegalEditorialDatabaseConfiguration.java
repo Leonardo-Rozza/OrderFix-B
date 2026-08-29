@@ -194,6 +194,11 @@ public class LegalEditorialDatabaseConfiguration {
     }
 
     @Bean
+    LegalEditorialReplaceScopeGuard legalEditorialReplaceScopeGuard() {
+        return new LegalEditorialReplaceScopeGuard();
+    }
+
+    @Bean
     LegalEditorialReadinessService legalEditorialReadinessService(
             @Qualifier(READ_ONLY_GATE) LegalManifestDatabaseGate databaseGate,
             JdbcTemplate jdbcTemplate,
@@ -215,6 +220,7 @@ public class LegalEditorialDatabaseConfiguration {
             @Qualifier(READ_ONLY_GATE) LegalManifestDatabaseGate databaseGate,
             JdbcTemplate jdbcTemplate,
             LegalEditorialPlannerCore plannerCore,
+            LegalEditorialReplaceScopeGuard replaceScopeGuard,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier) {
@@ -222,6 +228,7 @@ public class LegalEditorialDatabaseConfiguration {
                 databaseGate,
                 jdbcTemplate,
                 plannerCore,
+                replaceScopeGuard,
                 failureMapper,
                 schemaVerifier,
                 privilegeVerifier);

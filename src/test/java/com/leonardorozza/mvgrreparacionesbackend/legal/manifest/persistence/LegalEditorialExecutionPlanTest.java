@@ -24,6 +24,8 @@ class LegalEditorialExecutionPlanTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
     private static final Instant OTHER_AT =
             Instant.parse("2026-08-28T18:00:01.123456Z");
+    private static final Instant PREEXISTING_AT =
+            Instant.parse("2026-08-01T12:00:00.123456Z");
 
     private static final String SHA_A = "a".repeat(64);
     private static final String SHA_B = "b".repeat(64);
@@ -61,6 +63,7 @@ class LegalEditorialExecutionPlanTest {
                         "operationId",
                         "planSha256",
                         "observedAt",
+                        "expectedAppliedAt",
                         "expectedReadinessAfter",
                         "acknowledgeFailClosedGap",
                         "changeRequired",
@@ -80,6 +83,7 @@ class LegalEditorialExecutionPlanTest {
         assertThat(plan.expectedReadinessAfter()).isEqualTo(LegalEditorialReadiness.READY);
         assertThat(plan.acknowledgeFailClosedGap()).isFalse();
         assertThat(plan.changeRequired()).isTrue();
+        assertThat(plan.expectedAppliedAt()).isEqualTo(plan.observedAt());
         assertThat(plan.expectedPostState().v27TriggerEffects().isEmpty()).isTrue();
         assertThat(plan.expectedPostState().replacementBatches()).isEmpty();
         assertThat(plan.deltaCounts()).isEqualTo(new LegalEditorialExecutionPlan.DeltaCounts(
@@ -100,6 +104,9 @@ class LegalEditorialExecutionPlanTest {
         LegalEditorialExecutionPlan replay = promote(false);
 
         assertThat(replay.changeRequired()).isFalse();
+        assertThat(replay.observedAt()).isEqualTo(OTHER_AT);
+        assertThat(replay.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(replay.expectedAppliedAt()).isBefore(replay.observedAt());
         assertThat(replay.expectedPostState().documentTransitions()).hasSize(4);
         assertThat(replay.expectedPostState().requirementTransitions()).hasSize(2);
         assertThat(replay.mutationCommands().isEmpty()).isTrue();
@@ -148,6 +155,19 @@ class LegalEditorialExecutionPlanTest {
         LegalEditorialExecutionPlan replay = replacement(false);
 
         assertThat(replay.expectedPostState().replacementBatches()).hasSize(1);
+        assertThat(replay.observedAt()).isEqualTo(OTHER_AT);
+        assertThat(replay.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(replay.expectedPostState().preexistingDocumentTransitions())
+                .extracting(
+                        LegalEditorialExecutionPlan.DocumentTransition::previousState,
+                        LegalEditorialExecutionPlan.DocumentTransition::newState)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA),
+                        org.assertj.core.groups.Tuple.tuple(
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE));
         assertThat(replay.expectedPostState().v27TriggerEffects().isEmpty()).isFalse();
         assertThat(replay.mutationCommands().isEmpty()).isTrue();
         assertThat(replay.deltaCounts().isZero()).isTrue();
@@ -318,6 +338,28 @@ class LegalEditorialExecutionPlanTest {
     }
 
     @Test
+    void applicationTimeUsesPostgresPrecisionCannotBeFutureAndMatchesFreshObservation() {
+        LegalEditorialExecutionPlan replay = promote(false);
+        LegalEditorialExecutionPlan fresh = promote(true);
+
+        assertThatThrownBy(() -> copyWithTimes(replay, OBSERVED_AT, OTHER_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("posterior");
+        assertThatThrownBy(() -> copyWithTimes(
+                replay,
+                OTHER_AT,
+                Instant.parse("2026-08-28T18:00:00.123456789Z")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("microsegundos");
+        assertThatThrownBy(() -> copyWithTimes(replay, OTHER_AT, PREEXISTING_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expectedAppliedAt");
+        assertThatThrownBy(() -> copyWithTimes(fresh, OTHER_AT, OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mutación fresca");
+    }
+
+    @Test
     void directCommandsMustExactlyProduceTheDeclaredPostState() {
         LegalEditorialExecutionPlan promote = promote(true);
         LegalEditorialExecutionPlan.MutationCommands missingPointer =
@@ -443,6 +485,7 @@ class LegalEditorialExecutionPlanTest {
                 Optional.empty(),
                 Optional.empty(),
                 Instant.parse("2026-08-28T18:00:00.123456789Z"),
+                OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,
                 false,
@@ -468,6 +511,8 @@ class LegalEditorialExecutionPlanTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
+                List.of(),
                 LegalEditorialExecutionPlan.V27TriggerEffects.empty());
         mutable.clear();
 
@@ -479,6 +524,8 @@ class LegalEditorialExecutionPlanTest {
 
         assertThatThrownBy(() -> new LegalEditorialExecutionPlan.ExpectedPostState(
                 List.of(documentState(DOCUMENT_ONE, null), documentState(DOCUMENT_ONE, null)),
+                List.of(),
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -499,6 +546,122 @@ class LegalEditorialExecutionPlanTest {
                 List.of(),
                 List.of(),
                 List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void prehistoryIsImmutableDisjointAndCompletesEveryLifecycleChain() {
+        LegalEditorialExecutionPlan replacement = replacement(false);
+        LegalEditorialExecutionPlan.ExpectedPostState postState =
+                replacement.expectedPostState();
+        List<LegalEditorialExecutionPlan.DocumentTransition> prehistory =
+                postState.preexistingDocumentTransitions();
+
+        assertThat(prehistory)
+                .extracting(
+                        LegalEditorialExecutionPlan.DocumentTransition::previousState,
+                        LegalEditorialExecutionPlan.DocumentTransition::newState)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA),
+                        org.assertj.core.groups.Tuple.tuple(
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE));
+        assertThatThrownBy(prehistory::clear)
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> new LegalEditorialExecutionPlan.ExpectedPostState(
+                postState.documentStates(),
+                postState.requirementStates(),
+                postState.documentTransitions(),
+                postState.requirementTransitions(),
+                List.of(prehistory.getFirst(), prehistory.getFirst()),
+                postState.preexistingRequirementTransitions(),
+                postState.documentSlots(),
+                postState.requiredSetPointers(),
+                postState.replacementBatches(),
+                postState.v27TriggerEffects()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicada");
+
+        assertThatThrownBy(() -> new LegalEditorialExecutionPlan.ExpectedPostState(
+                postState.documentStates(),
+                postState.requirementStates(),
+                postState.documentTransitions(),
+                postState.requirementTransitions(),
+                List.of(postState.documentTransitions().getFirst()),
+                postState.preexistingRequirementTransitions(),
+                postState.documentSlots(),
+                postState.requiredSetPointers(),
+                postState.replacementBatches(),
+                postState.v27TriggerEffects()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("preexistente");
+
+        LegalEditorialExecutionPlan.ExpectedPostState missingPrehistory =
+                new LegalEditorialExecutionPlan.ExpectedPostState(
+                        postState.documentStates(),
+                        postState.requirementStates(),
+                        postState.documentTransitions(),
+                        postState.requirementTransitions(),
+                        List.of(),
+                        postState.preexistingRequirementTransitions(),
+                        postState.documentSlots(),
+                        postState.requiredSetPointers(),
+                        postState.replacementBatches(),
+                        postState.v27TriggerEffects());
+        assertThatThrownBy(() -> copy(
+                replacement,
+                replacement.operationType(),
+                replacement.source(),
+                replacement.target(),
+                replacement.operationId(),
+                replacement.planSha256(),
+                replacement.expectedReadinessAfter(),
+                replacement.acknowledgeFailClosedGap(),
+                false,
+                missingPrehistory,
+                LegalEditorialExecutionPlan.MutationCommands.empty()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BORRADOR");
+    }
+
+    @Test
+    void promotionRejectsAnyPreexistingHistory() {
+        LegalEditorialExecutionPlan promote = promote(false);
+        LegalEditorialExecutionPlan.ExpectedPostState original = promote.expectedPostState();
+        LegalEditorialExecutionPlan.DocumentTransition moved =
+                original.documentTransitions().getFirst();
+        List<LegalEditorialExecutionPlan.DocumentTransition> delta = original
+                .documentTransitions().stream()
+                .filter(transition -> !transition.equals(moved))
+                .toList();
+        LegalEditorialExecutionPlan.ExpectedPostState withPrehistory =
+                new LegalEditorialExecutionPlan.ExpectedPostState(
+                        original.documentStates(),
+                        original.requirementStates(),
+                        delta,
+                        original.requirementTransitions(),
+                        List.of(moved),
+                        original.preexistingRequirementTransitions(),
+                        original.documentSlots(),
+                        original.requiredSetPointers(),
+                        original.replacementBatches(),
+                        original.v27TriggerEffects());
+
+        assertThatThrownBy(() -> copy(
+                promote,
+                promote.operationType(),
+                promote.source(),
+                promote.target(),
+                promote.operationId(),
+                promote.planSha256(),
+                promote.expectedReadinessAfter(),
+                promote.acknowledgeFailClosedGap(),
+                false,
+                withPrehistory,
+                LegalEditorialExecutionPlan.MutationCommands.empty()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -560,6 +723,8 @@ class LegalEditorialExecutionPlanTest {
                         replacement.expectedPostState().requirementStates(),
                         replacement.expectedPostState().documentTransitions(),
                         replacement.expectedPostState().requirementTransitions(),
+                        replacement.expectedPostState().preexistingDocumentTransitions(),
+                        replacement.expectedPostState().preexistingRequirementTransitions(),
                         replacement.expectedPostState().documentSlots(),
                         replacement.expectedPostState().requiredSetPointers(),
                         replacement.expectedPostState().replacementBatches(),
@@ -652,6 +817,8 @@ class LegalEditorialExecutionPlanTest {
                                 null)),
                         documentTransitions,
                         requirementTransitions,
+                        List.of(),
+                        List.of(),
                         List.of(slotTwo, slotOne),
                         List.of(pointer),
                         List.of(),
@@ -672,6 +839,7 @@ class LegalEditorialExecutionPlanTest {
                 target(),
                 Optional.empty(),
                 Optional.empty(),
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,
@@ -736,6 +904,20 @@ class LegalEditorialExecutionPlanTest {
                         List.of(),
                         List.of(publishSuccessor, activateSuccessor, replacePredecessor),
                         List.of(),
+                        List.of(
+                                transitionAt(
+                                        DOCUMENT_PREDECESSOR,
+                                        EstadoVersionLegal.BORRADOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        null,
+                                        PREEXISTING_AT),
+                                transitionAt(
+                                        DOCUMENT_PREDECESSOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        EstadoVersionLegal.VIGENTE,
+                                        null,
+                                        PREEXISTING_AT)),
+                        List.of(),
                         List.of(successorSlot),
                         List.of(),
                         List.of(batch),
@@ -756,6 +938,7 @@ class LegalEditorialExecutionPlanTest {
                 target(),
                 Optional.of(OPERATION_ID),
                 Optional.of(PLAN_SHA),
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,
@@ -784,6 +967,20 @@ class LegalEditorialExecutionPlanTest {
                         List.of(),
                         List.of(transition),
                         List.of(),
+                        List.of(
+                                transitionAt(
+                                        DOCUMENT_PREDECESSOR,
+                                        EstadoVersionLegal.BORRADOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        null,
+                                        PREEXISTING_AT),
+                                transitionAt(
+                                        DOCUMENT_PREDECESSOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        EstadoVersionLegal.VIGENTE,
+                                        null,
+                                        PREEXISTING_AT)),
+                        List.of(),
                         List.of(),
                         List.of(),
                         List.of(),
@@ -806,6 +1003,7 @@ class LegalEditorialExecutionPlanTest {
                 source().publication(),
                 Optional.of(OPERATION_ID),
                 Optional.of(PLAN_SHA),
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.NOT_READY,
                 true,
@@ -833,11 +1031,31 @@ class LegalEditorialExecutionPlanTest {
                 operationId,
                 planSha256,
                 original.observedAt(),
+                original.expectedAppliedAt(),
                 expectedReadinessAfter,
                 acknowledgeFailClosedGap,
                 changeRequired,
                 expectedPostState,
                 commands);
+    }
+
+    private static LegalEditorialExecutionPlan copyWithTimes(
+            LegalEditorialExecutionPlan original,
+            Instant observedAt,
+            Instant expectedAppliedAt) {
+        return new LegalEditorialExecutionPlan(
+                original.operationType(),
+                original.source(),
+                original.target(),
+                original.operationId(),
+                original.planSha256(),
+                observedAt,
+                expectedAppliedAt,
+                original.expectedReadinessAfter(),
+                original.acknowledgeFailClosedGap(),
+                original.changeRequired(),
+                original.expectedPostState(),
+                original.mutationCommands());
     }
 
     private static LegalEditorialExecutionPlan.PublicationIdentity target() {
@@ -872,13 +1090,22 @@ class LegalEditorialExecutionPlanTest {
             EstadoVersionLegal previous,
             EstadoVersionLegal next,
             UUID batchId) {
+        return transitionAt(documentVersionId, previous, next, batchId, OBSERVED_AT);
+    }
+
+    private static LegalEditorialExecutionPlan.DocumentTransition transitionAt(
+            UUID documentVersionId,
+            EstadoVersionLegal previous,
+            EstadoVersionLegal next,
+            UUID batchId,
+            Instant occurredAt) {
         return new LegalEditorialExecutionPlan.DocumentTransition(
                 documentVersionId,
                 previous,
                 next,
                 null,
                 batchId,
-                OBSERVED_AT);
+                occurredAt);
     }
 
     private static LegalEditorialExecutionPlan.RequirementTransition requirementTransition(

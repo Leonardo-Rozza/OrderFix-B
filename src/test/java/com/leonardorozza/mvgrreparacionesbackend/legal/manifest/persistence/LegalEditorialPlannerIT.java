@@ -97,6 +97,8 @@ class LegalEditorialPlannerIT {
             assertThat(delta.directRequirementTransitions())
                     .isEqualTo(target.release().requirementCount() * 2);
         });
+        assertThat(result.executionPlan()).get().satisfies(plan ->
+                assertThat(plan.expectedAppliedAt()).isEqualTo(plan.observedAt()));
         assertThat(result.issues()).isEmpty();
     }
 
@@ -112,6 +114,11 @@ class LegalEditorialPlannerIT {
         assertThat(result.changeRequired()).contains(false);
         assertThat(result.deltaCounts()).get().satisfies(delta ->
                 assertThat(delta.isZero()).isTrue());
+        assertThat(result.executionPlan()).get().satisfies(plan -> {
+            assertThat(plan.expectedAppliedAt()).isBefore(plan.observedAt());
+            assertThat(plan.expectedPostState().preexistingDocumentTransitions()).isEmpty();
+            assertThat(plan.expectedPostState().preexistingRequirementTransitions()).isEmpty();
+        });
         assertThat(result.issues()).isEmpty();
     }
 
@@ -188,6 +195,11 @@ class LegalEditorialPlannerIT {
                     .isEqualTo(retired.contexts().size());
             assertThat(delta.requiredSetPointerDeletes()).isPositive();
         });
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.observedAt());
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(2);
+        });
         assertThat(result.issues()).isEmpty();
     }
 
@@ -230,6 +242,13 @@ class LegalEditorialPlannerIT {
             assertThat(delta.directDocumentSlotInserts()).isPositive();
             assertThat(delta.requiredSetPointerDeletes()).isPositive();
             assertThat(delta.requiredSetPointerInserts()).isPositive();
+        });
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.observedAt());
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .isNotEmpty();
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .isNotEmpty();
         });
         assertThat(result.issues()).isEmpty();
     }
@@ -513,7 +532,8 @@ class LegalEditorialPlannerIT {
 
     private ValidatedEditorialPlan validatePlan(ObjectNode plan, UUID operationId)
             throws Exception {
-        Path directory = temporaryDirectory.resolve("editorial-plan-" + operationId);
+        Path directory = temporaryDirectory.toRealPath()
+                .resolve("editorial-plan-" + operationId);
         Files.createDirectories(directory);
         Path path = directory.resolve(ConfinedEditorialPlanReader.PLAN_FILENAME);
         Files.write(path, JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(plan));
