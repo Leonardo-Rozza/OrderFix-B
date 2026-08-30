@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcortes 7A y 7B completados, 7C pendiente
+Estado: en ejecución — diseño aprobado; Subcortes 7A, 7B y 7C completados, 7D pendiente
 
 Diseño aprobado:
 
@@ -184,7 +184,7 @@ Commit:
 
 ## Subcorte 7C — PostgreSQL fresco
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -206,7 +206,7 @@ editorial restringido exacto.
 - merge `2→1` con cobertura exacta y target `READY`;
 - un split y un merge disjuntos en una sola operación;
 - batch IDs invertidos respecto del mínimo miembro como fixture adversarial; el orden de sellado se
-  acredita en el writer instrumentado de 7A, mientras esta IT acredita postestado y atomicidad;
+  acredita en el writer instrumentado de 7A, mientras esta IT acredita el postestado conjunto;
 - estados, historia, membresías, slots, punteros, receipt y timestamp exactos;
 - snapshots sellados y tablas de aceptación/idempotencia sin cambios;
 - rol restringido sin grant nuevo.
@@ -223,6 +223,35 @@ git status --short
 Commit:
 
     test(legal): acredita split y merge en postgresql
+
+### Evidencia de cierre 7C
+
+- `LegalEditorialSplitMergeIT` es un fixture autónomo y test-only. Acredita en PostgreSQL fresco un
+  split real `1→2`, un merge real `2→1` y una operación con ambos lotes disjuntos; congela las
+  cardinalidades para que una futura edición no degrade silenciosamente los escenarios a `1→1`.
+- El caso compuesto asigna IDs de lote en orden textual inverso al UUID mínimo de sus miembros y
+  comprueba que el plan validado conserva el orden canónico por miembro. El orden efectivo de los
+  sellos continúa cubierto por la instrumentación del writer de 7A.
+- Los receipts exactos fueron `12/6/24/12/21/8/1` para split, `11/6/22/12/21/8/1` para merge y
+  `12/6/24/12/21/8/2` para multibatch: versiones documentales, requisitos, transiciones target,
+  transiciones de requisitos target, slots, punteros y lotes, respectivamente. Cada conteo se
+  contrastó además con SQL independiente.
+- Cabeceras, membresías, estados, historia completa, slots, punteros y timestamps coinciden con el
+  postestado esperado. Los snapshots sellados permanecen inmutables y las seis tablas externas de
+  aceptación/idempotencia conservan exactamente sus filas.
+- Las tres operaciones se ejecutan con `current_user` igual al rol editorial restringido; el
+  verificador de privilegios pasa antes y después sin agregar grants. Readiness converge de
+  `NOT_READY` a `READY`.
+- Java 21 (Corretto 21.0.10): puerta unitaria focal de 61 tests y suite completa de 2.629 tests,
+  todas con 0 fallos, 0 errores y 0 omitidos. PostgreSQL 16.14/Flyway V27 ejecutó 23 integraciones
+  focales —7 de privilegios, 13 de REPLACE y 3 de split/merge— sin fallos; el control de secretos
+  del JAR también pasó.
+- Tres revisiones adversariales finales cerraron sin hallazgos P0–P2. Los dos P2 de precisión
+  detectados —nombre que sobreacreditaba atomicidad y cardinalidades no congeladas— se corrigieron
+  antes del commit.
+- No se modificaron producción, soporte compartido, V27/V28, schemas, grants, rol, endpoints, JPA
+  ni frontend; tampoco hubo push o deploy. Replay, corrupción y rollback entre sellos permanecen
+  deliberadamente para 7D.
 
 ## Subcorte 7D — Replay, corrupción y rollback multibatch
 

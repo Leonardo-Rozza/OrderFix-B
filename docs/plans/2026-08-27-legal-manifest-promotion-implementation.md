@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4, 5 y 6
-completados; Corte 7 en ejecución con Subcortes 7A y 7B completados; Cortes 8 a 11 pendientes
+completados; Corte 7 en ejecución con Subcortes 7A, 7B y 7C completados; Cortes 8 a 11 pendientes
 
 Diseño aprobado:
 
@@ -947,7 +947,8 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A y 7B completados y 7C pendiente.
+Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A, 7B y 7C completados y 7D
+pendiente.
 
 Diseño específico aprobado:
 
