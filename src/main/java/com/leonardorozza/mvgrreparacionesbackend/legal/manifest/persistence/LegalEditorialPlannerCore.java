@@ -357,14 +357,24 @@ final class LegalEditorialPlannerCore {
                     LegalManifestIssueCode.EXPECTED_READINESS_MISMATCH,
                     MAPPING_LOCATION);
         }
-        if (requiredType == LegalEditorialPlanV1.OperationType.RETIRE
-                && (plan.expectedReadinessAfter() != LegalEditorialReadiness.NOT_READY
-                || !plan.acknowledgeFailClosedGap()
-                || !plan.expectedCurrentPublicationId().equals(plan.targetPublicationId())
-                || !plan.expectedCurrentManifestSha256().equals(plan.targetManifestSha256()))) {
-            return blocked(
-                    LegalManifestIssueCode.FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED,
-                    MAPPING_LOCATION);
+        if (requiredType == LegalEditorialPlanV1.OperationType.RETIRE) {
+            if (plan.expectedReadinessAfter() != LegalEditorialReadiness.NOT_READY) {
+                return blocked(
+                        LegalManifestIssueCode.EXPECTED_READINESS_MISMATCH,
+                        MAPPING_LOCATION);
+            }
+            if (!plan.acknowledgeFailClosedGap()) {
+                return blocked(
+                        LegalManifestIssueCode.FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED,
+                        MAPPING_LOCATION);
+            }
+            if (!plan.expectedCurrentPublicationId().equals(plan.targetPublicationId())
+                    || !plan.expectedCurrentManifestSha256()
+                            .equals(plan.targetManifestSha256())) {
+                return blocked(
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                        MAPPING_LOCATION);
+            }
         }
         return null;
     }
@@ -896,9 +906,18 @@ final class LegalEditorialPlannerCore {
             Instant observedAt,
             Phase phase) {
         LegalEditorialPlanV1 plan = validated.plan();
-        if (!retirementStateMatches(snapshot, plan, phase)) {
+        if (!retirementStateMatches(snapshot, plan, observedAt, phase)) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
+        Optional<RetirementProjection> classifiedProjection = retirementProjection(
+                snapshot,
+                plan,
+                current.id(),
+                phase);
+        if (classifiedProjection.isEmpty()) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
+        RetirementProjection projection = classifiedProjection.orElseThrow();
         Instant operationAt = phase == Phase.SOURCE_STATE
                 ? observedAt
                 : inferRetirementTimestamp(snapshot, plan).orElse(null);
@@ -906,83 +925,63 @@ final class LegalEditorialPlannerCore {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
 
+        Map<UUID, DocumentRetirement> documentRetirements = plan.documentRetirements().stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        DocumentRetirement::documentVersionId,
+                        Function.identity()));
         List<LegalEditorialExecutionPlan.ExpectedDocumentState> documentStates =
                 new ArrayList<>();
         List<LegalEditorialExecutionPlan.DocumentTransition> documentTransitions =
                 new ArrayList<>();
-        List<LegalEditorialExecutionPlan.DocumentSlotDelete> slotDeletes = new ArrayList<>();
-        for (DocumentRetirement retirement : plan.documentRetirements()) {
-            DocumentEvidence document = snapshot.documents().get(retirement.documentVersionId());
-            documentStates.add(new LegalEditorialExecutionPlan.ExpectedDocumentState(
-                    document.id(),
-                    EstadoVersionLegal.RETIRADA,
-                    operationAt,
-                    retirement.reason(),
-                    null));
-            documentTransitions.add(documentTransition(
-                    document.id(),
-                    EstadoVersionLegal.VIGENTE,
-                    EstadoVersionLegal.RETIRADA,
-                    retirement.reason(),
-                    null,
-                    operationAt));
-            if (phase == Phase.SOURCE_STATE) {
-                for (SlotEvidence slot : slotsFor(snapshot, document.id())) {
-                    slotDeletes.add(new LegalEditorialExecutionPlan.DocumentSlotDelete(
-                            slot.key(),
-                            document.id()));
-                }
+        for (UUID documentId : snapshot.targetDocumentIds()) {
+            DocumentEvidence document = snapshot.documents().get(documentId);
+            DocumentRetirement retirement = documentRetirements.get(documentId);
+            if (retirement == null) {
+                documentStates.add(expectedDocumentState(document));
             } else {
-                for (ContextoLegal context : document.contexts()) {
-                    slotDeletes.add(new LegalEditorialExecutionPlan.DocumentSlotDelete(
-                            new LegalEditorialExecutionPlan.DocumentSlotKey(
-                                    document.type(),
-                                    document.locale(),
-                                    context),
-                            document.id()));
-                }
+                documentStates.add(new LegalEditorialExecutionPlan.ExpectedDocumentState(
+                        document.id(),
+                        EstadoVersionLegal.RETIRADA,
+                        operationAt,
+                        retirement.reason(),
+                        null));
+                documentTransitions.add(documentTransition(
+                        document.id(),
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.RETIRADA,
+                        retirement.reason(),
+                        null,
+                        operationAt));
             }
         }
 
+        Map<UUID, RequirementRetirement> requirementRetirements =
+                plan.requirementRetirements().stream().collect(Collectors.toUnmodifiableMap(
+                        RequirementRetirement::requirementVersionId,
+                        Function.identity()));
         List<LegalEditorialExecutionPlan.ExpectedRequirementState> requirementStates =
                 new ArrayList<>();
         List<LegalEditorialExecutionPlan.RequirementTransition> requirementTransitions =
                 new ArrayList<>();
-        for (RequirementRetirement retirement : plan.requirementRetirements()) {
-            RequirementEvidence requirement = snapshot.requirements().get(
-                    retirement.requirementVersionId());
-            requirementStates.add(new LegalEditorialExecutionPlan.ExpectedRequirementState(
-                    requirement.id(),
-                    EstadoVersionLegal.RETIRADA,
-                    operationAt,
-                    retirement.reason()));
-            requirementTransitions.add(requirementTransition(
-                    requirement.id(),
-                    EstadoVersionLegal.VIGENTE,
-                    EstadoVersionLegal.RETIRADA,
-                    retirement.reason(),
-                    operationAt));
+        for (UUID requirementId : snapshot.targetRequirementIds()) {
+            RequirementEvidence requirement = snapshot.requirements().get(requirementId);
+            RequirementRetirement retirement = requirementRetirements.get(requirementId);
+            if (retirement == null) {
+                requirementStates.add(expectedRequirementState(requirement));
+            } else {
+                requirementStates.add(new LegalEditorialExecutionPlan.ExpectedRequirementState(
+                        requirement.id(),
+                        EstadoVersionLegal.RETIRADA,
+                        operationAt,
+                        retirement.reason()));
+                requirementTransitions.add(requirementTransition(
+                        requirement.id(),
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.RETIRADA,
+                        retirement.reason(),
+                        operationAt));
+            }
         }
-        Set<UUID> retiredDocumentIds = plan.documentRetirements().stream()
-                .map(DocumentRetirement::documentVersionId)
-                .collect(Collectors.toUnmodifiableSet());
-        Set<UUID> retiredRequirementIds = plan.requirementRetirements().stream()
-                .map(RequirementRetirement::requirementVersionId)
-                .collect(Collectors.toUnmodifiableSet());
-        List<LegalEditorialExecutionPlan.RequiredSetPointerDelete> pointerDeletes =
-                phase == Phase.SOURCE_STATE
-                        ? snapshot.activePointers().stream()
-                                .filter(pointer -> pointerReferencesAny(
-                                        pointer,
-                                        retiredDocumentIds,
-                                        retiredRequirementIds))
-                                .map(pointer ->
-                                        new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
-                                                pointer.key(),
-                                                pointer.requiredSetId(),
-                                                Optional.of(pointerDependencies(pointer))))
-                                .toList()
-                        : List.of();
         Optional<PreexistingTransitionHistory> preexistingHistory =
                 preexistingTransitionHistory(
                         snapshot,
@@ -994,6 +993,15 @@ final class LegalEditorialPlannerCore {
         if (preexistingHistory.isEmpty()) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
+        Optional<List<LegalEditorialExecutionPlan.ReplacementBatch>> historicalBatches =
+                preexistingReplacementBatches(
+                        snapshot,
+                        List.of(),
+                        preexistingHistory.orElseThrow(),
+                        phase);
+        if (historicalBatches.isEmpty()) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         LegalEditorialExecutionPlan.ExpectedPostState postState =
                 new LegalEditorialExecutionPlan.ExpectedPostState(
                         documentStates,
@@ -1002,8 +1010,9 @@ final class LegalEditorialPlannerCore {
                         requirementTransitions,
                         preexistingHistory.orElseThrow().documentTransitions(),
                         preexistingHistory.orElseThrow().requirementTransitions(),
-                        List.of(),
-                        List.of(),
+                        projection.finalSlots(),
+                        projection.finalPointers(),
+                        historicalBatches.orElseThrow(),
                         List.of(),
                         LegalEditorialExecutionPlan.V27TriggerEffects.empty());
         boolean changeRequired = phase == Phase.SOURCE_STATE;
@@ -1011,9 +1020,9 @@ final class LegalEditorialPlannerCore {
                 ? new LegalEditorialExecutionPlan.MutationCommands(
                         documentTransitions,
                         requirementTransitions,
-                        slotDeletes,
+                        projection.slotDeletes(),
                         List.of(),
-                        pointerDeletes,
+                        projection.pointerDeletes(),
                         List.of(),
                         List.of())
                 : LegalEditorialExecutionPlan.MutationCommands.empty();
@@ -1122,9 +1131,46 @@ final class LegalEditorialPlannerCore {
     private static boolean retirementStateMatches(
             PlannerSnapshot snapshot,
             LegalEditorialPlanV1 plan,
+            Instant observedAt,
             Phase phase) {
-        if (phase == Phase.SOURCE_STATE && !exactRetirementSourceProjections(snapshot, plan)) {
+        Set<UUID> targetDocumentIds = Set.copyOf(snapshot.targetDocumentIds());
+        Set<UUID> targetRequirementIds = Set.copyOf(snapshot.targetRequirementIds());
+        if (targetDocumentIds.size() != snapshot.targetDocumentIds().size()
+                || targetRequirementIds.size() != snapshot.targetRequirementIds().size()
+                || !targetDocumentIds.equals(Set.copyOf(snapshot.sourceDocumentIds()))
+                || !targetRequirementIds.equals(Set.copyOf(snapshot.sourceRequirementIds()))
+                || !sourceMembershipHasOnlyOperationalStates(snapshot)) {
             return false;
+        }
+        Set<UUID> retiredDocumentIds = plan.documentRetirements().stream()
+                .map(DocumentRetirement::documentVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        Set<UUID> retiredRequirementIds = plan.requirementRetirements().stream()
+                .map(RequirementRetirement::requirementVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        if (phase == Phase.SOURCE_STATE) {
+            boolean documentTransitionAtOrAfterObservation =
+                    snapshot.documentTransitions().stream()
+                            .filter(transition -> targetDocumentIds.contains(
+                                    transition.versionId()))
+                            .anyMatch(transition ->
+                                    !transition.occurredAt().isBefore(observedAt));
+            boolean requirementTransitionAtOrAfterObservation =
+                    snapshot.requirementTransitions().stream()
+                            .filter(transition -> targetRequirementIds.contains(
+                                    transition.versionId()))
+                            .anyMatch(transition ->
+                                    !transition.occurredAt().isBefore(observedAt));
+            if (documentTransitionAtOrAfterObservation
+                    || requirementTransitionAtOrAfterObservation) {
+                return false;
+            }
+        }
+        for (UUID documentId : snapshot.targetDocumentIds()) {
+            if (!retiredDocumentIds.contains(documentId)
+                    && !matchesPreservedDocument(snapshot, documentId)) {
+                return false;
+            }
         }
         for (DocumentRetirement retirement : plan.documentRetirements()) {
             DocumentEvidence document = snapshot.documents().get(retirement.documentVersionId());
@@ -1132,20 +1178,20 @@ final class LegalEditorialPlannerCore {
                 return false;
             }
             if (phase == Phase.SOURCE_STATE) {
-                if (!matchesReusableDocument(snapshot, document.id())
-                        || !activeDocumentContexts(snapshot).getOrDefault(
-                                document.id(), Set.of()).equals(Set.copyOf(retirement.contexts()))) {
+                if (!matchesReusableDocument(snapshot, document.id())) {
                     return false;
                 }
             } else if (!matchesTerminalDocument(
                     snapshot,
                     document.id(),
                     retirement.reason(),
-                    Phase.POST_STATE)
-                    || snapshot.activeSlots().stream().anyMatch(slot ->
-                            slot.documentVersionId().equals(document.id()))
-                    || snapshot.activePointers().stream().anyMatch(pointer ->
-                            pointer.referencedDocumentVersionIds().contains(document.id()))) {
+                    Phase.POST_STATE)) {
+                return false;
+            }
+        }
+        for (UUID requirementId : snapshot.targetRequirementIds()) {
+            if (!retiredRequirementIds.contains(requirementId)
+                    && !matchesPreservedRequirement(snapshot, requirementId)) {
                 return false;
             }
         }
@@ -1155,22 +1201,15 @@ final class LegalEditorialPlannerCore {
             if (requirement == null) {
                 return false;
             }
-            Set<RequirementScope> declaredScopes = retirement.audiences().stream()
-                    .map(audience -> new RequirementScope(retirement.context(), audience))
-                    .collect(Collectors.toUnmodifiableSet());
             if (phase == Phase.SOURCE_STATE) {
-                if (!matchesReusableRequirement(snapshot, requirement.id())
-                        || !activeRequirementScopes(snapshot).getOrDefault(
-                                requirement.id(), Set.of()).equals(declaredScopes)) {
+                if (!matchesReusableRequirement(snapshot, requirement.id())) {
                     return false;
                 }
             } else if (!matchesTerminalRequirement(
                     snapshot,
                     requirement.id(),
                     retirement.reason(),
-                    Phase.POST_STATE)
-                    || snapshot.activePointers().stream().anyMatch(pointer ->
-                            pointer.memberVersionIds().contains(requirement.id()))) {
+                    Phase.POST_STATE)) {
                 return false;
             }
         }
@@ -1179,23 +1218,75 @@ final class LegalEditorialPlannerCore {
             if (operationAt.isEmpty()) {
                 return false;
             }
-            Set<UUID> declaredDocuments = plan.documentRetirements().stream()
-                    .map(DocumentRetirement::documentVersionId)
-                    .collect(Collectors.toUnmodifiableSet());
-            Set<UUID> declaredRequirements = plan.requirementRetirements().stream()
-                    .map(RequirementRetirement::requirementVersionId)
-                    .collect(Collectors.toUnmodifiableSet());
-            boolean extraDocument = snapshot.documentTransitions().stream()
-                    .anyMatch(transition -> transition.occurredAt().equals(operationAt.orElseThrow())
-                            && transition.newState() == EstadoVersionLegal.RETIRADA
-                            && !declaredDocuments.contains(transition.versionId()));
-            boolean extraRequirement = snapshot.requirementTransitions().stream()
-                    .anyMatch(transition -> transition.occurredAt().equals(operationAt.orElseThrow())
-                            && transition.newState() == EstadoVersionLegal.RETIRADA
-                            && !declaredRequirements.contains(transition.versionId()));
-            return !extraDocument && !extraRequirement;
+            Instant cutover = operationAt.orElseThrow();
+            if (cutover.isAfter(observedAt)) {
+                return false;
+            }
+            boolean incompatibleDocumentTransition = snapshot.documentTransitions().stream()
+                    .filter(transition -> targetDocumentIds.contains(transition.versionId()))
+                    .anyMatch(transition -> !transition.occurredAt().isBefore(cutover)
+                            && !(retiredDocumentIds.contains(transition.versionId())
+                            && transition.occurredAt().equals(cutover)
+                            && transition.previousState() == EstadoVersionLegal.VIGENTE
+                            && transition.newState() == EstadoVersionLegal.RETIRADA));
+            boolean incompatibleRequirementTransition =
+                    snapshot.requirementTransitions().stream()
+                            .filter(transition ->
+                                    targetRequirementIds.contains(transition.versionId()))
+                            .anyMatch(transition -> !transition.occurredAt().isBefore(cutover)
+                                    && !(retiredRequirementIds.contains(transition.versionId())
+                                    && transition.occurredAt().equals(cutover)
+                                    && transition.previousState() == EstadoVersionLegal.VIGENTE
+                                    && transition.newState() == EstadoVersionLegal.RETIRADA));
+            return !incompatibleDocumentTransition && !incompatibleRequirementTransition;
         }
         return true;
+    }
+
+    private static boolean matchesPreservedDocument(
+            PlannerSnapshot snapshot,
+            UUID documentId) {
+        DocumentEvidence document = snapshot.documents().get(documentId);
+        if (document == null) {
+            return false;
+        }
+        if (document.state() == EstadoVersionLegal.VIGENTE) {
+            return matchesReusableDocument(snapshot, documentId);
+        }
+        if (!isTerminalState(document.state())) {
+            return false;
+        }
+        List<TransitionEvidence> history = histories(
+                snapshot.documentTransitions(), documentId);
+        UUID activationBatch = history.size() > 1
+                ? history.get(1).replacementBatchId()
+                : null;
+        return exactDocumentChain(
+                document,
+                history,
+                document.state(),
+                document.lastReason(),
+                document.replacementBatchId(),
+                activationBatch);
+    }
+
+    private static boolean matchesPreservedRequirement(
+            PlannerSnapshot snapshot,
+            UUID requirementId) {
+        RequirementEvidence requirement = snapshot.requirements().get(requirementId);
+        if (requirement == null) {
+            return false;
+        }
+        if (requirement.state() == EstadoVersionLegal.VIGENTE) {
+            return matchesReusableRequirement(snapshot, requirementId);
+        }
+        return isTerminalState(requirement.state())
+                && exactRequirementChain(
+                        requirement,
+                        histories(snapshot.requirementTransitions(), requirementId),
+                        requirement.state(),
+                        requirement.lastReason(),
+                        null);
     }
 
     private static boolean matchesDocumentPhase(
@@ -2036,30 +2127,262 @@ final class LegalEditorialPlannerCore {
                 || state == EstadoVersionLegal.RETIRADA;
     }
 
-    private static boolean exactRetirementSourceProjections(
+    private static Optional<RetirementProjection> retirementProjection(
             PlannerSnapshot snapshot,
-            LegalEditorialPlanV1 plan) {
-        Map<UUID, Set<ContextoLegal>> documents = activeDocumentContexts(snapshot);
-        Map<UUID, Set<RequirementScope>> requirements = activeRequirementScopes(snapshot);
-        for (DocumentRetirement retirement : plan.documentRetirements()) {
-            if (!matchesActiveDocument(documents, retirement)) {
-                return false;
+            LegalEditorialPlanV1 plan,
+            UUID publicationId,
+            Phase phase) {
+        Set<UUID> targetDocumentIds = Set.copyOf(snapshot.targetDocumentIds());
+        Set<UUID> targetRequirementIds = Set.copyOf(snapshot.targetRequirementIds());
+        Set<UUID> retiredDocumentIds = plan.documentRetirements().stream()
+                .map(DocumentRetirement::documentVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        Set<UUID> retiredRequirementIds = plan.requirementRetirements().stream()
+                .map(RequirementRetirement::requirementVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+
+        Optional<Map<LegalEditorialExecutionPlan.DocumentSlotKey,
+                LegalEditorialExecutionPlan.ExpectedDocumentSlot>> currentSlots =
+                expectedRetirementSlots(
+                        snapshot,
+                        publicationId,
+                        targetDocumentIds,
+                        Set.of());
+        Optional<Map<LegalEditorialExecutionPlan.DocumentSlotKey,
+                LegalEditorialExecutionPlan.ExpectedDocumentSlot>> finalSlots =
+                expectedRetirementSlots(
+                        snapshot,
+                        publicationId,
+                        targetDocumentIds,
+                        retiredDocumentIds);
+        Optional<Map<LegalEditorialExecutionPlan.DocumentSlotKey,
+                LegalEditorialExecutionPlan.ExpectedDocumentSlot>> actualSlots =
+                uniqueIndex(
+                        snapshot.activeSlots().stream()
+                                .map(slot -> new LegalEditorialExecutionPlan.ExpectedDocumentSlot(
+                                        slot.key(),
+                                        slot.documentVersionId(),
+                                        slot.documentLineId(),
+                                        slot.publicationId()))
+                                .toList(),
+                        LegalEditorialExecutionPlan.ExpectedDocumentSlot::key);
+        if (currentSlots.isEmpty()
+                || finalSlots.isEmpty()
+                || actualSlots.isEmpty()
+                || !actualSlots.orElseThrow().equals(currentSlots.orElseThrow())) {
+            return Optional.empty();
+        }
+        Set<LegalEditorialExecutionPlan.DocumentSlotKey> finalSlotKeys =
+                finalSlots.orElseThrow().keySet();
+        List<LegalEditorialExecutionPlan.DocumentSlotDelete> slotDeletes =
+                currentSlots.orElseThrow().values().stream()
+                        .filter(slot -> !finalSlotKeys.contains(slot.key()))
+                        .map(slot -> new LegalEditorialExecutionPlan.DocumentSlotDelete(
+                                slot.key(),
+                                slot.documentVersionId()))
+                        .toList();
+        if (phase == Phase.POST_STATE && !slotDeletes.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Optional<Map<LegalEditorialExecutionPlan.RequiredSetPointerKey, TargetScopeEvidence>>
+                indexedScopes = uniqueIndex(
+                        snapshot.targetScopes(),
+                        TargetScopeEvidence::key);
+        if (indexedScopes.isEmpty()
+                || !exactRetirementScopes(
+                        snapshot,
+                        indexedScopes.orElseThrow(),
+                        publicationId,
+                        targetDocumentIds,
+                        targetRequirementIds)) {
+            return Optional.empty();
+        }
+        Map<LegalEditorialExecutionPlan.RequiredSetPointerKey, TargetScopeEvidence> scopes =
+                indexedScopes.orElseThrow();
+        Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> currentPointerKeys = scopes.values()
+                .stream()
+                .filter(scope -> dependenciesAreVigente(
+                        snapshot,
+                        scope.dependencies(),
+                        Set.of(),
+                        Set.of()))
+                .map(TargetScopeEvidence::key)
+                .collect(Collectors.toUnmodifiableSet());
+        Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> finalPointerKeys = scopes.values()
+                .stream()
+                .filter(scope -> dependenciesAreVigente(
+                        snapshot,
+                        scope.dependencies(),
+                        retiredDocumentIds,
+                        retiredRequirementIds))
+                .map(TargetScopeEvidence::key)
+                .collect(Collectors.toUnmodifiableSet());
+        if (!currentPointerKeys.containsAll(finalPointerKeys)) {
+            return Optional.empty();
+        }
+        Optional<Map<LegalEditorialExecutionPlan.RequiredSetPointerKey, PointerEvidence>>
+                indexedPointers = uniqueIndex(
+                        snapshot.activePointers(),
+                        PointerEvidence::key);
+        if (indexedPointers.isEmpty()
+                || !indexedPointers.orElseThrow().keySet().equals(currentPointerKeys)) {
+            return Optional.empty();
+        }
+        Map<LegalEditorialExecutionPlan.RequiredSetPointerKey, PointerEvidence> pointers =
+                indexedPointers.orElseThrow();
+        for (LegalEditorialExecutionPlan.RequiredSetPointerKey key : currentPointerKeys) {
+            TargetScopeEvidence scope = scopes.get(key);
+            PointerEvidence pointer = pointers.get(key);
+            if (!pointer.requiredSetId().equals(scope.requiredSetId())
+                    || !pointer.publicationId().equals(scope.publicationId())
+                    || !pointer.revision().equals(scope.revision())
+                    || !pointerDependencies(pointer).equals(scope.dependencies())) {
+                return Optional.empty();
             }
         }
-        for (RequirementRetirement retirement : plan.requirementRetirements()) {
-            if (!matchesActiveRequirement(requirements, retirement)) {
+        List<LegalEditorialExecutionPlan.ExpectedRequiredSetPointer> finalPointers =
+                finalPointerKeys.stream()
+                        .map(key -> expectedRetirementPointer(scopes.get(key), pointers.get(key)))
+                        .toList();
+        List<LegalEditorialExecutionPlan.RequiredSetPointerDelete> pointerDeletes =
+                currentPointerKeys.stream()
+                        .filter(key -> !finalPointerKeys.contains(key))
+                        .map(key -> {
+                            TargetScopeEvidence scope = scopes.get(key);
+                            return new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                    key,
+                                    scope.requiredSetId(),
+                                    Optional.of(scope.dependencies()));
+                        })
+                        .toList();
+        if (phase == Phase.POST_STATE && !pointerDeletes.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new RetirementProjection(
+                List.copyOf(finalSlots.orElseThrow().values()),
+                finalPointers,
+                slotDeletes,
+                pointerDeletes));
+    }
+
+    private static Optional<Map<LegalEditorialExecutionPlan.DocumentSlotKey,
+            LegalEditorialExecutionPlan.ExpectedDocumentSlot>> expectedRetirementSlots(
+                    PlannerSnapshot snapshot,
+                    UUID publicationId,
+                    Set<UUID> targetDocumentIds,
+                    Set<UUID> retiredDocumentIds) {
+        List<LegalEditorialExecutionPlan.ExpectedDocumentSlot> slots = new ArrayList<>();
+        for (UUID documentId : snapshot.targetDocumentIds()) {
+            DocumentEvidence document = snapshot.documents().get(documentId);
+            if (document == null || !targetDocumentIds.contains(documentId)) {
+                return Optional.empty();
+            }
+            if (document.state() == EstadoVersionLegal.VIGENTE
+                    && !retiredDocumentIds.contains(documentId)) {
+                slots.addAll(expectedSlots(document, publicationId));
+            }
+        }
+        return uniqueIndex(slots, LegalEditorialExecutionPlan.ExpectedDocumentSlot::key);
+    }
+
+    private static boolean exactRetirementScopes(
+            PlannerSnapshot snapshot,
+            Map<LegalEditorialExecutionPlan.RequiredSetPointerKey, TargetScopeEvidence> scopes,
+            UUID publicationId,
+            Set<UUID> targetDocumentIds,
+            Set<UUID> targetRequirementIds) {
+        Set<UUID> requiredSetIds = new HashSet<>();
+        Map<UUID, Set<LegalEditorialExecutionPlan.RequiredSetPointerKey>> scopesByRequirement =
+                new HashMap<>();
+        for (TargetScopeEvidence scope : scopes.values()) {
+            if (!scope.publicationId().equals(publicationId)
+                    || !scope.revision().matches("^sha256:[0-9a-f]{64}$")
+                    || !requiredSetIds.add(scope.requiredSetId())
+                    || scope.dependencies().memberRequirementVersionIds().isEmpty()
+                    || !targetRequirementIds.containsAll(
+                            scope.dependencies().memberRequirementVersionIds())
+                    || !targetDocumentIds.containsAll(
+                            scope.dependencies().referencedDocumentVersionIds())) {
+                return false;
+            }
+            for (UUID requirementId :
+                    scope.dependencies().memberRequirementVersionIds()) {
+                RequirementEvidence requirement = snapshot.requirements().get(requirementId);
+                if (requirement == null
+                        || requirement.locale() != scope.key().locale()
+                        || requirement.context() != scope.key().context()
+                        || !requirement.audiences().contains(scope.key().audience())) {
+                    return false;
+                }
+                scopesByRequirement.computeIfAbsent(
+                        requirementId,
+                        ignored -> new LinkedHashSet<>()).add(scope.key());
+            }
+        }
+        for (UUID requirementId : snapshot.targetRequirementIds()) {
+            RequirementEvidence requirement = snapshot.requirements().get(requirementId);
+            if (requirement == null
+                    || Set.copyOf(requirement.audiences()).size()
+                            != requirement.audiences().size()) {
+                return false;
+            }
+            Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> expected =
+                    requirement.audiences().stream()
+                            .map(audience ->
+                                    new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                                            requirement.locale(),
+                                            requirement.context(),
+                                            audience))
+                            .collect(Collectors.toUnmodifiableSet());
+            if (!scopesByRequirement.getOrDefault(requirementId, Set.of()).equals(expected)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean pointerReferencesAny(
-            PointerEvidence pointer,
-            Set<UUID> documentVersionIds,
-            Set<UUID> requirementVersionIds) {
-        return pointer.referencedDocumentVersionIds().stream().anyMatch(documentVersionIds::contains)
-                || pointer.memberVersionIds().stream().anyMatch(requirementVersionIds::contains);
+    private static boolean dependenciesAreVigente(
+            PlannerSnapshot snapshot,
+            LegalEditorialExecutionPlan.RequiredSetDependencies dependencies,
+            Set<UUID> additionallyRetiredDocumentIds,
+            Set<UUID> additionallyRetiredRequirementIds) {
+        return dependencies.memberRequirementVersionIds().stream().allMatch(id -> {
+            RequirementEvidence requirement = snapshot.requirements().get(id);
+            return requirement != null
+                    && requirement.state() == EstadoVersionLegal.VIGENTE
+                    && !additionallyRetiredRequirementIds.contains(id);
+        }) && dependencies.referencedDocumentVersionIds().stream().allMatch(id -> {
+            DocumentEvidence document = snapshot.documents().get(id);
+            return document != null
+                    && document.state() == EstadoVersionLegal.VIGENTE
+                    && !additionallyRetiredDocumentIds.contains(id);
+        });
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedRequiredSetPointer
+            expectedRetirementPointer(
+                    TargetScopeEvidence scope,
+                    PointerEvidence pointer) {
+        return new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                scope.key(),
+                scope.requiredSetId(),
+                scope.publicationId(),
+                scope.revision(),
+                pointer.updatedAt(),
+                Optional.of(scope.dependencies()));
+    }
+
+    private static <K, V> Optional<Map<K, V>> uniqueIndex(
+            Collection<V> values,
+            Function<V, K> keyExtractor) {
+        Map<K, V> indexed = new LinkedHashMap<>();
+        for (V value : values) {
+            if (indexed.put(keyExtractor.apply(value), value) != null) {
+                return Optional.empty();
+            }
+        }
+        return Optional.of(Map.copyOf(indexed));
     }
 
     private static LegalEditorialExecutionPlan.RequiredSetDependencies pointerDependencies(
@@ -2419,6 +2742,20 @@ final class LegalEditorialPlannerCore {
         }
     }
 
+    private record RetirementProjection(
+            List<LegalEditorialExecutionPlan.ExpectedDocumentSlot> finalSlots,
+            List<LegalEditorialExecutionPlan.ExpectedRequiredSetPointer> finalPointers,
+            List<LegalEditorialExecutionPlan.DocumentSlotDelete> slotDeletes,
+            List<LegalEditorialExecutionPlan.RequiredSetPointerDelete> pointerDeletes) {
+
+        private RetirementProjection {
+            finalSlots = List.copyOf(finalSlots);
+            finalPointers = List.copyOf(finalPointers);
+            slotDeletes = List.copyOf(slotDeletes);
+            pointerDeletes = List.copyOf(pointerDeletes);
+        }
+    }
+
     private record PlanAttempt(
             Optional<LegalEditorialExecutionPlan> plan,
             LegalManifestIssueCode failureCode) {
@@ -2570,8 +2907,17 @@ final class LegalEditorialPlannerCore {
             LegalEditorialExecutionPlan.RequiredSetPointerKey key,
             UUID requiredSetId,
             UUID publicationId,
-            String revision
-    ) { }
+            String revision,
+            LegalEditorialExecutionPlan.RequiredSetDependencies dependencies
+    ) {
+        TargetScopeEvidence {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(requiredSetId, "requiredSetId");
+            Objects.requireNonNull(publicationId, "publicationId");
+            Objects.requireNonNull(revision, "revision");
+            Objects.requireNonNull(dependencies, "dependencies");
+        }
+    }
 
     record BatchEvidence(
             UUID id,
@@ -2948,14 +3294,14 @@ final class LegalEditorialPlannerCore {
         }
 
         private List<TargetScopeEvidence> readTargetScopes(UUID publicationId) {
-            return bounded(jdbc.query("""
+            List<TargetScopeBase> bases = bounded(jdbc.query("""
                     SELECT id, publicacion_id, locale, contexto, audiencia,
                            required_set_revision
                       FROM legal_requisito_conjuntos
                      WHERE publicacion_id = ?
                      ORDER BY locale, contexto, audiencia
                      LIMIT ?
-                    """, (resultSet, rowNumber) -> new TargetScopeEvidence(
+                    """, (resultSet, rowNumber) -> new TargetScopeBase(
                     new LegalEditorialExecutionPlan.RequiredSetPointerKey(
                             LocaleLegal.fromCodigo(resultSet.getString("locale")),
                             ContextoLegal.valueOf(resultSet.getString("contexto")),
@@ -2965,6 +3311,59 @@ final class LegalEditorialPlannerCore {
                     resultSet.getString("required_set_revision")),
                     publicationId,
                     MAX_ACTIVE_POINTERS + 1), MAX_ACTIVE_POINTERS);
+            List<PointerMember> members = bounded(jdbc.query("""
+                    SELECT c.id AS conjunto_id, m.requisito_version_id
+                      FROM legal_requisito_conjuntos c
+                      JOIN legal_requisito_conjunto_miembros m
+                        ON m.conjunto_id = c.id
+                     WHERE c.publicacion_id = ?
+                     ORDER BY c.locale, c.contexto, c.audiencia,
+                              m.manifest_ordinal, m.id
+                     LIMIT ?
+                    """, (resultSet, rowNumber) -> new PointerMember(
+                    resultSet.getObject("conjunto_id", UUID.class),
+                    resultSet.getObject("requisito_version_id", UUID.class)),
+                    publicationId,
+                    MAX_ACTIVE_POINTER_MEMBERS + 1), MAX_ACTIVE_POINTER_MEMBERS);
+            Map<UUID, List<UUID>> membersBySet = members.stream().collect(
+                    Collectors.groupingBy(
+                            PointerMember::setId,
+                            LinkedHashMap::new,
+                            Collectors.mapping(PointerMember::versionId, Collectors.toList())));
+            List<PointerDocumentReference> documentReferences = bounded(jdbc.query("""
+                    SELECT c.id AS conjunto_id, rd.documento_version_id
+                      FROM legal_requisito_conjuntos c
+                      JOIN legal_requisito_conjunto_miembros m
+                        ON m.conjunto_id = c.id
+                      JOIN legal_requisito_documentos rd
+                        ON rd.requisito_version_id = m.requisito_version_id
+                     WHERE c.publicacion_id = ?
+                     ORDER BY c.locale, c.contexto, c.audiencia,
+                              rd.documento_version_id, m.manifest_ordinal,
+                              rd.documento_ordinal, rd.id
+                     LIMIT ?
+                    """, (resultSet, rowNumber) -> new PointerDocumentReference(
+                    resultSet.getObject("conjunto_id", UUID.class),
+                    resultSet.getObject("documento_version_id", UUID.class)),
+                    publicationId,
+                    MAX_ACTIVE_POINTER_DOCUMENT_REFERENCES + 1),
+                    MAX_ACTIVE_POINTER_DOCUMENT_REFERENCES);
+            Map<UUID, List<UUID>> documentReferencesBySet = documentReferences.stream()
+                    .collect(Collectors.groupingBy(
+                            PointerDocumentReference::setId,
+                            LinkedHashMap::new,
+                            Collectors.mapping(
+                                    PointerDocumentReference::documentVersionId,
+                                    Collectors.toList())));
+            return bases.stream().map(base -> new TargetScopeEvidence(
+                    base.key(),
+                    base.setId(),
+                    base.publicationId(),
+                    base.revision(),
+                    new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                            membersBySet.getOrDefault(base.setId(), List.of()),
+                            documentReferencesBySet.getOrDefault(
+                                    base.setId(), List.of())))).toList();
         }
 
         private List<DocumentTransitionEvidence> readDocumentTransitions(Set<UUID> ids) {
@@ -3124,6 +3523,12 @@ final class LegalEditorialPlannerCore {
                 UUID publicationId,
                 String revision,
                 Instant updatedAt) { }
+
+        private record TargetScopeBase(
+                LegalEditorialExecutionPlan.RequiredSetPointerKey key,
+                UUID setId,
+                UUID publicationId,
+                String revision) { }
 
         private record PointerMember(UUID setId, UUID versionId) { }
 

@@ -12,6 +12,9 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoVersionLegal;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,9 +31,14 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -175,10 +183,15 @@ class LegalEditorialPlannerIT {
     }
 
     @Test
-    void anExplicitDocumentRetirementIsApplicableAndDeletesDependentPointers()
+    void documentOnlyRetirementPreservesTheCompletePostStateAndCanonicalizesDependencies()
             throws Exception {
-        ImportedRelease current = readyRelease("planner-retire-valid-v1");
-        DocumentVersion retired = firstDocument(current.publicationId());
+        ImportedRelease current = readyReleaseWithSharedDependencies(
+                "planner-retire-document-only-v1");
+        DocumentVersion retired = document(current.publicationId(), "cierre-cuenta");
+        List<DocumentVersion> sourceDocuments = documents(current.publicationId());
+        List<RequirementVersion> sourceRequirements = requirements(current.publicationId());
+        int sourceSlotCount = activeSlotCount();
+        Map<UUID, PersistedPointer> sourcePointers = activePointersBySetId();
         ValidatedEditorialPlan plan = retirementPlan(current, retired, true);
 
         LegalEditorialPlanResult result = readOnly(() -> plannerHarness.plannerService()
@@ -193,14 +206,148 @@ class LegalEditorialPlannerIT {
             assertThat(delta.directDocumentTransitions()).isEqualTo(1);
             assertThat(delta.directDocumentSlotDeletes())
                     .isEqualTo(retired.contexts().size());
-            assertThat(delta.requiredSetPointerDeletes()).isPositive();
+            assertThat(delta.requiredSetPointerDeletes()).isEqualTo(1);
         });
         assertThat(result.executionPlan()).get().satisfies(execution -> {
             assertThat(execution.expectedAppliedAt()).isEqualTo(execution.observedAt());
+            assertThat(execution.expectedPostState().documentStates())
+                    .hasSize(sourceDocuments.size())
+                    .filteredOn(state -> state.documentVersionId().equals(retired.id()))
+                    .singleElement()
+                    .satisfies(state -> assertThat(state.state())
+                            .isEqualTo(EstadoVersionLegal.RETIRADA));
+            assertThat(execution.expectedPostState().requirementStates())
+                    .hasSize(sourceRequirements.size())
+                    .allSatisfy(state -> assertThat(state.state())
+                            .isEqualTo(EstadoVersionLegal.VIGENTE));
             assertThat(execution.expectedPostState().preexistingDocumentTransitions())
-                    .hasSize(2);
+                    .hasSize(sourceDocuments.size() * 2);
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .hasSize(sourceRequirements.size() * 2);
+            assertThat(execution.expectedPostState().documentSlots())
+                    .hasSize(sourceSlotCount - retired.contexts().size())
+                    .noneMatch(slot -> slot.documentVersionId().equals(retired.id()));
+            assertThat(execution.expectedPostState().requiredSetPointers())
+                    .hasSize(sourcePointers.size() - 1)
+                    .allSatisfy(pointer -> assertPreservedPointer(pointer, sourcePointers));
+
+            LegalEditorialExecutionPlan.ExpectedRequiredSetPointer registration =
+                    execution.expectedPostState().requiredSetPointers().stream()
+                            .filter(pointer -> pointer.key().context() == ContextoLegal.REGISTRO)
+                            .filter(pointer -> pointer.key().audience()
+                                    == AudienciaLegal.ADMIN_TITULAR)
+                            .findFirst()
+                            .orElseThrow();
+            List<UUID> rawDocumentDependencies = rawReferencedDocumentIds(
+                    registration.requiredSetId());
+            assertThat(rawDocumentDependencies.size())
+                    .isGreaterThan(new HashSet<>(rawDocumentDependencies).size());
+            assertThat(registration.dependenciesEvidence()).get().satisfies(dependencies -> {
+                assertThat(dependencies.memberRequirementVersionIds())
+                        .containsExactlyInAnyOrderElementsOf(memberRequirementIds(
+                                registration.requiredSetId()));
+                assertThat(dependencies.referencedDocumentVersionIds())
+                        .containsExactlyInAnyOrderElementsOf(
+                                Set.copyOf(rawDocumentDependencies));
+                assertThat(dependencies.referencedDocumentVersionIds())
+                        .doesNotHaveDuplicates();
+            });
+            assertThat(execution.mutationCommands().documentSlotInserts()).isEmpty();
+            assertThat(execution.mutationCommands().requiredSetPointerInserts()).isEmpty();
+            assertThat(execution.mutationCommands().replacementBatchesToCreateAndSeal())
+                    .isEmpty();
         });
         assertThat(result.issues()).isEmpty();
+    }
+
+    @Test
+    void requirementOnlyRetirementPreservesEveryDocumentProjection() throws Exception {
+        ImportedRelease current = readyRelease("planner-retire-requirement-only-v1");
+        RequirementVersion retired = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        List<DocumentVersion> sourceDocuments = documents(current.publicationId());
+        List<RequirementVersion> sourceRequirements = requirements(current.publicationId());
+        int sourceSlotCount = activeSlotCount();
+        Map<UUID, PersistedPointer> sourcePointers = activePointersBySetId();
+        ValidatedEditorialPlan plan = retirementPlan(
+                current,
+                List.of(),
+                List.of(retired),
+                true);
+
+        LegalEditorialPlanResult result = readOnly(() -> plannerHarness.plannerService()
+                .planRetire(current.release(), plan));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.outcome()).isEqualTo(LegalEditorialPlanResult.Outcome.APPLICABLE);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedPostState().documentStates())
+                    .hasSize(sourceDocuments.size())
+                    .allSatisfy(state -> assertThat(state.state())
+                            .isEqualTo(EstadoVersionLegal.VIGENTE));
+            assertThat(execution.expectedPostState().requirementStates())
+                    .hasSize(sourceRequirements.size())
+                    .filteredOn(state -> state.requirementVersionId().equals(retired.id()))
+                    .singleElement()
+                    .satisfies(state -> assertThat(state.state())
+                            .isEqualTo(EstadoVersionLegal.RETIRADA));
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(sourceDocuments.size() * 2);
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .hasSize(sourceRequirements.size() * 2);
+            assertThat(execution.expectedPostState().documentSlots())
+                    .hasSize(sourceSlotCount);
+            assertThat(execution.mutationCommands().documentSlotDeletes()).isEmpty();
+            assertThat(execution.mutationCommands().requiredSetPointerDeletes())
+                    .hasSize(retired.audiences().size())
+                    .allSatisfy(pointer -> assertThat(pointer.dependenciesEvidence())
+                            .get()
+                            .satisfies(dependencies -> assertThat(
+                                    dependencies.memberRequirementVersionIds())
+                                    .contains(retired.id())));
+            assertThat(execution.expectedPostState().requiredSetPointers())
+                    .hasSize(sourcePointers.size() - retired.audiences().size())
+                    .allSatisfy(pointer -> assertPreservedPointer(pointer, sourcePointers));
+        });
+        assertThat(result.issues()).isEmpty();
+    }
+
+    @Test
+    void exactRequirementRetirementPostStateReplaysWithoutDelta() throws Exception {
+        ImportedRelease current = readyRelease("planner-retire-replay-v1");
+        RequirementVersion retired = requirement(
+                current.publicationId(),
+                "admin-registration");
+        ValidatedEditorialPlan plan = retirementPlan(
+                current,
+                List.of(),
+                List.of(retired),
+                true);
+        LegalEditorialPlanResult fresh = readOnly(() -> plannerHarness.plannerService()
+                .planRetire(current.release(), plan));
+        LegalEditorialExecutionPlan freshExecution = fresh.executionPlan().orElseThrow();
+        assertThat(fresh.changeRequired()).contains(true);
+
+        seedRetirementPostState(freshExecution);
+
+        LegalEditorialPlanResult replay = readOnly(() -> plannerHarness.plannerService()
+                .planRetire(current.release(), plan));
+
+        assertThat(replay.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(replay.outcome()).isEqualTo(LegalEditorialPlanResult.Outcome.APPLICABLE);
+        assertThat(replay.changeRequired()).contains(false);
+        assertThat(replay.deltaCounts()).get().satisfies(delta ->
+                assertThat(delta.isZero()).isTrue());
+        assertThat(replay.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt())
+                    .isEqualTo(freshExecution.expectedAppliedAt());
+            assertThat(execution.expectedPostState())
+                    .isEqualTo(freshExecution.expectedPostState());
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+        });
+        assertThat(replay.issues()).isEmpty();
     }
 
     @Test
@@ -267,6 +414,35 @@ class LegalEditorialPlannerIT {
         ImportedRelease imported = importedDraft(externalId);
         LegalManifestPersistenceITSupport.promoteToReady(jdbc, imported.publicationId());
         return imported;
+    }
+
+    private ImportedRelease readyReleaseWithSharedDependencies(String externalId)
+            throws Exception {
+        ValidatedRelease release = LegalManifestPersistenceITSupport.copyRelease(
+                temporaryDirectory,
+                LegalEditorialPlannerIT.class,
+                externalId,
+                (manifestPath, manifest) -> {
+                    manifest.withArray("documents").forEach(document ->
+                            ((ObjectNode) document).put(
+                                    "effectiveAt",
+                                    "2026-01-01T00:00:00-03:00"));
+                    ObjectNode additional = requirement(
+                            manifest,
+                            "admin-registration").deepCopy();
+                    additional.put("key", "admin-registration-secondary");
+                    String statement = "Confirmo el requisito secundario de registro de OrdenFix.";
+                    additional.put("statement", statement);
+                    additional.put("statementSha256", sha256(statement));
+                    manifest.withArray("requirements").add(additional);
+                });
+        UUID publicationId = importHarness.importService()
+                .importManifest(release)
+                .receipt()
+                .orElseThrow()
+                .publicationUuid();
+        LegalManifestPersistenceITSupport.promoteToReady(jdbc, publicationId);
+        return new ImportedRelease(release, publicationId);
     }
 
     private ImportedRelease importedReplacementTarget(String externalId) throws Exception {
@@ -341,6 +517,18 @@ class LegalEditorialPlannerIT {
             ImportedRelease current,
             DocumentVersion retired,
             boolean exactFingerprint) throws Exception {
+        return retirementPlan(
+                current,
+                List.of(retired),
+                List.of(),
+                exactFingerprint);
+    }
+
+    private ValidatedEditorialPlan retirementPlan(
+            ImportedRelease current,
+            List<DocumentVersion> retiredDocuments,
+            List<RequirementVersion> retiredRequirements,
+            boolean exactFingerprint) throws Exception {
         String externalId = current.release().plan().manifest().publicationId();
         String fingerprint = exactFingerprint
                 ? plannerHarness.readinessCore()
@@ -358,11 +546,21 @@ class LegalEditorialPlannerIT {
                 current.release().plan().manifestSha256(),
                 "NOT_READY",
                 true);
-        ObjectNode retirement = plan.withArray("documentRetirements").addObject();
-        retirement.put("documentVersionId", retired.id().toString());
-        retirement.put("sha256", retired.sha256());
-        retired.contexts().forEach(retirement.putArray("contexts")::add);
-        retirement.put("reason", "Retiro editorial explícito de prueba");
+        for (DocumentVersion retired : retiredDocuments) {
+            ObjectNode retirement = plan.withArray("documentRetirements").addObject();
+            retirement.put("documentVersionId", retired.id().toString());
+            retirement.put("sha256", retired.sha256());
+            retired.contexts().forEach(retirement.putArray("contexts")::add);
+            retirement.put("reason", "Retiro editorial explícito de prueba");
+        }
+        for (RequirementVersion retired : retiredRequirements) {
+            ObjectNode retirement = plan.withArray("requirementRetirements").addObject();
+            retirement.put("requirementVersionId", retired.id().toString());
+            retirement.put("statementSha256", retired.sha256());
+            retirement.put("context", retired.context());
+            retired.audiences().forEach(retirement.putArray("audiences")::add);
+            retirement.put("reason", "Retiro editorial explícito de prueba");
+        }
         return validatePlan(plan, operationId);
     }
 
@@ -549,22 +747,40 @@ class LegalEditorialPlannerIT {
         return documents(publicationId).getFirst();
     }
 
+    private static DocumentVersion document(UUID publicationId, String key) {
+        return documents(publicationId).stream()
+                .filter(document -> key.equals(document.key()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static RequirementVersion requirement(UUID publicationId, String key) {
+        return requirements(publicationId).stream()
+                .filter(requirement -> key.equals(requirement.key()))
+                .findFirst()
+                .orElseThrow();
+    }
+
     private static List<DocumentVersion> documents(UUID publicationId) {
         List<DocumentVersionBase> rows = jdbc.query("""
-                SELECT dv.id, dv.documento_linea_id, dv.sha256
+                SELECT dv.id, dv.documento_linea_id, dv.sha256, dl.clave
                   FROM legal_publicacion_documentos pd
                   JOIN legal_documento_versiones dv
                     ON dv.id = pd.documento_version_id
+                  JOIN legal_documento_lineas dl
+                    ON dl.id = dv.documento_linea_id
                  WHERE pd.publicacion_id = ?
                  ORDER BY pd.manifest_ordinal
                 """, (resultSet, rowNumber) -> new DocumentVersionBase(
                         resultSet.getObject("id", UUID.class),
                         resultSet.getObject("documento_linea_id", UUID.class),
-                        resultSet.getString("sha256")), publicationId);
+                        resultSet.getString("sha256"),
+                        resultSet.getString("clave")), publicationId);
         return rows.stream().map(row -> new DocumentVersion(
                 row.id(),
                 row.lineId(),
                 row.sha256(),
+                row.key(),
                 jdbc.queryForList("""
                         SELECT contexto
                           FROM legal_documento_contextos
@@ -576,7 +792,7 @@ class LegalEditorialPlannerIT {
     private static List<RequirementVersion> requirements(UUID publicationId) {
         List<RequirementVersionBase> rows = jdbc.query("""
                 SELECT rv.id, rv.requisito_linea_id, rv.afirmacion_sha256,
-                       rl.contexto
+                       rl.clave, rl.contexto
                   FROM legal_publicacion_requisitos pr
                   JOIN legal_requisito_versiones rv
                     ON rv.id = pr.requisito_version_id
@@ -588,11 +804,13 @@ class LegalEditorialPlannerIT {
                         resultSet.getObject("id", UUID.class),
                         resultSet.getObject("requisito_linea_id", UUID.class),
                         resultSet.getString("afirmacion_sha256"),
+                        resultSet.getString("clave"),
                         resultSet.getString("contexto")), publicationId);
         return rows.stream().map(row -> new RequirementVersion(
                 row.id(),
                 row.lineId(),
                 row.sha256(),
+                row.key(),
                 row.context(),
                 jdbc.queryForList("""
                         SELECT audiencia
@@ -611,9 +829,166 @@ class LegalEditorialPlannerIT {
                 .orElseThrow();
     }
 
+    private static ObjectNode requirement(ObjectNode manifest, String key) {
+        return (ObjectNode) java.util.stream.StreamSupport.stream(
+                        manifest.withArray("requirements").spliterator(),
+                        false)
+                .filter(candidate -> key.equals(candidate.path("key").textValue()))
+                .findFirst()
+                .orElseThrow();
+    }
+
     private static String sha256(String value) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static int activeSlotCount() {
+        return Math.toIntExact(Objects.requireNonNull(jdbc.queryForObject(
+                "SELECT count(*) FROM legal_documento_vigentes",
+                Long.class)));
+    }
+
+    private static Map<UUID, PersistedPointer> activePointersBySetId() {
+        return jdbc.query("""
+                SELECT a.locale, a.contexto, a.audiencia, a.conjunto_id,
+                       a.publicacion_id, c.required_set_revision, a.actualizado_en
+                  FROM legal_requisito_conjuntos_actuales a
+                  JOIN legal_requisito_conjuntos c ON c.id = a.conjunto_id
+                 ORDER BY a.locale, a.contexto, a.audiencia
+                """, (resultSet, rowNumber) -> new PersistedPointer(
+                        resultSet.getString("locale"),
+                        resultSet.getString("contexto"),
+                        resultSet.getString("audiencia"),
+                        resultSet.getObject("conjunto_id", UUID.class),
+                        resultSet.getObject("publicacion_id", UUID.class),
+                        resultSet.getString("required_set_revision"),
+                        resultSet.getObject("actualizado_en", OffsetDateTime.class).toInstant()))
+                .stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        PersistedPointer::requiredSetId,
+                        pointer -> pointer));
+    }
+
+    private static List<UUID> memberRequirementIds(UUID requiredSetId) {
+        return jdbc.queryForList("""
+                SELECT requisito_version_id
+                  FROM legal_requisito_conjunto_miembros
+                 WHERE conjunto_id = ?
+                 ORDER BY manifest_ordinal, id
+                """, UUID.class, requiredSetId);
+    }
+
+    private static List<UUID> rawReferencedDocumentIds(UUID requiredSetId) {
+        return jdbc.queryForList("""
+                SELECT rd.documento_version_id
+                  FROM legal_requisito_conjunto_miembros m
+                  JOIN legal_requisito_documentos rd
+                    ON rd.requisito_version_id = m.requisito_version_id
+                 WHERE m.conjunto_id = ?
+                 ORDER BY rd.documento_version_id,
+                          m.manifest_ordinal, rd.documento_ordinal, rd.id
+                """, UUID.class, requiredSetId);
+    }
+
+    private static void assertPreservedPointer(
+            LegalEditorialExecutionPlan.ExpectedRequiredSetPointer expected,
+            Map<UUID, PersistedPointer> sourcePointers) {
+        PersistedPointer source = Objects.requireNonNull(
+                sourcePointers.get(expected.requiredSetId()),
+                "source pointer");
+        assertThat(expected.key().locale().getCodigo()).isEqualTo(source.locale());
+        assertThat(expected.key().context().name()).isEqualTo(source.context());
+        assertThat(expected.key().audience().name()).isEqualTo(source.audience());
+        assertThat(expected.publicationId()).isEqualTo(source.publicationId());
+        assertThat(expected.requiredSetRevision()).isEqualTo(source.revision());
+        assertThat(expected.updatedAt()).isEqualTo(source.updatedAt());
+        assertThat(expected.dependenciesEvidence()).get().satisfies(dependencies -> {
+            assertThat(dependencies.memberRequirementVersionIds())
+                    .containsExactlyInAnyOrderElementsOf(
+                            memberRequirementIds(expected.requiredSetId()))
+                    .doesNotHaveDuplicates();
+            assertThat(dependencies.referencedDocumentVersionIds())
+                    .containsExactlyInAnyOrderElementsOf(
+                            Set.copyOf(rawReferencedDocumentIds(
+                                    expected.requiredSetId())))
+                    .doesNotHaveDuplicates();
+        });
+    }
+
+    private static void seedRetirementPostState(LegalEditorialExecutionPlan plan) {
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(
+                Objects.requireNonNull(jdbc.getDataSource(), "dataSource"));
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.executeWithoutResult(status -> {
+            jdbc.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+            for (LegalEditorialExecutionPlan.RequiredSetPointerDelete pointer :
+                    plan.mutationCommands().requiredSetPointerDeletes()) {
+                assertThat(jdbc.update("""
+                        DELETE FROM legal_requisito_conjuntos_actuales
+                         WHERE locale = ?
+                           AND contexto = ?
+                           AND audiencia = ?
+                           AND conjunto_id = ?
+                        """,
+                        pointer.key().locale().getCodigo(),
+                        pointer.key().context().name(),
+                        pointer.key().audience().name(),
+                        pointer.expectedRequiredSetId())).isOne();
+            }
+            for (LegalEditorialExecutionPlan.DocumentSlotDelete slot :
+                    plan.mutationCommands().documentSlotDeletes()) {
+                assertThat(jdbc.update("""
+                        DELETE FROM legal_documento_vigentes
+                         WHERE tipo = ?
+                           AND locale = ?
+                           AND contexto = ?
+                           AND documento_version_id = ?
+                        """,
+                        slot.key().type().name(),
+                        slot.key().locale().getCodigo(),
+                        slot.key().context().name(),
+                        slot.expectedDocumentVersionId())).isOne();
+            }
+            for (LegalEditorialExecutionPlan.RequirementTransition transition :
+                    plan.mutationCommands().requirementTransitions()) {
+                assertThat(jdbc.update("""
+                        INSERT INTO legal_requisito_transiciones
+                            (requisito_version_id, estado_anterior, estado_nuevo,
+                             motivo, ocurrido_en)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        transition.requirementVersionId(),
+                        transition.previousState().name(),
+                        transition.newState().name(),
+                        transition.reason(),
+                        OffsetDateTime.ofInstant(
+                                transition.occurredAt(),
+                                ZoneOffset.UTC))).isOne();
+            }
+            for (LegalEditorialExecutionPlan.DocumentTransition transition :
+                    plan.mutationCommands().documentTransitions()) {
+                assertThat(jdbc.update("""
+                        INSERT INTO legal_documento_transiciones
+                            (documento_version_id, estado_anterior, estado_nuevo,
+                             motivo, reemplazo_lote_id, ocurrido_en)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        transition.documentVersionId(),
+                        transition.previousState().name(),
+                        transition.newState().name(),
+                        transition.reason(),
+                        transition.replacementBatchId(),
+                        OffsetDateTime.ofInstant(
+                                transition.occurredAt(),
+                                ZoneOffset.UTC))).isOne();
+            }
+            jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        });
     }
 
     private static LegalEditorialPlanResult readOnly(
@@ -690,24 +1065,40 @@ class LegalEditorialPlannerIT {
 
     private record ImportedRelease(ValidatedRelease release, UUID publicationId) { }
 
-    private record DocumentVersionBase(UUID id, UUID lineId, String sha256) { }
+    private record DocumentVersionBase(
+            UUID id,
+            UUID lineId,
+            String sha256,
+            String key) { }
 
     private record DocumentVersion(
             UUID id,
             UUID lineId,
             String sha256,
+            String key,
             List<String> contexts) { }
 
     private record RequirementVersionBase(
             UUID id,
             UUID lineId,
             String sha256,
+            String key,
             String context) { }
 
     private record RequirementVersion(
             UUID id,
             UUID lineId,
             String sha256,
+            String key,
             String context,
             List<String> audiences) { }
+
+    private record PersistedPointer(
+            String locale,
+            String context,
+            String audience,
+            UUID requiredSetId,
+            UUID publicationId,
+            String revision,
+            Instant updatedAt) { }
 }

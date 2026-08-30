@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcorte 8A completado el 2026-08-30; Subcorte 8B pendiente
+Estado: en ejecución — Subcortes 8A y 8B completados el 2026-08-30; Subcorte 8C pendiente
 
 Diseño aprobado:
 
@@ -124,7 +124,7 @@ Commit:
 
 ## Subcorte 8B — Postestado parcial exacto
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -154,6 +154,33 @@ forma exacta los elementos retirados y los sobrevivientes, todavía sin habilita
 9. Bloquear una proyección sobreviviente extra, faltante o incoherente sin normalizarla.
 10. Conservar replay-first: el postestado ya exacto se compara antes de exigir el estado fuente.
 
+### Frontera acreditada en 8B
+
+El planner clasifica ahora todos los documentos y requisitos de la membresía current. Sólo las
+versiones enumeradas reciben una transición nueva a `RETIRADA`; los estados, historias y lotes
+sellados de los demás miembros se preservan exactamente. Los lotes actuales y todas las formas de
+insert de proyección permanecen prohibidos para RETIRE.
+
+Los slots fuente se derivan de todos los documentos actualmente `VIGENTE` y los slots finales de
+los documentos que seguirán `VIGENTE`. Los punteros se derivan de todos los scopes sellados de la
+publicación: cada scope transporta sus miembros y la unión canonicalizada de referencias
+documentales. La lectura aplica el presupuesto a las filas crudas antes de canonicalizar; un
+overflow falla cerrado. Recién después de comparar key, set, publicación, revisión y dependencias
+contra la proyección activa se copia el `updatedAt` de un survivor.
+
+La partición admite una publicación ya `NOT_READY` por retiros anteriores. `source-active` contiene
+los scopes cuyas dependencias observadas siguen `VIGENTE`; `post-active` aplica además el retiro
+explícito; los deletes son la diferencia exacta. Un scope ya ausente por una dependencia terminal
+histórica no se recrea ni se declara otra vez como delete.
+
+Replay continúa antes del fingerprint fuente, pero sólo se acredita contra el corte append-only
+exacto: una transición no declarada en el mismo timestamp o cualquier transición posterior sobre
+la membresía bloquea. En SOURCE toda prehistoria debe ser estrictamente anterior a `observedAt`;
+en POST el cutover inferido nunca puede ser posterior a la observación. Ambos desvíos fallan como
+`CURRENT_STATE_MISMATCH` antes de construir el plan. Esta regla no se extiende al `updatedAt`
+mutable de un puntero sobreviviente, cuya limitación forense permanece documentada. La
+autenticidad y cardinalidad se volverán a acreditar bajo lock en 8C.
+
 ### Puerta
 
 ~~~bash
@@ -162,6 +189,27 @@ forma exacta los elementos retirados y los sobrevivientes, todavía sin habilita
 git diff --check
 git status --short
 ~~~
+
+### Evidencia de cierre 8B
+
+- Puerta focal final: 89 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Suite unitaria ejecutada por el lifecycle de integración: 2.656 pruebas, 0 fallos, 0 errores y
+  0 omitidas.
+- `LegalEditorialPlannerIT` sobre PostgreSQL 16/Flyway V27: 10 pruebas, 0 fallos, 0 errores y
+  0 omitidas.
+- Se acreditaron retiros document-only, requirement-only y mixtos; unión deduplicada de punteros;
+  postestado completo; historias, lotes, slots, dependencias y `updatedAt` sobrevivientes exactos;
+  y replay-first con timestamp histórico.
+- Una fixture PostgreSQL con dos requisitos que referencian los mismos documentos acreditó filas
+  duplicadas reales y su canonicalización final. La revisión del reader confirmó que el
+  `LIMIT max + 1` se aplica a las filas crudas y que `bounded()` falla antes de canonicalizar; una
+  fixture que exceda materialmente ese presupuesto queda como refuerzo adversarial futuro.
+- La revisión adversarial reprodujo y cerró un falso replay que absorbía un retiro posterior no
+  declarado, además de prehistoria SOURCE igual/futura y cutover POST futuro.
+- El planner permaneció select-only: el test de replay conservó sin cambios 19 tablas y 10
+  secuencias.
+- No se modificaron V27/V28, schemas, grants, API, frontend, writer, apply ni CLI; no hubo push ni
+  deploy.
 
 Commit:
 

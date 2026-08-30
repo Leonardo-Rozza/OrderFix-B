@@ -11,6 +11,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.Legal
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRetirement;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentScopedRef;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.RequirementRetirement;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalManifestV1.ReviewStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalPublicationPlan;
@@ -74,11 +75,29 @@ class LegalEditorialPlannerCoreTest {
     private static final UUID MERGE_PREDECESSOR_USAGE_ID = uuid(40);
     private static final UUID MERGE_PREDECESSOR_PRO_ID = uuid(41);
     private static final UUID MERGE_SUCCESSOR_ID = uuid(50);
+    private static final UUID RETIREMENT_SURVIVOR_DOCUMENT_ID = uuid(80);
+    private static final UUID RETIREMENT_SURVIVOR_DOCUMENT_LINE_ID = uuid(180);
+    private static final UUID RETIREMENT_REQUIREMENT_ID = uuid(81);
+    private static final UUID RETIREMENT_REQUIREMENT_LINE_ID = uuid(181);
+    private static final UUID RETIREMENT_SURVIVOR_REQUIREMENT_ID = uuid(82);
+    private static final UUID RETIREMENT_SURVIVOR_REQUIREMENT_LINE_ID = uuid(182);
+    private static final UUID RETIREMENT_SURVIVOR_SET_ID = uuid(83);
     private static final UUID SPLIT_BATCH_ID = uuid(100);
+    private static final String RETIREMENT_REASON = "Retiro operativo explícito";
+    private static final String RETIREMENT_REQUIREMENT_SHA = "f".repeat(64);
+    private static final String RETIREMENT_SURVIVOR_REQUIREMENT_SHA = "8".repeat(64);
+    private static final String RETIREMENT_AFFECTED_REVISION =
+            "sha256:" + "e".repeat(64);
+    private static final String RETIREMENT_SURVIVOR_REVISION =
+            "sha256:" + "6".repeat(64);
     private static final Instant HISTORICAL_ACTIVATION_AT =
             APPLIED_AT.minusSeconds(86_400);
     private static final Instant HISTORICAL_BATCH_CREATED_AT =
             HISTORICAL_ACTIVATION_AT.minusSeconds(60);
+    private static final Instant RETIREMENT_AFFECTED_POINTER_AT =
+            HISTORICAL_ACTIVATION_AT.plusSeconds(30);
+    private static final Instant RETIREMENT_SURVIVOR_POINTER_AT =
+            HISTORICAL_ACTIVATION_AT.plusSeconds(60);
 
     @Test
     void coreAndOriginVerifierAreSelectOnlyAndOwnNeitherGateNorClock() throws Exception {
@@ -434,39 +453,67 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
-    void documentOnlyRetirementExplicitlyDeletesEveryPointerReferencingTheDocument() {
+    void retirementBindingReportsEachStableInputFailureBeforeReadingDatabaseState() {
+        List<RetirementBindingCase> cases = List.of(
+                new RetirementBindingCase(
+                        "readiness esperado incompatible",
+                        LegalEditorialReadiness.READY,
+                        true,
+                        TARGET_EXTERNAL_ID,
+                        TARGET_SHA,
+                        LegalManifestIssueCode.EXPECTED_READINESS_MISMATCH),
+                new RetirementBindingCase(
+                        "gap fail-closed no reconocido",
+                        LegalEditorialReadiness.NOT_READY,
+                        false,
+                        TARGET_EXTERNAL_ID,
+                        TARGET_SHA,
+                        LegalManifestIssueCode.FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED),
+                new RetirementBindingCase(
+                        "current distinto de target",
+                        LegalEditorialReadiness.NOT_READY,
+                        true,
+                        SOURCE_EXTERNAL_ID,
+                        SOURCE_SHA,
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID));
+
+        for (RetirementBindingCase testCase : cases) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            ValidatedEditorialPlan token = retirementToken(
+                    List.of(documentRetirement()),
+                    List.of());
+            LegalEditorialPlanV1 plan = token.plan();
+            when(plan.expectedReadinessAfter()).thenReturn(testCase.readiness());
+            when(plan.acknowledgeFailClosedGap()).thenReturn(testCase.acknowledged());
+            when(plan.expectedCurrentPublicationId()).thenReturn(testCase.currentExternalId());
+            when(plan.expectedCurrentManifestSha256()).thenReturn(testCase.currentManifestSha());
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    token,
+                    OBSERVED_AT);
+
+            assertThat(result.status()).as(testCase.name())
+                    .isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).as(testCase.name()).isEmpty();
+            assertThat(result.issues()).as(testCase.name())
+                    .extracting(LegalManifestIssue::code)
+                    .containsExactly(testCase.expectedIssue());
+            verify(harness.reader, never()).publication(any());
+            verify(harness.origin, never()).verify(any(), any());
+        }
+    }
+
+    @Test
+    void documentOnlyRetirementPreservesEveryUnaffectedMemberProjectionAndHistoricalBatch() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
-        ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
-        LegalEditorialPlanV1 plan = mock(LegalEditorialPlanV1.class);
-        DocumentRetirement retirement = new DocumentRetirement(
-                DOCUMENT_ID,
-                "c".repeat(64),
-                List.of(ContextoLegal.REGISTRO),
-                "Retiro operativo explícito");
-        when(token.plan()).thenReturn(plan);
-        when(token.operationId()).thenReturn(OPERATION_ID);
-        when(token.editorialPlanSha256()).thenReturn("d".repeat(64));
-        when(plan.operationType()).thenReturn(LegalEditorialPlanV1.OperationType.RETIRE);
-        when(plan.targetPublicationId()).thenReturn(TARGET_EXTERNAL_ID);
-        when(plan.targetManifestSha256()).thenReturn(TARGET_SHA);
-        when(plan.expectedCurrentPublicationId()).thenReturn(TARGET_EXTERNAL_ID);
-        when(plan.expectedCurrentManifestSha256()).thenReturn(TARGET_SHA);
-        when(plan.expectedEditorialStateFingerprint()).thenReturn(FINGERPRINT);
-        when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.NOT_READY);
-        when(plan.acknowledgeFailClosedGap()).thenReturn(true);
-        when(plan.documentAdditions()).thenReturn(List.of());
-        when(plan.documentReuses()).thenReturn(List.of());
-        when(plan.documentReplacementBatches()).thenReturn(List.of());
-        when(plan.documentRetirements()).thenReturn(List.of(retirement));
-        when(plan.requirementAdditions()).thenReturn(List.of());
-        when(plan.requirementReuses()).thenReturn(List.of());
-        when(plan.requirementReplacements()).thenReturn(List.of());
-        when(plan.requirementRetirements()).thenReturn(List.of());
-        LegalEditorialPlannerCore.PlannerSnapshot snapshot = retirementSourceSnapshot();
+        ValidatedEditorialPlan token = retirementToken(
+                List.of(documentRetirement()),
+                List.of());
         when(harness.reader.snapshot(
-                any(), any(), anySet(), anySet(), anySet())).thenReturn(snapshot);
-        when(harness.readiness.observeState(TARGET_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
-                observation(1, 2, 0, 1, 0));
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementSourceSnapshot());
+        stubRetirementFingerprint(harness);
 
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
@@ -476,37 +523,277 @@ class LegalEditorialPlannerCoreTest {
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
         assertThat(result.executionPlan()).get().satisfies(execution -> {
-            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
-            assertThat(execution.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
-            assertThat(execution.mutationCommands().documentSlotDeletes()).hasSize(1);
+            assertThat(execution.expectedPostState().documentStates())
+                    .extracting(
+                            LegalEditorialExecutionPlan.ExpectedDocumentState::documentVersionId,
+                            LegalEditorialExecutionPlan.ExpectedDocumentState::state)
+                    .containsExactlyInAnyOrder(
+                            tuple(DOCUMENT_ID, EstadoVersionLegal.RETIRADA),
+                            tuple(RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                    EstadoVersionLegal.VIGENTE));
+            assertThat(execution.expectedPostState().requirementStates())
+                    .extracting(
+                            LegalEditorialExecutionPlan.ExpectedRequirementState
+                                    ::requirementVersionId,
+                            LegalEditorialExecutionPlan.ExpectedRequirementState::state)
+                    .containsExactlyInAnyOrder(
+                            tuple(RETIREMENT_REQUIREMENT_ID, EstadoVersionLegal.VIGENTE),
+                            tuple(RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                    EstadoVersionLegal.VIGENTE));
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(4);
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .hasSize(4);
+            assertThat(execution.expectedPostState().documentSlots())
+                    .singleElement()
+                    .satisfies(slot -> assertThat(slot.documentVersionId())
+                            .isEqualTo(RETIREMENT_SURVIVOR_DOCUMENT_ID));
+            assertRetirementSurvivorPointer(execution);
+            assertThat(execution.expectedPostState().preexistingReplacementBatches())
+                    .singleElement()
+                    .satisfies(batch -> assertThat(batch.batchId())
+                            .isEqualTo(HISTORICAL_BATCH_ID));
+            assertThat(execution.mutationCommands().documentSlotDeletes())
+                    .singleElement()
+                    .satisfies(slot -> assertThat(slot.expectedDocumentVersionId())
+                            .isEqualTo(DOCUMENT_ID));
+            assertThat(execution.mutationCommands().requiredSetPointerDeletes())
+                    .singleElement()
+                    .satisfies(pointer -> assertThat(pointer.expectedRequiredSetId())
+                            .isEqualTo(REQUIRED_SET_ID));
+        });
+    }
+
+    @Test
+    void requirementOnlyRetirementPreservesDocumentsSlotsAndUnaffectedRequirements() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = retirementToken(
+                List.of(),
+                List.of(requirementRetirement()));
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementSourceSnapshot());
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedPostState().documentStates())
+                    .extracting(LegalEditorialExecutionPlan.ExpectedDocumentState
+                            ::documentVersionId)
+                    .containsExactlyInAnyOrder(
+                            DOCUMENT_ID,
+                            RETIREMENT_SURVIVOR_DOCUMENT_ID);
+            assertThat(execution.expectedPostState().requirementStates())
+                    .extracting(
+                            LegalEditorialExecutionPlan.ExpectedRequirementState
+                                    ::requirementVersionId,
+                            LegalEditorialExecutionPlan.ExpectedRequirementState::state)
+                    .containsExactlyInAnyOrder(
+                            tuple(RETIREMENT_REQUIREMENT_ID, EstadoVersionLegal.RETIRADA),
+                            tuple(RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                    EstadoVersionLegal.VIGENTE));
+            assertThat(execution.expectedPostState().documentSlots())
+                    .extracting(LegalEditorialExecutionPlan.ExpectedDocumentSlot
+                            ::documentVersionId)
+                    .containsExactlyInAnyOrder(
+                            DOCUMENT_ID,
+                            RETIREMENT_SURVIVOR_DOCUMENT_ID);
+            assertRetirementSurvivorPointer(execution);
+            assertThat(execution.mutationCommands().documentSlotDeletes()).isEmpty();
+            assertThat(execution.mutationCommands().requiredSetPointerDeletes())
+                    .singleElement()
+                    .satisfies(pointer -> assertThat(pointer.dependenciesEvidence())
+                            .get()
+                            .extracting(LegalEditorialExecutionPlan.RequiredSetDependencies
+                                    ::memberRequirementVersionIds)
+                            .asList()
+                            .containsExactly(RETIREMENT_REQUIREMENT_ID));
+        });
+    }
+
+    @Test
+    void mixedRetirementDeduplicatesTheAffectedPointerUnionAndPreservesItsSurvivor() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = mixedRetirementToken();
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementSourceSnapshot());
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
             assertThat(execution.mutationCommands().requiredSetPointerDeletes())
                     .singleElement()
                     .satisfies(pointer -> {
-                        assertThat(pointer.expectedRequiredSetId())
-                                .isEqualTo(REQUIRED_SET_ID);
-                        assertThat(pointer.dependenciesEvidence()).isPresent();
-                        assertThat(pointer.dependenciesEvidence().orElseThrow()
-                                .memberRequirementVersionIds()).isEmpty();
-                        assertThat(pointer.dependenciesEvidence().orElseThrow()
-                                .referencedDocumentVersionIds())
-                                .containsExactly(DOCUMENT_ID);
+                        assertThat(pointer.expectedRequiredSetId()).isEqualTo(REQUIRED_SET_ID);
+                        assertThat(pointer.dependenciesEvidence()).get().satisfies(dependencies -> {
+                            assertThat(dependencies.memberRequirementVersionIds())
+                                    .containsExactly(RETIREMENT_REQUIREMENT_ID);
+                            assertThat(dependencies.referencedDocumentVersionIds())
+                                    .containsExactly(DOCUMENT_ID);
+                        });
                     });
-            assertThat(execution.expectedPostState().documentTransitions())
-                    .singleElement()
-                    .satisfies(transition -> {
-                        assertThat(transition.previousState())
-                                .isEqualTo(EstadoVersionLegal.VIGENTE);
-                        assertThat(transition.newState())
-                                .isEqualTo(EstadoVersionLegal.RETIRADA);
-                        assertThat(transition.occurredAt()).isEqualTo(OBSERVED_AT);
-                    });
-            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
-                    .hasSize(2)
-                    .extracting(LegalEditorialExecutionPlan.DocumentTransition::occurredAt)
-                    .containsOnly(APPLIED_AT);
-            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
-                    .isEmpty();
+            assertRetirementSurvivorPointer(execution);
+            assertThat(execution.expectedPostState().documentStates()).hasSize(2);
+            assertThat(execution.expectedPostState().requirementStates()).hasSize(2);
         });
+    }
+
+    @Test
+    void aSecondRetirementPreservesAnExistingGapWithoutRecreatingItsProjections() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = retirementToken(
+                List.of(survivorDocumentRetirement()),
+                List.of());
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementPostSnapshot());
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedPostState().documentStates())
+                    .extracting(
+                            LegalEditorialExecutionPlan.ExpectedDocumentState::documentVersionId,
+                            LegalEditorialExecutionPlan.ExpectedDocumentState::stateChangedAt)
+                    .containsExactlyInAnyOrder(
+                            tuple(DOCUMENT_ID, APPLIED_AT),
+                            tuple(RETIREMENT_SURVIVOR_DOCUMENT_ID, OBSERVED_AT));
+            assertThat(execution.expectedPostState().documentSlots()).isEmpty();
+            assertThat(execution.expectedPostState().requiredSetPointers()).isEmpty();
+            assertThat(execution.mutationCommands().documentSlotDeletes())
+                    .singleElement()
+                    .satisfies(delete -> assertThat(delete.expectedDocumentVersionId())
+                            .isEqualTo(RETIREMENT_SURVIVOR_DOCUMENT_ID));
+            assertThat(execution.mutationCommands().requiredSetPointerDeletes())
+                    .singleElement()
+                    .satisfies(delete -> assertThat(delete.key())
+                            .isEqualTo(retirementSurvivorPointerKey()));
+            assertThat(execution.mutationCommands().requiredSetPointerDeletes())
+                    .noneMatch(delete -> delete.key().equals(retirementAffectedPointerKey()));
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(5);
+            assertThat(execution.expectedPostState().preexistingRequirementTransitions())
+                    .hasSize(5);
+        });
+    }
+
+    @Test
+    void retirementSourceRejectsPrehistoryAtOrAfterTheObservationCut() {
+        for (Instant invalidTransitionAt : List.of(
+                OBSERVED_AT,
+                OBSERVED_AT.plusSeconds(1))) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    retirementSourceWithDocumentHistoryAt(invalidTransitionAt));
+            stubRetirementFingerprint(harness);
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    retirementToken(List.of(documentRetirement()), List.of()),
+                    OBSERVED_AT);
+
+            assertThat(result.status()).as(invalidTransitionAt.toString())
+                    .isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).as(invalidTransitionAt.toString()).isEmpty();
+            assertThat(result.issues()).as(invalidTransitionAt.toString())
+                    .extracting(LegalManifestIssue::code)
+                    .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
+    }
+
+    @Test
+    void retirementReplayWithFutureCutoverBlocksAsStateMismatch() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementPostSnapshotAt(OBSERVED_AT.plusSeconds(1)));
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
+    void exactPartialRetirementPostStateIsRecognizedReplayFirstWithoutCommands() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementPostSnapshot());
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+            assertThat(execution.expectedPostState().documentStates()).hasSize(2);
+            assertThat(execution.expectedPostState().requirementStates()).hasSize(2);
+            assertThat(execution.expectedPostState().documentSlots())
+                    .singleElement()
+                    .satisfies(slot -> assertThat(slot.documentVersionId())
+                            .isEqualTo(RETIREMENT_SURVIVOR_DOCUMENT_ID));
+            assertRetirementSurvivorPointer(execution);
+            assertThat(execution.expectedPostState().preexistingReplacementBatches())
+                    .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                    .containsExactly(HISTORICAL_BATCH_ID);
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void retirementReplayBlocksMissingOrDriftingSurvivorProjections() {
+        for (RetirementProjectionCorruption corruption : retirementProjectionCorruptions()) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    corruption.snapshot());
+            stubRetirementFingerprint(harness);
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    mixedRetirementToken(),
+                    OBSERVED_AT);
+
+            assertThat(result.status()).as(corruption.name())
+                    .isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).as(corruption.name()).isEmpty();
+            assertThat(result.issues()).as(corruption.name())
+                    .extracting(LegalManifestIssue::code)
+                    .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
     }
 
     @Test
@@ -1163,61 +1450,607 @@ class LegalEditorialPlannerCoreTest {
                 Map.of());
     }
 
-    private static LegalEditorialPlannerCore.PlannerSnapshot retirementSourceSnapshot() {
-        LegalEditorialPlannerCore.DocumentEvidence document = document(
+    private static ValidatedEditorialPlan mixedRetirementToken() {
+        return retirementToken(
+                List.of(documentRetirement()),
+                List.of(requirementRetirement()));
+    }
+
+    private static ValidatedEditorialPlan retirementToken(
+            List<DocumentRetirement> documentRetirements,
+            List<RequirementRetirement> requirementRetirements) {
+        ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
+        LegalEditorialPlanV1 plan = mock(LegalEditorialPlanV1.class);
+        when(token.plan()).thenReturn(plan);
+        when(token.operationType()).thenReturn(LegalEditorialPlanV1.OperationType.RETIRE);
+        when(token.operationId()).thenReturn(OPERATION_ID);
+        when(token.editorialPlanSha256()).thenReturn("d".repeat(64));
+        when(plan.operationType()).thenReturn(LegalEditorialPlanV1.OperationType.RETIRE);
+        when(plan.targetPublicationId()).thenReturn(TARGET_EXTERNAL_ID);
+        when(plan.targetManifestSha256()).thenReturn(TARGET_SHA);
+        when(plan.expectedCurrentPublicationId()).thenReturn(TARGET_EXTERNAL_ID);
+        when(plan.expectedCurrentManifestSha256()).thenReturn(TARGET_SHA);
+        when(plan.expectedEditorialStateFingerprint()).thenReturn(FINGERPRINT);
+        when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.NOT_READY);
+        when(plan.acknowledgeFailClosedGap()).thenReturn(true);
+        when(plan.documentAdditions()).thenReturn(List.of());
+        when(plan.documentReuses()).thenReturn(List.of());
+        when(plan.documentReplacementBatches()).thenReturn(List.of());
+        when(plan.documentRetirements()).thenReturn(documentRetirements);
+        when(plan.requirementAdditions()).thenReturn(List.of());
+        when(plan.requirementReuses()).thenReturn(List.of());
+        when(plan.requirementReplacements()).thenReturn(List.of());
+        when(plan.requirementRetirements()).thenReturn(requirementRetirements);
+        return token;
+    }
+
+    private static DocumentRetirement documentRetirement() {
+        return new DocumentRetirement(
+                DOCUMENT_ID,
+                "c".repeat(64),
+                List.of(ContextoLegal.REGISTRO),
+                RETIREMENT_REASON);
+    }
+
+    private static DocumentRetirement survivorDocumentRetirement() {
+        return new DocumentRetirement(
+                RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                "d".repeat(64),
+                List.of(ContextoLegal.USO_CONTINUADO),
+                "Segundo retiro operativo explícito");
+    }
+
+    private static RequirementRetirement requirementRetirement() {
+        return new RequirementRetirement(
+                RETIREMENT_REQUIREMENT_ID,
+                RETIREMENT_REQUIREMENT_SHA,
+                ContextoLegal.REGISTRO,
+                List.of(AudienciaLegal.USER),
+                RETIREMENT_REASON);
+    }
+
+    private static void stubRetirementFingerprint(Harness harness) {
+        when(harness.readiness.observeState(TARGET_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                observation(2, 4, 4, 2, 1));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            partialRetirementSourceSnapshot() {
+        LegalEditorialPlannerCore.DocumentEvidence retired = retirementDocumentEvidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                "c".repeat(64),
                 EstadoVersionLegal.VIGENTE,
-                APPLIED_AT,
-                null);
-        LegalEditorialExecutionPlan.DocumentSlotKey slotKey =
-                new LegalEditorialExecutionPlan.DocumentSlotKey(
-                        TipoDocumentoLegal.TERMINOS_SERVICIO,
-                        LocaleLegal.ES_AR,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                null,
+                ContextoLegal.REGISTRO);
+        LegalEditorialPlannerCore.DocumentEvidence survivor = retirementDocumentEvidence(
+                RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                RETIREMENT_SURVIVOR_DOCUMENT_LINE_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                HISTORICAL_BATCH_ID,
+                ContextoLegal.USO_CONTINUADO);
+        LegalEditorialPlannerCore.RequirementEvidence retiredRequirement =
+                retirementRequirementEvidence(
+                        RETIREMENT_REQUIREMENT_ID,
+                        RETIREMENT_REQUIREMENT_LINE_ID,
+                        RETIREMENT_REQUIREMENT_SHA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT,
+                        null,
                         ContextoLegal.REGISTRO);
-        LegalEditorialExecutionPlan.RequiredSetPointerKey pointerKey =
-                new LegalEditorialExecutionPlan.RequiredSetPointerKey(
-                        LocaleLegal.ES_AR,
-                        ContextoLegal.REGISTRO,
-                        AudienciaLegal.USER);
-        return new LegalEditorialPlannerCore.PlannerSnapshot(
-                List.of(DOCUMENT_ID),
-                List.of(),
-                List.of(DOCUMENT_ID),
-                List.of(),
-                Map.of(DOCUMENT_ID, document),
-                Map.of(),
-                List.of(),
-                List.of(new LegalEditorialPlannerCore.SlotEvidence(
-                        slotKey,
-                        DOCUMENT_ID,
-                        DOCUMENT_LINE_ID,
+        LegalEditorialPlannerCore.RequirementEvidence survivorRequirement =
+                retirementRequirementEvidence(
+                        RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_LINE_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_SHA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT,
+                        null,
+                        ContextoLegal.USO_CONTINUADO);
+        return partialRetirementSnapshot(
+                retired,
+                survivor,
+                retiredRequirement,
+                survivorRequirement,
+                List.of(
+                        slot(retired, ContextoLegal.REGISTRO, TARGET_PUBLICATION_ID),
+                        slot(survivor, ContextoLegal.USO_CONTINUADO,
+                                TARGET_PUBLICATION_ID)),
+                retirementSourcePointers(),
+                List.of(
+                        retirementDocumentTransition(
+                                1, DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                2, DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                3, RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                4, RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT)),
+                List.of(
+                        retirementRequirementTransition(
+                                1, RETIREMENT_REQUIREMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                2, RETIREMENT_REQUIREMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                3, RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                4, RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_ACTIVATION_AT)));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            partialRetirementPostSnapshot() {
+        return partialRetirementPostSnapshotAt(APPLIED_AT);
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            partialRetirementPostSnapshotAt(Instant appliedAt) {
+        LegalEditorialPlannerCore.DocumentEvidence retired = retirementDocumentEvidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                "c".repeat(64),
+                EstadoVersionLegal.RETIRADA,
+                appliedAt,
+                RETIREMENT_REASON,
+                null,
+                ContextoLegal.REGISTRO);
+        LegalEditorialPlannerCore.DocumentEvidence survivor = retirementDocumentEvidence(
+                RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                RETIREMENT_SURVIVOR_DOCUMENT_LINE_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                HISTORICAL_BATCH_ID,
+                ContextoLegal.USO_CONTINUADO);
+        LegalEditorialPlannerCore.RequirementEvidence retiredRequirement =
+                retirementRequirementEvidence(
+                        RETIREMENT_REQUIREMENT_ID,
+                        RETIREMENT_REQUIREMENT_LINE_ID,
+                        RETIREMENT_REQUIREMENT_SHA,
+                        EstadoVersionLegal.RETIRADA,
+                        appliedAt,
+                        RETIREMENT_REASON,
+                        ContextoLegal.REGISTRO);
+        LegalEditorialPlannerCore.RequirementEvidence survivorRequirement =
+                retirementRequirementEvidence(
+                        RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_LINE_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_SHA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT,
+                        null,
+                        ContextoLegal.USO_CONTINUADO);
+        return partialRetirementSnapshot(
+                retired,
+                survivor,
+                retiredRequirement,
+                survivorRequirement,
+                List.of(slot(survivor, ContextoLegal.USO_CONTINUADO,
                         TARGET_PUBLICATION_ID)),
-                List.of(new LegalEditorialPlannerCore.PointerEvidence(
-                        pointerKey,
+                List.of(retirementSurvivorPointer()),
+                List.of(
+                        retirementDocumentTransition(
+                                1, DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                2, DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                3, DOCUMENT_ID, EstadoVersionLegal.VIGENTE,
+                                EstadoVersionLegal.RETIRADA, RETIREMENT_REASON,
+                                null, appliedAt),
+                        retirementDocumentTransition(
+                                4, RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                5, RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT)),
+                List.of(
+                        retirementRequirementTransition(
+                                1, RETIREMENT_REQUIREMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                2, RETIREMENT_REQUIREMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                3, RETIREMENT_REQUIREMENT_ID,
+                                EstadoVersionLegal.VIGENTE,
+                                EstadoVersionLegal.RETIRADA, RETIREMENT_REASON,
+                                appliedAt),
+                        retirementRequirementTransition(
+                                4, RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA, null,
+                                HISTORICAL_ACTIVATION_AT),
+                        retirementRequirementTransition(
+                                5, RETIREMENT_SURVIVOR_REQUIREMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE, null,
+                                HISTORICAL_ACTIVATION_AT)));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            retirementSourceWithDocumentHistoryAt(Instant transitionAt) {
+        LegalEditorialPlannerCore.PlannerSnapshot source = partialRetirementSourceSnapshot();
+        LegalEditorialPlannerCore.DocumentEvidence document =
+                source.documents().get(DOCUMENT_ID);
+        LegalEditorialPlannerCore.DocumentEvidence shiftedDocument =
+                new LegalEditorialPlannerCore.DocumentEvidence(
+                        document.id(),
+                        document.lineId(),
+                        document.introductionPublicationId(),
+                        document.sha256(),
+                        document.effectiveAt(),
+                        document.state(),
+                        transitionAt,
+                        document.lastReason(),
+                        document.replacementBatchId(),
+                        document.type(),
+                        document.locale(),
+                        document.contexts());
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> shiftedTransitions =
+                source.documentTransitions().stream()
+                        .map(transition -> transition.versionId().equals(DOCUMENT_ID)
+                                ? new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                                        transition.id(),
+                                        transition.versionId(),
+                                        transition.previousState(),
+                                        transition.newState(),
+                                        transition.reason(),
+                                        transition.replacementBatchId(),
+                                        transitionAt)
+                                : transition)
+                        .toList();
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                Map.of(
+                        DOCUMENT_ID, shiftedDocument,
+                        RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                        source.documents().get(RETIREMENT_SURVIVOR_DOCUMENT_ID)),
+                source.requirements(),
+                source.targetScopes(),
+                source.activeSlots(),
+                source.activePointers(),
+                shiftedTransitions,
+                source.requirementTransitions(),
+                source.batches());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot partialRetirementSnapshot(
+            LegalEditorialPlannerCore.DocumentEvidence retired,
+            LegalEditorialPlannerCore.DocumentEvidence survivor,
+            LegalEditorialPlannerCore.RequirementEvidence retiredRequirement,
+            LegalEditorialPlannerCore.RequirementEvidence survivorRequirement,
+            List<LegalEditorialPlannerCore.SlotEvidence> slots,
+            List<LegalEditorialPlannerCore.PointerEvidence> pointers,
+            List<LegalEditorialPlannerCore.DocumentTransitionEvidence> documentTransitions,
+            List<LegalEditorialPlannerCore.RequirementTransitionEvidence> requirementTransitions) {
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(DOCUMENT_ID, RETIREMENT_SURVIVOR_DOCUMENT_ID),
+                List.of(RETIREMENT_REQUIREMENT_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_ID),
+                List.of(DOCUMENT_ID, RETIREMENT_SURVIVOR_DOCUMENT_ID),
+                List.of(RETIREMENT_REQUIREMENT_ID,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_ID),
+                Map.of(
+                        DOCUMENT_ID, retired,
+                        RETIREMENT_SURVIVOR_DOCUMENT_ID, survivor),
+                Map.of(
+                        RETIREMENT_REQUIREMENT_ID, retiredRequirement,
+                        RETIREMENT_SURVIVOR_REQUIREMENT_ID, survivorRequirement),
+                retirementTargetScopes(),
+                slots,
+                pointers,
+                documentTransitions,
+                requirementTransitions,
+                Map.of(HISTORICAL_BATCH_ID, retirementHistoricalBatch()));
+    }
+
+    private static List<LegalEditorialPlannerCore.TargetScopeEvidence>
+            retirementTargetScopes() {
+        return List.of(
+                new LegalEditorialPlannerCore.TargetScopeEvidence(
+                        retirementAffectedPointerKey(),
                         REQUIRED_SET_ID,
                         TARGET_PUBLICATION_ID,
-                        "sha256:" + "e".repeat(64),
-                        APPLIED_AT,
-                        List.of(),
-                        List.of(DOCUMENT_ID, DOCUMENT_ID))),
-                List.of(
-                        new LegalEditorialPlannerCore.DocumentTransitionEvidence(
-                                1,
-                                DOCUMENT_ID,
-                                EstadoVersionLegal.BORRADOR,
-                                EstadoVersionLegal.PUBLICADA,
-                                null,
-                                null,
-                                APPLIED_AT),
-                        new LegalEditorialPlannerCore.DocumentTransitionEvidence(
-                                2,
-                                DOCUMENT_ID,
-                                EstadoVersionLegal.PUBLICADA,
-                                EstadoVersionLegal.VIGENTE,
-                                null,
-                                null,
-                                APPLIED_AT)),
+                        RETIREMENT_AFFECTED_REVISION,
+                        new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                                List.of(RETIREMENT_REQUIREMENT_ID),
+                                List.of(DOCUMENT_ID, DOCUMENT_ID))),
+                new LegalEditorialPlannerCore.TargetScopeEvidence(
+                        retirementSurvivorPointerKey(),
+                        RETIREMENT_SURVIVOR_SET_ID,
+                        TARGET_PUBLICATION_ID,
+                        RETIREMENT_SURVIVOR_REVISION,
+                        new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                                List.of(RETIREMENT_SURVIVOR_REQUIREMENT_ID),
+                                List.of(RETIREMENT_SURVIVOR_DOCUMENT_ID))));
+    }
+
+    private static List<LegalEditorialPlannerCore.PointerEvidence>
+            retirementSourcePointers() {
+        return List.of(
+                new LegalEditorialPlannerCore.PointerEvidence(
+                        retirementAffectedPointerKey(),
+                        REQUIRED_SET_ID,
+                        TARGET_PUBLICATION_ID,
+                        RETIREMENT_AFFECTED_REVISION,
+                        RETIREMENT_AFFECTED_POINTER_AT,
+                        List.of(RETIREMENT_REQUIREMENT_ID),
+                        List.of(DOCUMENT_ID, DOCUMENT_ID)),
+                retirementSurvivorPointer());
+    }
+
+    private static LegalEditorialPlannerCore.PointerEvidence retirementSurvivorPointer() {
+        return new LegalEditorialPlannerCore.PointerEvidence(
+                retirementSurvivorPointerKey(),
+                RETIREMENT_SURVIVOR_SET_ID,
+                TARGET_PUBLICATION_ID,
+                RETIREMENT_SURVIVOR_REVISION,
+                RETIREMENT_SURVIVOR_POINTER_AT,
+                List.of(RETIREMENT_SURVIVOR_REQUIREMENT_ID),
+                List.of(RETIREMENT_SURVIVOR_DOCUMENT_ID));
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetPointerKey
+            retirementAffectedPointerKey() {
+        return new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                LocaleLegal.ES_AR,
+                ContextoLegal.REGISTRO,
+                AudienciaLegal.USER);
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetPointerKey
+            retirementSurvivorPointerKey() {
+        return new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                LocaleLegal.ES_AR,
+                ContextoLegal.USO_CONTINUADO,
+                AudienciaLegal.USER);
+    }
+
+    private static LegalEditorialPlannerCore.BatchEvidence retirementHistoricalBatch() {
+        return new LegalEditorialPlannerCore.BatchEvidence(
+                HISTORICAL_BATCH_ID,
+                HISTORICAL_BATCH_CREATED_AT,
+                HISTORICAL_ACTIVATION_AT,
+                List.of(HISTORICAL_PREDECESSOR_ID),
+                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                        RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                        TARGET_PUBLICATION_ID)));
+    }
+
+    private static LegalEditorialPlannerCore.DocumentEvidence retirementDocumentEvidence(
+            UUID id,
+            UUID lineId,
+            String sha256,
+            EstadoVersionLegal state,
+            Instant stateChangedAt,
+            String lastReason,
+            UUID replacementBatchId,
+            ContextoLegal context) {
+        return new LegalEditorialPlannerCore.DocumentEvidence(
+                id,
+                lineId,
+                TARGET_PUBLICATION_ID,
+                sha256,
+                OBSERVED_AT.minusSeconds(60),
+                state,
+                stateChangedAt,
+                lastReason,
+                replacementBatchId,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(context));
+    }
+
+    private static LegalEditorialPlannerCore.RequirementEvidence retirementRequirementEvidence(
+            UUID id,
+            UUID lineId,
+            String statementSha256,
+            EstadoVersionLegal state,
+            Instant stateChangedAt,
+            String lastReason,
+            ContextoLegal context) {
+        return new LegalEditorialPlannerCore.RequirementEvidence(
+                id,
+                lineId,
+                TARGET_PUBLICATION_ID,
+                statementSha256,
+                state,
+                stateChangedAt,
+                lastReason,
+                LocaleLegal.ES_AR,
+                context,
+                List.of(AudienciaLegal.USER));
+    }
+
+    private static LegalEditorialPlannerCore.DocumentTransitionEvidence
+            retirementDocumentTransition(
+                    long id,
+                    UUID documentId,
+                    EstadoVersionLegal previous,
+                    EstadoVersionLegal next,
+                    String reason,
+                    UUID replacementBatchId,
+                    Instant occurredAt) {
+        return new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                id,
+                documentId,
+                previous,
+                next,
+                reason,
+                replacementBatchId,
+                occurredAt);
+    }
+
+    private static LegalEditorialPlannerCore.RequirementTransitionEvidence
+            retirementRequirementTransition(
+                    long id,
+                    UUID requirementId,
+                    EstadoVersionLegal previous,
+                    EstadoVersionLegal next,
+                    String reason,
+                    Instant occurredAt) {
+        return new LegalEditorialPlannerCore.RequirementTransitionEvidence(
+                id,
+                requirementId,
+                previous,
+                next,
+                reason,
+                null,
+                occurredAt);
+    }
+
+    private static void assertRetirementSurvivorPointer(
+            LegalEditorialExecutionPlan execution) {
+        assertThat(execution.expectedPostState().requiredSetPointers())
+                .singleElement()
+                .satisfies(pointer -> {
+                    assertThat(pointer.key()).isEqualTo(retirementSurvivorPointerKey());
+                    assertThat(pointer.requiredSetId()).isEqualTo(RETIREMENT_SURVIVOR_SET_ID);
+                    assertThat(pointer.requiredSetRevision())
+                            .isEqualTo(RETIREMENT_SURVIVOR_REVISION);
+                    assertThat(pointer.updatedAt()).isEqualTo(RETIREMENT_SURVIVOR_POINTER_AT);
+                    assertThat(pointer.dependenciesEvidence()).get().satisfies(dependencies -> {
+                        assertThat(dependencies.memberRequirementVersionIds())
+                                .containsExactly(RETIREMENT_SURVIVOR_REQUIREMENT_ID);
+                        assertThat(dependencies.referencedDocumentVersionIds())
+                                .containsExactly(RETIREMENT_SURVIVOR_DOCUMENT_ID);
+                    });
+                });
+    }
+
+    private static List<RetirementProjectionCorruption>
+            retirementProjectionCorruptions() {
+        LegalEditorialPlannerCore.PlannerSnapshot post = partialRetirementPostSnapshot();
+        LegalEditorialPlannerCore.PointerEvidence driftingPointer =
+                new LegalEditorialPlannerCore.PointerEvidence(
+                        retirementSurvivorPointerKey(),
+                        RETIREMENT_SURVIVOR_SET_ID,
+                        TARGET_PUBLICATION_ID,
+                        "sha256:" + "7".repeat(64),
+                        RETIREMENT_SURVIVOR_POINTER_AT,
+                        List.of(RETIREMENT_SURVIVOR_REQUIREMENT_ID),
+                        List.of(RETIREMENT_SURVIVOR_DOCUMENT_ID));
+        return List.of(
+                new RetirementProjectionCorruption(
+                        "slot sobreviviente faltante",
+                        copyRetirementProjections(post, List.of(), post.activePointers())),
+                new RetirementProjectionCorruption(
+                        "puntero sobreviviente faltante",
+                        copyRetirementProjections(post, post.activeSlots(), List.of())),
+                new RetirementProjectionCorruption(
+                        "revisión de puntero sobreviviente divergente",
+                        copyRetirementProjections(
+                                post,
+                                post.activeSlots(),
+                                List.of(driftingPointer))),
+                new RetirementProjectionCorruption(
+                        "retiro sobreviviente posterior a la operación acreditada",
+                        laterSurvivorRetirementSnapshot(post)));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            laterSurvivorRetirementSnapshot(
+                    LegalEditorialPlannerCore.PlannerSnapshot source) {
+        Instant laterRetirementAt = APPLIED_AT.plusSeconds(60);
+        String laterReason = "Retiro posterior ajeno a la operación";
+        LegalEditorialPlannerCore.DocumentEvidence laterRetiredSurvivor =
+                retirementDocumentEvidence(
+                        RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                        RETIREMENT_SURVIVOR_DOCUMENT_LINE_ID,
+                        "d".repeat(64),
+                        EstadoVersionLegal.RETIRADA,
+                        laterRetirementAt,
+                        laterReason,
+                        null,
+                        ContextoLegal.USO_CONTINUADO);
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> transitions =
+                new java.util.ArrayList<>(source.documentTransitions());
+        transitions.add(retirementDocumentTransition(
+                6,
+                RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                EstadoVersionLegal.VIGENTE,
+                EstadoVersionLegal.RETIRADA,
+                laterReason,
+                null,
+                laterRetirementAt));
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                Map.of(
+                        DOCUMENT_ID, source.documents().get(DOCUMENT_ID),
+                        RETIREMENT_SURVIVOR_DOCUMENT_ID, laterRetiredSurvivor),
+                source.requirements(),
+                source.targetScopes(),
                 List.of(),
-                Map.of());
+                List.of(),
+                transitions,
+                source.requirementTransitions(),
+                source.batches());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot copyRetirementProjections(
+            LegalEditorialPlannerCore.PlannerSnapshot source,
+            List<LegalEditorialPlannerCore.SlotEvidence> slots,
+            List<LegalEditorialPlannerCore.PointerEvidence> pointers) {
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                source.documents(),
+                source.requirements(),
+                source.targetScopes(),
+                slots,
+                pointers,
+                source.documentTransitions(),
+                source.requirementTransitions(),
+                source.batches());
     }
 
     private static ValidatedEditorialPlan replacementToken(
@@ -2277,6 +3110,20 @@ class LegalEditorialPlannerCoreTest {
             String name,
             DocumentReplacementBatch batch,
             LegalEditorialPlannerCore.PlannerSnapshot snapshot
+    ) { }
+
+    private record RetirementProjectionCorruption(
+            String name,
+            LegalEditorialPlannerCore.PlannerSnapshot snapshot
+    ) { }
+
+    private record RetirementBindingCase(
+            String name,
+            LegalEditorialReadiness readiness,
+            boolean acknowledged,
+            String currentExternalId,
+            String currentManifestSha,
+            LegalManifestIssueCode expectedIssue
     ) { }
 
     private static final class Harness {

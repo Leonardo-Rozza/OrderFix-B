@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 7 completados;
-Corte 8 en ejecución con Subcorte 8A completado y 8B pendiente; Cortes 9 a 11 pendientes
+Corte 8 en ejecución con Subcortes 8A y 8B completados y 8C pendiente; Cortes 9 a 11 pendientes
 
 Diseño aprobado:
 
@@ -1036,8 +1036,8 @@ Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
 ## Corte 8 — Retiro explícito fail-closed
 
-Estado: en ejecución; diseño específico aprobado, Subcorte 8A completado el 2026-08-30 y 8B
-pendiente.
+Estado: en ejecución; diseño específico aprobado, Subcortes 8A y 8B completados el 2026-08-30 y
+8C pendiente.
 
 Diseño específico aprobado:
 
@@ -1055,7 +1055,7 @@ Aplicar RETIRE sin sucesor y confirmar de forma deliberada APPLIED+NOT_READY.
 El trabajo se divide en siete subcortes acreditables:
 
 1. 8A — invariantes del execution plan — completado el 2026-08-30;
-2. 8B — postestado parcial exacto — pendiente;
+2. 8B — postestado parcial exacto — completado el 2026-08-30;
 3. 8C — writer dedicado y aplicación;
 4. 8D — PostgreSQL fresco con rol restringido;
 5. 8E — replay, corrupción y rollback;
@@ -1067,9 +1067,13 @@ grant, endpoint o frontend; `persisted=true` acredita postestado confirmado y no
 persistido.
 
 8A permite transportar proyecciones preservadas y exige conjuntos de dependencias canonicalizados
-en cada puntero RETIRE declarado. La causalidad local y la comparación contra una expectativa fija
-quedaron cubiertas con 74 pruebas focales y 2.646 pruebas totales. La completitud autoritativa del
-universo permanece en 8B y la autenticidad/cardinalidad bajo lock en 8C.
+en cada puntero RETIRE declarado. 8B completa el universo desde toda la membresía current y todos
+los scopes sellados: preserva exactamente estados, historias, lotes, slots, punteros, dependencias
+y timestamps sobrevivientes; admite huecos históricos sin recrearlos; y rechaza replay con
+transiciones append-only posteriores. La lectura PostgreSQL aplica límites antes de canonicalizar
+y el planner permanece select-only. SOURCE exige prehistoria estrictamente anterior a la
+observación y POST rechaza un cutover futuro antes de construir el plan. La autenticidad y
+cardinalidad bajo lock permanecen en 8C.
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
