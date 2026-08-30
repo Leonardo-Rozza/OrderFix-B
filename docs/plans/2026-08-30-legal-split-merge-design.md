@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario el 2026-08-30; pendiente de implementación
+Estado: aprobado por el usuario el 2026-08-30; implementación en ejecución, Subcortes 7A y 7B
+completados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 

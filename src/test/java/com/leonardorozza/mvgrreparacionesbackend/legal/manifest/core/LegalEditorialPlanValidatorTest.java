@@ -54,6 +54,32 @@ class LegalEditorialPlanValidatorTest {
     }
 
     @Test
+    void acceptsDisjointMultipleBatchesAndOrdersThemByMinimumMemberUuid()
+            throws IOException {
+        ObjectNode raw = fixture("replace-valid-v1/editorial-plan.json");
+        ArrayNode batches = raw.withArray("documentReplacementBatches");
+        String originalBatchId = batches.get(0).path("replacementBatchId").textValue();
+        ObjectNode earlierByMember = ((ObjectNode) batches.get(0)).deepCopy();
+        String earlierBatchId = uuid(40_000);
+        earlierByMember.put("replacementBatchId", earlierBatchId);
+        earlierByMember.withArray("contexts").removeAll().add("CIERRE_CUENTA");
+        earlierByMember.withArray("predecessors").removeAll().addObject()
+                .put("documentVersionId", uuid(90))
+                .put("sha256", "a".repeat(64));
+        earlierByMember.withArray("successors").removeAll().addObject()
+                .put("documentVersionId", uuid(290))
+                .put("sha256", "b".repeat(64));
+        batches.add(earlierByMember);
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = validator.validate(write(raw));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.value().orElseThrow().plan().documentReplacementBatches())
+                .extracting(batch -> batch.replacementBatchId().toString())
+                .containsExactly(earlierBatchId, originalBatchId);
+    }
+
+    @Test
     void enforcesTheClosedReplaceOperationMatrix() throws IOException {
         ObjectNode sameTarget = fixture("replace-valid-v1/editorial-plan.json");
         sameTarget.put("targetPublicationId", sameTarget.path(
@@ -133,6 +159,40 @@ class LegalEditorialPlanValidatorTest {
                 requirementCycle.path("requirementReplacements").get(0)
                         .path("predecessor").path("requirementVersionId").textValue());
         assertBlocked(write(requirementCycle),
+                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+    }
+
+    @Test
+    void rejectsDocumentSelfCyclesAndCrossBatchMemberReuse() throws IOException {
+        ObjectNode selfCycle = fixture("replace-valid-v1/editorial-plan.json");
+        ObjectNode selfCycleBatch = (ObjectNode) selfCycle.path(
+                "documentReplacementBatches").get(0);
+        ObjectNode predecessor = (ObjectNode) selfCycleBatch.path("predecessors").get(0);
+        ObjectNode successor = (ObjectNode) selfCycleBatch.path("successors").get(0);
+        successor.put("documentVersionId", predecessor.path("documentVersionId").textValue());
+        successor.put("sha256", predecessor.path("sha256").textValue());
+        assertBlocked(write(selfCycle), LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+
+        ObjectNode predecessorReuse = fixture("replace-valid-v1/editorial-plan.json");
+        ObjectNode repeatedPredecessor = ((ObjectNode) predecessorReuse.path(
+                "documentReplacementBatches").get(0)).deepCopy();
+        repeatedPredecessor.put("replacementBatchId", uuid(30_000));
+        repeatedPredecessor.withArray("successors").removeAll().addObject()
+                .put("documentVersionId", uuid(291))
+                .put("sha256", "c".repeat(64));
+        predecessorReuse.withArray("documentReplacementBatches").add(repeatedPredecessor);
+        assertBlocked(write(predecessorReuse),
+                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+
+        ObjectNode successorReuse = fixture("replace-valid-v1/editorial-plan.json");
+        ObjectNode repeatedSuccessor = ((ObjectNode) successorReuse.path(
+                "documentReplacementBatches").get(0)).deepCopy();
+        repeatedSuccessor.put("replacementBatchId", uuid(30_001));
+        repeatedSuccessor.withArray("predecessors").removeAll().addObject()
+                .put("documentVersionId", uuid(91))
+                .put("sha256", "d".repeat(64));
+        successorReuse.withArray("documentReplacementBatches").add(repeatedSuccessor);
+        assertBlocked(write(successorReuse),
                 LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
     }
 

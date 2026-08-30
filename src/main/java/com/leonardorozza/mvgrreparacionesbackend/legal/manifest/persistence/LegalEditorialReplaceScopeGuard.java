@@ -10,7 +10,10 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.Legal
 import java.util.List;
 import java.util.Objects;
 
-/** Pure capability guard for the one-to-one REPLACE cutover supported by Corte 6. */
+/**
+ * Pure capability guard for REPLACE plans composed of one-to-one, split, merge,
+ * or multiple supported replacement batches.
+ */
 public final class LegalEditorialReplaceScopeGuard {
 
     private static final String MAPPING_LOCATION = "documentReplacementBatches";
@@ -24,7 +27,6 @@ public final class LegalEditorialReplaceScopeGuard {
                 .documentReplacementBatches();
 
         if (requiredPlan.operationType() != OperationType.REPLACE
-                || batches.size() > 1
                 || hasUnsupportedCardinality(batches)) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
                     LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
@@ -35,10 +37,12 @@ public final class LegalEditorialReplaceScopeGuard {
     }
 
     private static boolean hasUnsupportedCardinality(List<DocumentReplacementBatch> batches) {
-        if (batches.isEmpty()) {
-            return false;
-        }
-        DocumentReplacementBatch batch = batches.getFirst();
-        return batch.predecessors().size() != 1 || batch.successors().size() != 1;
+        return batches.stream().anyMatch(batch -> {
+            int predecessorCount = batch.predecessors().size();
+            int successorCount = batch.successors().size();
+            return predecessorCount == 0
+                    || successorCount == 0
+                    || (predecessorCount != 1 && successorCount != 1);
+        });
     }
 }

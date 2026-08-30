@@ -62,7 +62,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** PostgreSQL accreditation for the bounded one-to-one editorial replacement cutover. */
+/** PostgreSQL accreditation for the bounded editorial replacement cutover. */
 @Testcontainers
 class LegalEditorialReplaceIT {
 
@@ -258,12 +258,11 @@ class LegalEditorialReplaceIT {
     }
 
     @Test
-    void multipleSplitAndMergeMappingsAreRejectedBeforeTheDatabaseGate()
+    void manyToManyMappingIsRejectedBeforeTheDatabaseGate()
             throws Exception {
         ImportedRelease irrelevantTarget = importedRequirementOnlyTarget(
                 "replace-invalid-scope-target-v1");
-        List<ValidatedEditorialPlan> unsupportedPlans = unsupportedScopePlans();
-        assertThat(unsupportedPlans).hasSize(3);
+        ValidatedEditorialPlan unsupported = manyToManyScopePlan();
         Map<String, String> rowsBefore = editorialTableRows();
         Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBefore =
                 editorialSequenceStates(owner);
@@ -271,14 +270,12 @@ class LegalEditorialReplaceIT {
         try (LegalManifestPersistenceITSupport.EditorialLockHolder ignored =
                      LegalManifestPersistenceITSupport.holdEditorialLock(
                              Objects.requireNonNull(owner.getDataSource()))) {
-            for (ValidatedEditorialPlan unsupported : unsupportedPlans) {
-                LegalEditorialApplyResult blocked = apply.service().applyReplace(
-                        irrelevantTarget.release(), unsupported);
-                assertEditorialKnownFailure(
-                        blocked,
-                        LegalManifestStatus.BLOCKED,
-                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
-            }
+            LegalEditorialApplyResult blocked = apply.service().applyReplace(
+                    irrelevantTarget.release(), unsupported);
+            assertEditorialKnownFailure(
+                    blocked,
+                    LegalManifestStatus.BLOCKED,
+                    LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
         }
         assertThat(editorialTableRows()).isEqualTo(rowsBefore);
         assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBefore);
@@ -625,53 +622,22 @@ class LegalEditorialReplaceIT {
         return imported;
     }
 
-    private List<ValidatedEditorialPlan> unsupportedScopePlans() throws Exception {
+    private ValidatedEditorialPlan manyToManyScopePlan() throws Exception {
         Path fixturePath = Path.of(Objects.requireNonNull(
                 LegalEditorialReplaceIT.class.getResource(
                         "/legal/editorial/replace-valid-v1/editorial-plan.json"),
                 "validated many-to-one fixture").toURI());
-        ObjectNode merge = (ObjectNode) JSON.readTree(Files.readAllBytes(fixturePath));
-
-        ObjectNode split = merge.deepCopy();
-        UUID splitOperation = stableUuid("unsupported-split");
-        split.put("operationId", splitOperation.toString());
-        ObjectNode splitBatch = (ObjectNode) split.withArray(
+        ObjectNode manyToMany = (ObjectNode) JSON.readTree(Files.readAllBytes(fixturePath));
+        UUID operation = stableUuid("unsupported-many-to-many");
+        manyToMany.put("operationId", operation.toString());
+        ObjectNode batch = (ObjectNode) manyToMany.withArray(
                 "documentReplacementBatches").get(0);
-        splitBatch.withArray("predecessors").remove(1);
-        ObjectNode secondSuccessor = splitBatch.withArray("successors").addObject();
+        ObjectNode secondSuccessor = batch.withArray("successors").addObject();
         secondSuccessor.put(
                 "documentVersionId",
-                stableUuid("unsupported-split-successor").toString());
+                stableUuid("unsupported-many-to-many-successor").toString());
         secondSuccessor.put("sha256", "a".repeat(64));
-
-        ObjectNode multiple = merge.deepCopy();
-        UUID multipleOperation = stableUuid("unsupported-multiple");
-        multiple.put("operationId", multipleOperation.toString());
-        ObjectNode firstBatch = (ObjectNode) multiple.withArray(
-                "documentReplacementBatches").get(0);
-        firstBatch.withArray("predecessors").remove(1);
-        ObjectNode secondBatch = multiple.withArray(
-                "documentReplacementBatches").addObject();
-        secondBatch.put(
-                "replacementBatchId",
-                stableUuid("unsupported-second-batch").toString());
-        secondBatch.putArray("contexts").add("USO_CONTINUADO");
-        ObjectNode secondPredecessor = secondBatch.putArray("predecessors").addObject();
-        secondPredecessor.put(
-                "documentVersionId",
-                stableUuid("unsupported-second-predecessor").toString());
-        secondPredecessor.put("sha256", "b".repeat(64));
-        ObjectNode multipleSuccessor = secondBatch.putArray("successors").addObject();
-        multipleSuccessor.put(
-                "documentVersionId",
-                stableUuid("unsupported-second-successor").toString());
-        multipleSuccessor.put("sha256", "c".repeat(64));
-
-        UUID mergeOperation = UUID.fromString(merge.path("operationId").textValue());
-        return List.of(
-                validatePlan(merge, mergeOperation),
-                validatePlan(split, splitOperation),
-                validatePlan(multiple, multipleOperation));
+        return validatePlan(manyToMany, operation);
     }
 
     private static DocumentVersion retireDocumentToGap(

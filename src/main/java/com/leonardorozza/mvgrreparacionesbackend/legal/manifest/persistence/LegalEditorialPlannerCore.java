@@ -692,11 +692,7 @@ final class LegalEditorialPlannerCore {
                         operationAt);
                 documentTransitions.add(transition);
                 derivedTransitions.add(transition);
-                for (SlotEvidence active : slotsFor(snapshot, predecessor.id())) {
-                    derivedSlotDeletes.add(new LegalEditorialExecutionPlan.DocumentSlotDelete(
-                            active.key(),
-                            predecessor.id()));
-                }
+                derivedSlotDeletes.addAll(expectedSlotDeletes(predecessor));
             }
             for (DocumentRef successorRef : declaredBatch.successors()) {
                 DocumentEvidence successor = snapshot.documents().get(
@@ -1889,6 +1885,16 @@ final class LegalEditorialPlannerCore {
                         document.id(),
                         document.lineId(),
                         publicationId))
+                .toList();
+    }
+
+    private static List<LegalEditorialExecutionPlan.DocumentSlotDelete> expectedSlotDeletes(
+            DocumentEvidence document) {
+        return document.contexts().stream()
+                .map(context -> new LegalEditorialExecutionPlan.DocumentSlotDelete(
+                        new LegalEditorialExecutionPlan.DocumentSlotKey(
+                                document.type(), document.locale(), context),
+                        document.id()))
                 .toList();
     }
 

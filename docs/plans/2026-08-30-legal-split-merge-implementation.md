@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcorte 7A completado, 7B pendiente
+Estado: en ejecución — diseño aprobado; Subcortes 7A y 7B completados, 7C pendiente
 
 Diseño aprobado:
 
@@ -105,7 +105,7 @@ Commit:
 
 ## Subcorte 7B — Apertura controlada y planner
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -146,6 +146,41 @@ git status --short
 Commit:
 
     feat(legal): habilita reemplazos split y merge
+
+### Evidencia de cierre 7B
+
+- `LegalEditorialReplaceScopeGuard` admite cero, `1→1`, `1→N`, `N→1` y múltiples lotes. Lados
+  vacíos, `N→M` y otra operación conservan el rechazo tipado
+  `BLOCKED/REPLACEMENT_MAPPING_INVALID` en `documentReplacementBatches`.
+- Plan, apply y preflight usan el guard real y acreditan que `N→M` termina antes de resolver el
+  entorno, adquirir el gate, leer `transaction_timestamp` o interactuar con JDBC. La integración
+  PostgreSQL de REPLACE valida además que un `2→2` no modifica filas ni avanza secuencias.
+- El planner acredita en una sola operación un split `1→2` y un merge `2→1`, con batch IDs
+  adversariales: orden canónico, seis estados, nueve transiciones, tres comandos directos
+  `BORRADOR→PUBLICADA`, efectos V27 completos y un único timestamp.
+- El replay compuesto conserva lotes, historia, timestamp y efectos V27 exactos, devuelve
+  `changeRequired=false` y emite cero comandos. La prueba roja reveló que la evidencia histórica
+  de slots eliminados se perdía al releer el postestado; `LegalEditorialPlannerCore` ahora la
+  reconstruye desde tipo, locale y contextos inmutables del predecesor. En source-state la
+  proyección se valida contra los slots activos antes de DML; en replay se exigen lote sellado,
+  membresías y transiciones exactas, además de la ausencia de slots de las predecesoras.
+- Tipo o locale desigual en predecesoras o sucesoras, contextos solapados en cualquiera de ambos
+  lados y cobertura desigual bloquean después de leer el snapshot y antes de readiness o DML. El
+  validator opaco acredita además un multibatch JSON disjunto válido, su orden por miembro mínimo,
+  el autociclo documental y la reutilización de miembros entre lotes; regresiones `1→1`,
+  requirements-only, PROMOTE, CLI y reportes conservan sus contratos.
+- Java 21 (Corretto 21.0.10): puerta focal ampliada de 130 tests y suite unitaria completa de 2.629
+  tests, todas con 0 fallos, 0 errores y 0 omitidos. PostgreSQL 16.14/Flyway V27 ejecutó las 13
+  integraciones `LegalEditorialReplaceIT` sin fallos; `git diff --check` quedó limpio.
+- La primera ejecución completa encontró un bloqueo transitorio fail-closed
+  `EDITORIAL_PLAN_FILE_CHANGED` sobre un directorio temporal en una prueba del validator. La misma
+  puerta, sin cambio de código ni relajación de seguridad, pasó completa al repetirla y confirmó
+  los conteos anteriores.
+- Tres revisiones adversariales y sus reauditorías cerraron sin hallazgos P0–P2. Los desvíos P2
+  de cobertura y documentación detectados durante la revisión se corrigieron antes del commit.
+- No se modificaron V27/V28, schemas, grants, rol, endpoints, JPA ni frontend; tampoco hubo push o
+  deploy. Los escenarios PostgreSQL positivos de split, merge y multibatch permanecen
+  deliberadamente para 7C.
 
 ## Subcorte 7C — PostgreSQL fresco
 

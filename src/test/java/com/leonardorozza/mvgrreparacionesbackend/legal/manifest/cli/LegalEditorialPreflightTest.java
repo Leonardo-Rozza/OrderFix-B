@@ -11,11 +11,14 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRef;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReplaceScopeGuard;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -30,6 +33,7 @@ import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
@@ -373,16 +377,15 @@ class LegalEditorialPreflightTest {
     @EnumSource(
             value = Command.class,
             names = {"PLAN_REPLACE", "APPLY_REPLACE"})
-    void unsupportedReplaceScopeRetainsConfirmedIdentityWithoutResolvingEnvironment(
+    void manyToManyReplaceRetainsConfirmedIdentityWithoutResolvingEnvironment(
             Command command) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
         when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
                 .thenReturn(LegalManifestValidation.pass(editorialPlan));
-        when(replaceScopeGuard.validate(editorialPlan))
-                .thenReturn(LegalManifestValidation.failure(issue(
-                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
-                        "documentReplacementBatches")));
+        replaceScopeGuard = new LegalEditorialReplaceScopeGuard();
+        when(editorialPlanModel.documentReplacementBatches())
+                .thenReturn(List.of(manyToManyBatch()));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         int exitCode = cli().runSafely(validArguments(command), output);
@@ -391,15 +394,35 @@ class LegalEditorialPreflightTest {
         String json = output.toString(StandardCharsets.UTF_8);
         assertThat(json)
                 .contains(OPERATION_ID.toString(), EDITORIAL_PLAN_SHA256)
+                .contains(
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID.name(),
+                        "documentReplacementBatches")
                 .contains("\"changeRequired\":null", "\"observedAt\":null")
                 .doesNotContain("publicationUuid\":\"", "jdbc:postgresql");
-        verify(replaceScopeGuard).validate(editorialPlan);
         verifyNoInteractions(
                 environmentResolver,
                 contextFactory,
                 context,
                 planService,
                 applyService);
+    }
+
+    private static DocumentReplacementBatch manyToManyBatch() {
+        return new DocumentReplacementBatch(
+                UUID.fromString("00000000-0000-0000-0000-000000000301"),
+                List.of(ContextoLegal.USO_CONTINUADO),
+                List.of(
+                        documentRef("00000000-0000-0000-0000-000000000302", 'a'),
+                        documentRef("00000000-0000-0000-0000-000000000303", 'b')),
+                List.of(
+                        documentRef("00000000-0000-0000-0000-000000000304", 'c'),
+                        documentRef("00000000-0000-0000-0000-000000000305", 'd')));
+    }
+
+    private static DocumentRef documentRef(String id, char digestCharacter) {
+        return new DocumentRef(
+                UUID.fromString(id),
+                String.valueOf(digestCharacter).repeat(64));
     }
 
     private LegalManifestCli cli() {

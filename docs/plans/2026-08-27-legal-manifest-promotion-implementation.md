@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4, 5 y 6
-completados; Cortes 7 a 11 pendientes
+completados; Corte 7 en ejecución con Subcortes 7A y 7B completados; Cortes 8 a 11 pendientes
 
 Diseño aprobado:
 
@@ -947,7 +947,7 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: en ejecución; diseño aprobado el 2026-08-30, Subcorte 7A completado y 7B pendiente.
+Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A y 7B completados y 7C pendiente.
 
 Diseño específico aprobado:
 
@@ -1003,9 +1003,13 @@ git diff --check
 git status --short
 ~~~
 
-Commit:
+Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
-    feat(legal): soporta reemplazos split y merge
+    feat(legal): prepara lotes split y merge
+    feat(legal): habilita reemplazos split y merge
+    test(legal): acredita split y merge en postgresql
+    test(legal): acredita atomicidad multibatch
+    docs(legal): cierra reemplazos split y merge
 
 ## Corte 8 — Retiro explícito fail-closed
 
@@ -1316,7 +1320,11 @@ Commit backend:
 | 6C | refactor(legal): separa mutacion y postestado editorial |
 | 6D | feat(legal): aplica cutover editorial uno a uno |
 | 6E | fix(legal): acredita cutover editorial uno a uno |
-| 7 | feat(legal): soporta reemplazos split y merge |
+| 7A | feat(legal): prepara lotes split y merge |
+| 7B | feat(legal): habilita reemplazos split y merge |
+| 7C | test(legal): acredita split y merge en postgresql |
+| 7D | test(legal): acredita atomicidad multibatch |
+| 7E | docs(legal): cierra reemplazos split y merge |
 | 8 | feat(legal): retira contenido de forma fail closed |
 | 9 | fix(legal): reconcilia commits editoriales ambiguos |
 | 10 | test(legal): acredita concurrencia y procesos editoriales |

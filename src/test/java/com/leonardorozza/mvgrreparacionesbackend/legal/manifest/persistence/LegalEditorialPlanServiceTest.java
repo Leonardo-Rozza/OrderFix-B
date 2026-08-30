@@ -6,6 +6,11 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRef;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,6 +21,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -100,21 +106,22 @@ class LegalEditorialPlanServiceTest {
     }
 
     @Test
-    void unsupportedReplaceScopeIsBlockedBeforeOpeningTheReadOnlyTransaction() {
+    void manyToManyReplaceIsBlockedByTheRealGuardBeforeReadOnlyGateOrTimestamp() {
         Harness harness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
-        ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
-        LegalManifestIssue issue = LegalManifestIssue.at(
-                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
-                "documentReplacementBatches");
-        when(harness.replaceScopeGuard.validate(token))
-                .thenReturn(LegalManifestValidation.failure(issue));
+        ValidatedEditorialPlan token = manyToManyPlan();
 
-        LegalEditorialPlanResult result = harness.service().planReplace(release, token);
+        LegalEditorialPlanResult result = harness.service(
+                new LegalEditorialReplaceScopeGuard()).planReplace(release, token);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
-        assertThat(result.issues()).containsExactly(issue);
+        assertThat(result.issues()).singleElement().satisfies(issue -> {
+            assertThat(issue.code())
+                    .isEqualTo(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+            assertThat(issue.location()).isEqualTo("documentReplacementBatches");
+        });
+        verify(harness.gate, never()).usesJdbc(any());
         verify(harness.gate, never()).executeReadOnly(any());
         verify(harness.jdbc, never()).queryForObject(any(String.class), any(Class.class));
         verify(harness.planner, never()).usesJdbc(any());
@@ -171,6 +178,30 @@ class LegalEditorialPlanServiceTest {
                 "database/state")));
     }
 
+    private static ValidatedEditorialPlan manyToManyPlan() {
+        DocumentReplacementBatch batch = new DocumentReplacementBatch(
+                UUID.fromString("00000000-0000-0000-0000-000000000101"),
+                List.of(ContextoLegal.USO_CONTINUADO),
+                List.of(
+                        documentRef("00000000-0000-0000-0000-000000000102", 'a'),
+                        documentRef("00000000-0000-0000-0000-000000000103", 'b')),
+                List.of(
+                        documentRef("00000000-0000-0000-0000-000000000104", 'c'),
+                        documentRef("00000000-0000-0000-0000-000000000105", 'd')));
+        LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
+        when(model.documentReplacementBatches()).thenReturn(List.of(batch));
+        ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
+        when(token.plan()).thenReturn(model);
+        when(token.operationType()).thenReturn(OperationType.REPLACE);
+        return token;
+    }
+
+    private static DocumentRef documentRef(String id, char digestCharacter) {
+        return new DocumentRef(
+                UUID.fromString(id),
+                String.valueOf(digestCharacter).repeat(64));
+    }
+
     private static void assertObservationErrorWithoutEvidence(
             LegalEditorialPlanResult result) {
         assertThat(result.status()).isEqualTo(LegalManifestStatus.ERROR);
@@ -211,11 +242,16 @@ class LegalEditorialPlanServiceTest {
         }
 
         private LegalEditorialPlanService service() {
+            return service(replaceScopeGuard);
+        }
+
+        private LegalEditorialPlanService service(
+                LegalEditorialReplaceScopeGuard scopeGuard) {
             return new LegalEditorialPlanService(
                     gate,
                     jdbc,
                     planner,
-                    replaceScopeGuard,
+                    scopeGuard,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);

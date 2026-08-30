@@ -43,28 +43,56 @@ class LegalEditorialReplaceScopeGuardTest {
     }
 
     @Test
-    void blocksMoreThanOneDocumentReplacementBatch() {
+    void acceptsMoreThanOneBatchWithSupportedCardinalities() {
         ValidatedEditorialPlan plan = planWithBatches(List.of(
                 batchWithCardinality(1, 1),
-                batchWithCardinality(1, 1)));
+                batchWithCardinality(1, 2),
+                batchWithCardinality(2, 1)));
 
         LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
 
-        assertBlockedMapping(result);
+        assertPassedWithSamePlan(result, plan);
     }
 
     @Test
-    void blocksOneToManyDocumentReplacementBatch() {
+    void acceptsOneToManyDocumentReplacementBatch() {
         ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(1, 2)));
 
         LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
 
+        assertPassedWithSamePlan(result, plan);
+    }
+
+    @Test
+    void acceptsManyToOneDocumentReplacementBatch() {
+        ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(2, 1)));
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
+
+        assertPassedWithSamePlan(result, plan);
+    }
+
+    @Test
+    void blocksManyToManyDocumentReplacementBatch() {
+        ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(2, 2)));
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
+
         assertBlockedMapping(result);
     }
 
     @Test
-    void blocksManyToOneDocumentReplacementBatch() {
-        ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(2, 1)));
+    void blocksDocumentReplacementBatchWithoutPredecessors() {
+        ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(0, 1)));
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
+
+        assertBlockedMapping(result);
+    }
+
+    @Test
+    void blocksDocumentReplacementBatchWithoutSuccessors() {
+        ValidatedEditorialPlan plan = planWithBatches(List.of(batchWithCardinality(1, 0)));
 
         LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
 

@@ -34,11 +34,13 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class LegalEditorialPlannerCoreTest {
@@ -65,6 +67,14 @@ class LegalEditorialPlannerCoreTest {
     private static final UUID HISTORICAL_PREDECESSOR_ID = uuid(11);
     private static final UUID EXTRA_BATCH_ID = uuid(12);
     private static final UUID EXTRA_PREDECESSOR_ID = uuid(13);
+    private static final UUID MERGE_BATCH_ID = uuid(14);
+    private static final UUID SPLIT_PREDECESSOR_ID = uuid(20);
+    private static final UUID SPLIT_SUCCESSOR_REGISTRATION_ID = uuid(30);
+    private static final UUID SPLIT_SUCCESSOR_CLOSURE_ID = uuid(31);
+    private static final UUID MERGE_PREDECESSOR_USAGE_ID = uuid(40);
+    private static final UUID MERGE_PREDECESSOR_PRO_ID = uuid(41);
+    private static final UUID MERGE_SUCCESSOR_ID = uuid(50);
+    private static final UUID SPLIT_BATCH_ID = uuid(100);
     private static final Instant HISTORICAL_ACTIVATION_AT =
             APPLIED_AT.minusSeconds(86_400);
     private static final Instant HISTORICAL_BATCH_CREATED_AT =
@@ -237,33 +247,162 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
-    void replaceScopeGuardBlocksMultipleAndSplitMergeBatchesBeforeReadingDatabaseState() {
-        List<List<DocumentReplacementBatch>> unsupportedMappings = List.of(
-                List.of(batchWithCardinality(1, 1), batchWithCardinality(1, 1)),
-                List.of(batchWithCardinality(1, 2)),
-                List.of(batchWithCardinality(2, 1)));
+    void replaceScopeGuardBlocksManyToManyBeforeReadingDatabaseState() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(List.of(), List.of());
+        List<DocumentReplacementBatch> batches = List.of(batchWithCardinality(2, 2));
+        when(token.plan().documentReplacementBatches()).thenReturn(batches);
 
-        for (List<DocumentReplacementBatch> batches : unsupportedMappings) {
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+        verify(harness.reader, never()).publication(any());
+        verify(harness.reader, never()).snapshot(
+                any(), any(), anySet(), anySet(), anySet());
+        verify(harness.readiness, never()).evaluate(any(), any());
+        verify(harness.readiness, never()).observeState(any(), any());
+        verify(harness.origin, never()).verify(any(), any());
+    }
+
+    @Test
+    void compositeSplitAndMergeSourceStateProducesCanonicalV27Cutover() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                compositeReplacementBatches());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                compositeReplacementSourceSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(6, 6, 0, 4, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
+            assertCompositeBatchOrderAndShape(
+                    execution.expectedPostState().replacementBatches(),
+                    OBSERVED_AT);
+            assertCompositeBatchOrderAndShape(
+                    execution.mutationCommands().replacementBatchesToCreateAndSeal(),
+                    OBSERVED_AT);
+            assertThat(execution.expectedPostState().documentStates())
+                    .hasSize(6)
+                    .allSatisfy(state -> assertThat(state.stateChangedAt())
+                            .isEqualTo(OBSERVED_AT));
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .hasSize(9)
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(OBSERVED_AT));
+            assertThat(execution.mutationCommands().documentTransitions())
+                    .hasSize(3)
+                    .allSatisfy(transition -> {
+                        assertThat(transition.previousState())
+                                .isEqualTo(EstadoVersionLegal.BORRADOR);
+                        assertThat(transition.newState())
+                                .isEqualTo(EstadoVersionLegal.PUBLICADA);
+                        assertThat(transition.replacementBatchId()).isNull();
+                        assertThat(transition.occurredAt()).isEqualTo(OBSERVED_AT);
+                    });
+            assertCompositeV27Effects(execution.expectedPostState().v27TriggerEffects(),
+                    OBSERVED_AT);
+        });
+    }
+
+    @Test
+    void compositeSplitAndMergeReplayPreservesAtomicTimestampAndEmitsNoCommands() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                compositeReplacementBatches());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                compositeReplacementPostSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.ready(observation(6, 15, 0, 4, 2)));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+            assertCompositeBatchOrderAndShape(
+                    execution.expectedPostState().replacementBatches(),
+                    APPLIED_AT);
+            assertThat(execution.expectedPostState().documentStates())
+                    .hasSize(6)
+                    .allSatisfy(state -> assertThat(state.stateChangedAt())
+                            .isEqualTo(APPLIED_AT));
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .hasSize(9)
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(APPLIED_AT));
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .hasSize(6)
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(HISTORICAL_ACTIVATION_AT));
+            assertCompositeV27Effects(execution.expectedPostState().v27TriggerEffects(),
+                    APPLIED_AT);
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void replacementMappingRejectsDatabaseTypeLocaleAndContextMismatchesBeforeMutation() {
+        for (InvalidReplacementMapping scenario : invalidReplacementMappings()) {
             Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
-            ValidatedEditorialPlan token = replacementToken(List.of(), List.of());
-            when(token.plan().documentReplacementBatches()).thenReturn(batches);
+            ValidatedEditorialPlan token = replacementToken(
+                    List.of(),
+                    List.of(),
+                    List.of(scenario.batch()));
+            stubReplacementPublications(harness);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    scenario.snapshot());
 
             LegalEditorialPlanResult result = harness.core().planReplace(
                     harness.release,
                     token,
                     OBSERVED_AT);
 
-            assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
-            assertThat(result.executionPlan()).isEmpty();
-            assertThat(result.issues())
+            assertThat(result.status()).as(scenario.name())
+                    .isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).as(scenario.name()).isEmpty();
+            assertThat(result.issues()).as(scenario.name())
                     .extracting(LegalManifestIssue::code)
                     .containsExactly(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
-            verify(harness.reader, never()).publication(any());
-            verify(harness.reader, never()).snapshot(
-                    any(), any(), anySet(), anySet(), anySet());
+            verify(harness.reader).snapshot(any(), any(), anySet(), anySet(), anySet());
             verify(harness.readiness, never()).evaluate(any(), any());
             verify(harness.readiness, never()).observeState(any(), any());
-            verify(harness.origin, never()).verify(any(), any());
+            verifyNoInteractions(harness.jdbc);
         }
     }
 
@@ -1109,6 +1248,709 @@ class LegalEditorialPlannerCoreTest {
         return token;
     }
 
+    private static List<DocumentReplacementBatch> compositeReplacementBatches() {
+        // Deliberately inverse to the canonical member-minimum order.
+        return List.of(mergeReplacementBatch(), splitReplacementBatch());
+    }
+
+    private static DocumentReplacementBatch splitReplacementBatch() {
+        return new DocumentReplacementBatch(
+                SPLIT_BATCH_ID,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                List.of(new DocumentRef(SPLIT_PREDECESSOR_ID, sha("1"))),
+                List.of(
+                        new DocumentRef(SPLIT_SUCCESSOR_REGISTRATION_ID, sha("2")),
+                        new DocumentRef(SPLIT_SUCCESSOR_CLOSURE_ID, sha("3"))));
+    }
+
+    private static DocumentReplacementBatch mergeReplacementBatch() {
+        return new DocumentReplacementBatch(
+                MERGE_BATCH_ID,
+                List.of(ContextoLegal.USO_CONTINUADO, ContextoLegal.CONTRATACION_PRO),
+                List.of(
+                        new DocumentRef(MERGE_PREDECESSOR_USAGE_ID, sha("4")),
+                        new DocumentRef(MERGE_PREDECESSOR_PRO_ID, sha("5"))),
+                List.of(new DocumentRef(MERGE_SUCCESSOR_ID, sha("6"))));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            compositeReplacementSourceSnapshot() {
+        LegalEditorialPlannerCore.DocumentEvidence splitPredecessor = replacementEvidence(
+                SPLIT_PREDECESSOR_ID,
+                uuid(120),
+                SOURCE_PUBLICATION_ID,
+                sha("1"),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence splitRegistration = replacementEvidence(
+                SPLIT_SUCCESSOR_REGISTRATION_ID,
+                uuid(130),
+                TARGET_PUBLICATION_ID,
+                sha("2"),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence splitClosure = replacementEvidence(
+                SPLIT_SUCCESSOR_CLOSURE_ID,
+                uuid(131),
+                TARGET_PUBLICATION_ID,
+                sha("3"),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeUsage = replacementEvidence(
+                MERGE_PREDECESSOR_USAGE_ID,
+                uuid(140),
+                SOURCE_PUBLICATION_ID,
+                sha("4"),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO));
+        LegalEditorialPlannerCore.DocumentEvidence mergePro = replacementEvidence(
+                MERGE_PREDECESSOR_PRO_ID,
+                uuid(141),
+                SOURCE_PUBLICATION_ID,
+                sha("5"),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.CONTRATACION_PRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeSuccessor = replacementEvidence(
+                MERGE_SUCCESSOR_ID,
+                uuid(150),
+                TARGET_PUBLICATION_ID,
+                sha("6"),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                null,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO, ContextoLegal.CONTRATACION_PRO));
+
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(
+                        SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        SPLIT_SUCCESSOR_CLOSURE_ID,
+                        MERGE_SUCCESSOR_ID),
+                List.of(),
+                List.of(
+                        SPLIT_PREDECESSOR_ID,
+                        MERGE_PREDECESSOR_USAGE_ID,
+                        MERGE_PREDECESSOR_PRO_ID),
+                List.of(),
+                Map.of(
+                        SPLIT_PREDECESSOR_ID, splitPredecessor,
+                        SPLIT_SUCCESSOR_REGISTRATION_ID, splitRegistration,
+                        SPLIT_SUCCESSOR_CLOSURE_ID, splitClosure,
+                        MERGE_PREDECESSOR_USAGE_ID, mergeUsage,
+                        MERGE_PREDECESSOR_PRO_ID, mergePro,
+                        MERGE_SUCCESSOR_ID, mergeSuccessor),
+                Map.of(),
+                List.of(),
+                List.of(
+                        slot(splitPredecessor, ContextoLegal.REGISTRO, SOURCE_PUBLICATION_ID),
+                        slot(splitPredecessor, ContextoLegal.CIERRE_CUENTA, SOURCE_PUBLICATION_ID),
+                        slot(mergeUsage, ContextoLegal.USO_CONTINUADO, SOURCE_PUBLICATION_ID),
+                        slot(mergePro, ContextoLegal.CONTRATACION_PRO, SOURCE_PUBLICATION_ID)),
+                List.of(),
+                List.of(
+                        transition(1, SPLIT_PREDECESSOR_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(2, SPLIT_PREDECESSOR_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(3, MERGE_PREDECESSOR_USAGE_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(4, MERGE_PREDECESSOR_USAGE_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(5, MERGE_PREDECESSOR_PRO_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(6, MERGE_PREDECESSOR_PRO_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_ACTIVATION_AT)),
+                List.of(),
+                Map.of());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            compositeReplacementPostSnapshot() {
+        LegalEditorialPlannerCore.DocumentEvidence splitPredecessor = replacementEvidence(
+                SPLIT_PREDECESSOR_ID,
+                uuid(120),
+                SOURCE_PUBLICATION_ID,
+                sha("1"),
+                EstadoVersionLegal.REEMPLAZADA,
+                APPLIED_AT,
+                SPLIT_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence splitRegistration = replacementEvidence(
+                SPLIT_SUCCESSOR_REGISTRATION_ID,
+                uuid(130),
+                TARGET_PUBLICATION_ID,
+                sha("2"),
+                EstadoVersionLegal.VIGENTE,
+                APPLIED_AT,
+                SPLIT_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence splitClosure = replacementEvidence(
+                SPLIT_SUCCESSOR_CLOSURE_ID,
+                uuid(131),
+                TARGET_PUBLICATION_ID,
+                sha("3"),
+                EstadoVersionLegal.VIGENTE,
+                APPLIED_AT,
+                SPLIT_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeUsage = replacementEvidence(
+                MERGE_PREDECESSOR_USAGE_ID,
+                uuid(140),
+                SOURCE_PUBLICATION_ID,
+                sha("4"),
+                EstadoVersionLegal.REEMPLAZADA,
+                APPLIED_AT,
+                MERGE_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO));
+        LegalEditorialPlannerCore.DocumentEvidence mergePro = replacementEvidence(
+                MERGE_PREDECESSOR_PRO_ID,
+                uuid(141),
+                SOURCE_PUBLICATION_ID,
+                sha("5"),
+                EstadoVersionLegal.REEMPLAZADA,
+                APPLIED_AT,
+                MERGE_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.CONTRATACION_PRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeSuccessor = replacementEvidence(
+                MERGE_SUCCESSOR_ID,
+                uuid(150),
+                TARGET_PUBLICATION_ID,
+                sha("6"),
+                EstadoVersionLegal.VIGENTE,
+                APPLIED_AT,
+                MERGE_BATCH_ID,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO, ContextoLegal.CONTRATACION_PRO));
+
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(
+                        SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        SPLIT_SUCCESSOR_CLOSURE_ID,
+                        MERGE_SUCCESSOR_ID),
+                List.of(),
+                List.of(
+                        SPLIT_PREDECESSOR_ID,
+                        MERGE_PREDECESSOR_USAGE_ID,
+                        MERGE_PREDECESSOR_PRO_ID),
+                List.of(),
+                Map.of(
+                        SPLIT_PREDECESSOR_ID, splitPredecessor,
+                        SPLIT_SUCCESSOR_REGISTRATION_ID, splitRegistration,
+                        SPLIT_SUCCESSOR_CLOSURE_ID, splitClosure,
+                        MERGE_PREDECESSOR_USAGE_ID, mergeUsage,
+                        MERGE_PREDECESSOR_PRO_ID, mergePro,
+                        MERGE_SUCCESSOR_ID, mergeSuccessor),
+                Map.of(),
+                List.of(),
+                List.of(
+                        slot(splitRegistration, ContextoLegal.REGISTRO, TARGET_PUBLICATION_ID),
+                        slot(splitClosure, ContextoLegal.CIERRE_CUENTA, TARGET_PUBLICATION_ID),
+                        slot(mergeSuccessor, ContextoLegal.USO_CONTINUADO, TARGET_PUBLICATION_ID),
+                        slot(mergeSuccessor, ContextoLegal.CONTRATACION_PRO, TARGET_PUBLICATION_ID)),
+                List.of(),
+                compositeReplacementHistory(),
+                List.of(),
+                Map.of(
+                        SPLIT_BATCH_ID,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                SPLIT_BATCH_ID,
+                                APPLIED_AT,
+                                APPLIED_AT,
+                                List.of(SPLIT_PREDECESSOR_ID),
+                                List.of(
+                                        new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                                SPLIT_SUCCESSOR_REGISTRATION_ID,
+                                                TARGET_PUBLICATION_ID),
+                                        new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                                SPLIT_SUCCESSOR_CLOSURE_ID,
+                                                TARGET_PUBLICATION_ID))),
+                        MERGE_BATCH_ID,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                MERGE_BATCH_ID,
+                                APPLIED_AT,
+                                APPLIED_AT,
+                                List.of(
+                                        MERGE_PREDECESSOR_USAGE_ID,
+                                        MERGE_PREDECESSOR_PRO_ID),
+                                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        MERGE_SUCCESSOR_ID,
+                                        TARGET_PUBLICATION_ID)))));
+    }
+
+    private static List<LegalEditorialPlannerCore.DocumentTransitionEvidence>
+            compositeReplacementHistory() {
+        return List.of(
+                transition(1, SPLIT_PREDECESSOR_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(2, SPLIT_PREDECESSOR_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(3, SPLIT_PREDECESSOR_ID,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.REEMPLAZADA,
+                        SPLIT_BATCH_ID,
+                        APPLIED_AT),
+                transition(4, SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        APPLIED_AT),
+                transition(5, SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        SPLIT_BATCH_ID,
+                        APPLIED_AT),
+                transition(6, SPLIT_SUCCESSOR_CLOSURE_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        APPLIED_AT),
+                transition(7, SPLIT_SUCCESSOR_CLOSURE_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        SPLIT_BATCH_ID,
+                        APPLIED_AT),
+                transition(8, MERGE_PREDECESSOR_USAGE_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(9, MERGE_PREDECESSOR_USAGE_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(10, MERGE_PREDECESSOR_USAGE_ID,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.REEMPLAZADA,
+                        MERGE_BATCH_ID,
+                        APPLIED_AT),
+                transition(11, MERGE_PREDECESSOR_PRO_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(12, MERGE_PREDECESSOR_PRO_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        HISTORICAL_ACTIVATION_AT),
+                transition(13, MERGE_PREDECESSOR_PRO_ID,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.REEMPLAZADA,
+                        MERGE_BATCH_ID,
+                        APPLIED_AT),
+                transition(14, MERGE_SUCCESSOR_ID,
+                        EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA,
+                        APPLIED_AT),
+                transition(15, MERGE_SUCCESSOR_ID,
+                        EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE,
+                        MERGE_BATCH_ID,
+                        APPLIED_AT));
+    }
+
+    private static void assertCompositeBatchOrderAndShape(
+            List<LegalEditorialExecutionPlan.ReplacementBatch> batches,
+            Instant timestamp) {
+        assertThat(batches)
+                .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .containsExactly(SPLIT_BATCH_ID, MERGE_BATCH_ID);
+        assertThat(batches).allSatisfy(batch -> {
+            assertThat(batch.createdAt()).isEqualTo(timestamp);
+            assertThat(batch.sealedAt()).isEqualTo(timestamp);
+        });
+        assertThat(batches.getFirst().predecessorDocumentVersionIds())
+                .containsExactly(SPLIT_PREDECESSOR_ID);
+        assertThat(batches.getFirst().successors())
+                .extracting(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
+                .containsExactly(
+                        SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        SPLIT_SUCCESSOR_CLOSURE_ID);
+        assertThat(batches.getLast().predecessorDocumentVersionIds())
+                .containsExactly(MERGE_PREDECESSOR_USAGE_ID, MERGE_PREDECESSOR_PRO_ID);
+        assertThat(batches.getLast().successors())
+                .extracting(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
+                .containsExactly(MERGE_SUCCESSOR_ID);
+    }
+
+    private static void assertCompositeV27Effects(
+            LegalEditorialExecutionPlan.V27TriggerEffects effects,
+            Instant timestamp) {
+        assertThat(effects.documentTransitions())
+                .extracting(
+                        LegalEditorialExecutionPlan.DocumentTransition::documentVersionId,
+                        LegalEditorialExecutionPlan.DocumentTransition::newState,
+                        LegalEditorialExecutionPlan.DocumentTransition::replacementBatchId)
+                .containsExactlyInAnyOrder(
+                        tuple(SPLIT_PREDECESSOR_ID,
+                                EstadoVersionLegal.REEMPLAZADA, SPLIT_BATCH_ID),
+                        tuple(SPLIT_SUCCESSOR_REGISTRATION_ID,
+                                EstadoVersionLegal.VIGENTE, SPLIT_BATCH_ID),
+                        tuple(SPLIT_SUCCESSOR_CLOSURE_ID,
+                                EstadoVersionLegal.VIGENTE, SPLIT_BATCH_ID),
+                        tuple(MERGE_PREDECESSOR_USAGE_ID,
+                                EstadoVersionLegal.REEMPLAZADA, MERGE_BATCH_ID),
+                        tuple(MERGE_PREDECESSOR_PRO_ID,
+                                EstadoVersionLegal.REEMPLAZADA, MERGE_BATCH_ID),
+                        tuple(MERGE_SUCCESSOR_ID,
+                                EstadoVersionLegal.VIGENTE, MERGE_BATCH_ID));
+        assertThat(effects.documentTransitions())
+                .allSatisfy(transition -> assertThat(transition.occurredAt())
+                        .isEqualTo(timestamp));
+        assertThat(effects.documentSlotDeletes())
+                .extracting(LegalEditorialExecutionPlan.DocumentSlotDelete::expectedDocumentVersionId)
+                .containsExactlyInAnyOrder(
+                        SPLIT_PREDECESSOR_ID,
+                        SPLIT_PREDECESSOR_ID,
+                        MERGE_PREDECESSOR_USAGE_ID,
+                        MERGE_PREDECESSOR_PRO_ID);
+        assertThat(effects.documentSlotInserts())
+                .extracting(LegalEditorialExecutionPlan.ExpectedDocumentSlot::documentVersionId)
+                .containsExactlyInAnyOrder(
+                        SPLIT_SUCCESSOR_REGISTRATION_ID,
+                        SPLIT_SUCCESSOR_CLOSURE_ID,
+                        MERGE_SUCCESSOR_ID,
+                        MERGE_SUCCESSOR_ID);
+        assertThat(effects.documentSlotInserts())
+                .allSatisfy(slot -> assertThat(slot.publicationId())
+                        .isEqualTo(TARGET_PUBLICATION_ID));
+    }
+
+    private static List<InvalidReplacementMapping> invalidReplacementMappings() {
+        LegalEditorialPlannerCore.DocumentEvidence typePredecessor = mappingEvidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                sha("a"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence typeSuccessor = mappingEvidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                sha("b"),
+                TipoDocumentoLegal.POLITICA_PRIVACIDAD,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+
+        LocaleLegal incompatibleLocale = mock(LocaleLegal.class);
+        LegalEditorialPlannerCore.DocumentEvidence localePredecessor = mappingEvidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                sha("c"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence localeSuccessor = mappingEvidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                sha("d"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                incompatibleLocale,
+                List.of(ContextoLegal.REGISTRO));
+
+        LegalEditorialPlannerCore.DocumentEvidence contextPredecessor = mappingEvidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                sha("e"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence overlappingRegistration = mappingEvidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                sha("f"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence overlappingClosure = mappingEvidence(
+                uuid(60),
+                uuid(160),
+                TARGET_PUBLICATION_ID,
+                sha("0"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence unequalUsage = mappingEvidence(
+                uuid(61),
+                uuid(161),
+                TARGET_PUBLICATION_ID,
+                sha("7"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeSuccessor = mappingEvidence(
+                uuid(70),
+                uuid(170),
+                TARGET_PUBLICATION_ID,
+                sha("8"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeTypeRegistration = mappingEvidence(
+                uuid(71),
+                uuid(171),
+                SOURCE_PUBLICATION_ID,
+                sha("9"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeTypeClosure = mappingEvidence(
+                uuid(72),
+                uuid(172),
+                SOURCE_PUBLICATION_ID,
+                sha("0"),
+                TipoDocumentoLegal.POLITICA_PRIVACIDAD,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeLocaleRegistration = mappingEvidence(
+                uuid(73),
+                uuid(173),
+                SOURCE_PUBLICATION_ID,
+                sha("1"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeLocaleClosure = mappingEvidence(
+                uuid(74),
+                uuid(174),
+                SOURCE_PUBLICATION_ID,
+                sha("2"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                incompatibleLocale,
+                List.of(ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeOverlapRegistration = mappingEvidence(
+                uuid(75),
+                uuid(175),
+                SOURCE_PUBLICATION_ID,
+                sha("3"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeOverlapClosure = mappingEvidence(
+                uuid(76),
+                uuid(176),
+                SOURCE_PUBLICATION_ID,
+                sha("4"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA));
+        LegalEditorialPlannerCore.DocumentEvidence mergeCoverageRegistration = mappingEvidence(
+                uuid(77),
+                uuid(177),
+                SOURCE_PUBLICATION_ID,
+                sha("5"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence mergeCoverageUsage = mappingEvidence(
+                uuid(78),
+                uuid(178),
+                SOURCE_PUBLICATION_ID,
+                sha("6"),
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.USO_CONTINUADO));
+
+        return List.of(
+                invalidReplacementMapping(
+                        "tipo desigual",
+                        List.of(ContextoLegal.REGISTRO),
+                        typePredecessor,
+                        List.of(typeSuccessor)),
+                invalidReplacementMapping(
+                        "locale desigual",
+                        List.of(ContextoLegal.REGISTRO),
+                        localePredecessor,
+                        List.of(localeSuccessor)),
+                invalidReplacementMapping(
+                        "contextos sucesores solapados",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        contextPredecessor,
+                        List.of(overlappingRegistration, overlappingClosure)),
+                invalidReplacementMapping(
+                        "cobertura de contextos desigual",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        contextPredecessor,
+                        List.of(overlappingRegistration, unequalUsage)),
+                invalidReplacementMapping(
+                        "tipos predecesores desiguales",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        List.of(mergeTypeRegistration, mergeTypeClosure),
+                        List.of(mergeSuccessor)),
+                invalidReplacementMapping(
+                        "locales predecesores desiguales",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        List.of(mergeLocaleRegistration, mergeLocaleClosure),
+                        List.of(mergeSuccessor)),
+                invalidReplacementMapping(
+                        "contextos predecesores solapados",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        List.of(mergeOverlapRegistration, mergeOverlapClosure),
+                        List.of(mergeSuccessor)),
+                invalidReplacementMapping(
+                        "cobertura de contextos predecesora desigual",
+                        List.of(ContextoLegal.REGISTRO, ContextoLegal.CIERRE_CUENTA),
+                        List.of(mergeCoverageRegistration, mergeCoverageUsage),
+                        List.of(mergeSuccessor)));
+    }
+
+    private static InvalidReplacementMapping invalidReplacementMapping(
+            String name,
+            List<ContextoLegal> contexts,
+            LegalEditorialPlannerCore.DocumentEvidence predecessor,
+            List<LegalEditorialPlannerCore.DocumentEvidence> successors) {
+        return invalidReplacementMapping(
+                name,
+                contexts,
+                List.of(predecessor),
+                successors);
+    }
+
+    private static InvalidReplacementMapping invalidReplacementMapping(
+            String name,
+            List<ContextoLegal> contexts,
+            List<LegalEditorialPlannerCore.DocumentEvidence> predecessors,
+            List<LegalEditorialPlannerCore.DocumentEvidence> successors) {
+        DocumentReplacementBatch batch = new DocumentReplacementBatch(
+                CURRENT_BATCH_ID,
+                contexts,
+                predecessors.stream()
+                        .map(predecessor -> new DocumentRef(
+                                predecessor.id(), predecessor.sha256()))
+                        .toList(),
+                successors.stream()
+                        .map(successor -> new DocumentRef(
+                                successor.id(), successor.sha256()))
+                        .toList());
+        java.util.LinkedHashMap<UUID, LegalEditorialPlannerCore.DocumentEvidence> documents =
+                new java.util.LinkedHashMap<>();
+        predecessors.forEach(predecessor -> documents.put(predecessor.id(), predecessor));
+        successors.forEach(successor -> documents.put(successor.id(), successor));
+        LegalEditorialPlannerCore.PlannerSnapshot snapshot =
+                new LegalEditorialPlannerCore.PlannerSnapshot(
+                        successors.stream()
+                                .map(LegalEditorialPlannerCore.DocumentEvidence::id)
+                                .toList(),
+                        List.of(),
+                        predecessors.stream()
+                                .map(LegalEditorialPlannerCore.DocumentEvidence::id)
+                                .toList(),
+                        List.of(),
+                        Map.copyOf(documents),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        Map.of());
+        return new InvalidReplacementMapping(name, batch, snapshot);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentEvidence mappingEvidence(
+            UUID id,
+            UUID lineId,
+            UUID introductionPublicationId,
+            String sha256,
+            TipoDocumentoLegal type,
+            LocaleLegal locale,
+            List<ContextoLegal> contexts) {
+        return replacementEvidence(
+                id,
+                lineId,
+                introductionPublicationId,
+                sha256,
+                introductionPublicationId.equals(SOURCE_PUBLICATION_ID)
+                        ? EstadoVersionLegal.VIGENTE
+                        : EstadoVersionLegal.BORRADOR,
+                introductionPublicationId.equals(SOURCE_PUBLICATION_ID)
+                        ? HISTORICAL_ACTIVATION_AT
+                        : null,
+                null,
+                type,
+                locale,
+                contexts);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentEvidence replacementEvidence(
+            UUID id,
+            UUID lineId,
+            UUID introductionPublicationId,
+            String sha256,
+            EstadoVersionLegal state,
+            Instant stateChangedAt,
+            UUID replacementBatchId,
+            TipoDocumentoLegal type,
+            LocaleLegal locale,
+            List<ContextoLegal> contexts) {
+        return new LegalEditorialPlannerCore.DocumentEvidence(
+                id,
+                lineId,
+                introductionPublicationId,
+                sha256,
+                OBSERVED_AT.minusSeconds(60),
+                state,
+                stateChangedAt,
+                null,
+                replacementBatchId,
+                type,
+                locale,
+                contexts);
+    }
+
+    private static String sha(String value) {
+        return value.repeat(64);
+    }
+
     private static DocumentReplacementBatch currentReplacementBatch() {
         return new DocumentReplacementBatch(
                 CURRENT_BATCH_ID,
@@ -1422,6 +2264,12 @@ class LegalEditorialPlannerCoreTest {
     private static UUID uuid(long suffix) {
         return new UUID(0, suffix);
     }
+
+    private record InvalidReplacementMapping(
+            String name,
+            DocumentReplacementBatch batch,
+            LegalEditorialPlannerCore.PlannerSnapshot snapshot
+    ) { }
 
     private static final class Harness {
         private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
