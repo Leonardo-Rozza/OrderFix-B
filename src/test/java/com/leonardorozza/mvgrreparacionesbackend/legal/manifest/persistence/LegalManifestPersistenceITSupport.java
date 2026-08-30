@@ -298,6 +298,8 @@ final class LegalManifestPersistenceITSupport {
         LegalInitialPromotionCore promotionCore = new LegalInitialPromotionCore(jdbc);
         LegalDocumentReplacementWriter replacementWriter =
                 new LegalDocumentReplacementWriter(jdbc, readinessCore);
+        LegalEditorialRetirementWriter retirementWriter =
+                new LegalEditorialRetirementWriter(jdbc, readinessCore);
         LegalEditorialReplaceScopeGuard replaceScopeGuard =
                 new LegalEditorialReplaceScopeGuard();
         LegalEditorialPostStateVerifier postStateVerifier =
@@ -313,6 +315,7 @@ final class LegalManifestPersistenceITSupport {
                 plannerCore,
                 promotionCore,
                 replacementWriter,
+                retirementWriter,
                 postStateVerifier,
                 readinessCore,
                 replaceScopeGuard,
@@ -331,6 +334,7 @@ final class LegalManifestPersistenceITSupport {
                 plannerCore,
                 promotionCore,
                 replacementWriter,
+                retirementWriter,
                 replaceScopeGuard,
                 postStateVerifier,
                 service);
@@ -948,6 +952,7 @@ final class LegalManifestPersistenceITSupport {
             LegalEditorialPlannerCore plannerCore,
             LegalInitialPromotionCore promotionCore,
             LegalDocumentReplacementWriter replacementWriter,
+            LegalEditorialRetirementWriter retirementWriter,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialApplyService service

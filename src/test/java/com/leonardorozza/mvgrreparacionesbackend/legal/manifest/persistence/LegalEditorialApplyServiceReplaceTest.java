@@ -74,11 +74,13 @@ class LegalEditorialApplyServiceReplaceTest {
         verify(harness.planner, never()).usesJdbc(any());
         verify(harness.promotionWriter, never()).usesJdbc(any());
         verify(harness.replacementWriter, never()).usesJdbc(any());
+        verify(harness.retirementWriter, never()).usesJdbc(any());
         verify(harness.postStateVerifier, never()).usesJdbc(any());
         verify(harness.readinessCore, never()).usesJdbc(any());
         verify(harness.planner, never()).planReplace(any(), any(), any());
         verify(harness.promotionWriter, never()).write(any());
         verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).write(any());
         verify(harness.postStateVerifier, never()).verify(any());
         verify(harness.jdbc, never()).execute(anyString());
         verify(harness.readinessCore, never()).evaluate(any(), any());
@@ -87,6 +89,7 @@ class LegalEditorialApplyServiceReplaceTest {
     @Test
     void freshReplaceUsesOnlyItsWriterAndAllowsDifferentReadinessCounts() {
         Harness harness = new Harness();
+        when(harness.retirementWriter.usesJdbc(harness.jdbc)).thenReturn(false);
         executeAndComplete(harness.gate, TransactionSynchronization.STATUS_COMMITTED);
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
@@ -122,6 +125,8 @@ class LegalEditorialApplyServiceReplaceTest {
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
         order.verify(harness.readinessCore).evaluate(release, OBSERVED_AT);
         verify(harness.promotionWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).usesJdbc(harness.jdbc);
+        verify(harness.retirementWriter, never()).write(any());
     }
 
     @Test
@@ -232,7 +237,7 @@ class LegalEditorialApplyServiceReplaceTest {
     }
 
     @Test
-    void exactReplaceReplayIsSelectOnlyAndInvokesNeitherWriter() {
+    void exactReplaceReplayIsSelectOnlyAndInvokesNoWriter() {
         Harness harness = new Harness();
         executeAndComplete(harness.gate, TransactionSynchronization.STATUS_COMMITTED);
         ValidatedRelease release = mock(ValidatedRelease.class);
@@ -252,6 +257,7 @@ class LegalEditorialApplyServiceReplaceTest {
                 receipt);
         verify(harness.promotionWriter, never()).write(any());
         verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).write(any());
         verify(harness.postStateVerifier).verify(plan);
         verify(harness.jdbc, never()).execute(anyString());
         verify(harness.readinessCore, never()).evaluate(any(), any());
@@ -330,6 +336,7 @@ class LegalEditorialApplyServiceReplaceTest {
                 .containsExactly(LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
         verify(harness.promotionWriter, never()).write(any());
         verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).write(any());
         verify(harness.postStateVerifier, never()).verify(any());
     }
 
@@ -516,6 +523,8 @@ class LegalEditorialApplyServiceReplaceTest {
                 mock(LegalEditorialMutationWriter.class);
         private final LegalEditorialMutationWriter replacementWriter =
                 mock(LegalEditorialMutationWriter.class);
+        private final LegalEditorialMutationWriter retirementWriter =
+                mock(LegalEditorialMutationWriter.class);
         private final LegalEditorialPostStateVerifier postStateVerifier =
                 mock(LegalEditorialPostStateVerifier.class);
         private final LegalEditorialReadinessCore readinessCore =
@@ -534,6 +543,7 @@ class LegalEditorialApplyServiceReplaceTest {
             when(planner.usesJdbc(jdbc)).thenReturn(true);
             when(promotionWriter.usesJdbc(jdbc)).thenReturn(true);
             when(replacementWriter.usesJdbc(jdbc)).thenReturn(true);
+            when(retirementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
             when(jdbc.queryForObject(
@@ -555,6 +565,7 @@ class LegalEditorialApplyServiceReplaceTest {
                     planner,
                     promotionWriter,
                     replacementWriter,
+                    retirementWriter,
                     postStateVerifier,
                     readinessCore,
                     replaceScopeGuard,

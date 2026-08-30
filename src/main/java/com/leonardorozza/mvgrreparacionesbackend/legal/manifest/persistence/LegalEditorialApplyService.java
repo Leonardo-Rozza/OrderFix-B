@@ -14,10 +14,11 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
-/** Transactional boundary for an atomic, idempotent first editorial promotion. */
+/** Transactional boundary for atomic, idempotent editorial apply operations. */
 public final class LegalEditorialApplyService {
 
     private static final String OBSERVATION_LOCATION = "database/observation";
+    private static final String MAPPING_LOCATION = "database/mapping";
     private static final String POSTCONDITION_LOCATION = "database/postcondition";
 
     private final LegalManifestDatabaseGate databaseGate;
@@ -25,6 +26,7 @@ public final class LegalEditorialApplyService {
     private final LegalEditorialPlannerCore planner;
     private final LegalEditorialMutationWriter promotionWriter;
     private final LegalEditorialMutationWriter replacementWriter;
+    private final LegalEditorialMutationWriter retirementWriter;
     private final LegalEditorialPostStateVerifier postStateVerifier;
     private final LegalEditorialReadinessCore readinessCore;
     private final LegalEditorialReplaceScopeGuard replaceScopeGuard;
@@ -36,6 +38,7 @@ public final class LegalEditorialApplyService {
             LegalEditorialPlannerCore planner,
             LegalEditorialMutationWriter promotionWriter,
             LegalEditorialMutationWriter replacementWriter,
+            LegalEditorialMutationWriter retirementWriter,
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
@@ -51,6 +54,9 @@ public final class LegalEditorialApplyService {
         this.replacementWriter = Objects.requireNonNull(
                 replacementWriter,
                 "replacementWriter");
+        this.retirementWriter = Objects.requireNonNull(
+                retirementWriter,
+                "retirementWriter");
         this.postStateVerifier = Objects.requireNonNull(
                 postStateVerifier,
                 "postStateVerifier");
@@ -94,6 +100,19 @@ public final class LegalEditorialApplyService {
                         planner.planReplace(target, supportedPlan, observedAt))));
     }
 
+    /** Applies or confirms one explicit fail-closed retirement of the current release. */
+    public LegalEditorialApplyResult applyRetire(
+            ValidatedRelease current,
+            ValidatedEditorialPlan editorialPlan) {
+        Objects.requireNonNull(current, "current");
+        Objects.requireNonNull(editorialPlan, "editorialPlan");
+        return apply(
+                current,
+                retirementWriter,
+                observedAt -> requireRetirePlan(requireApplicable(
+                        planner.planRetire(current, editorialPlan, observedAt))));
+    }
+
     private LegalEditorialApplyResult apply(
             ValidatedRelease target,
             LegalEditorialMutationWriter writer,
@@ -135,7 +154,7 @@ public final class LegalEditorialApplyService {
         LegalEditorialApplyReceipt receipt = postStateVerifier.verify(plan);
         jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
         LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, observedAt);
-        requireReadyPostcondition(readiness, receipt, plan);
+        requireExpectedPostcondition(readiness, receipt, plan);
         return new ConfirmedApply(
                 LegalEditorialApplyResult.Outcome.APPLIED,
                 receipt);
@@ -179,14 +198,37 @@ public final class LegalEditorialApplyService {
         return plan;
     }
 
-    private static void requireReadyPostcondition(
+    private static LegalEditorialExecutionPlan requireRetirePlan(
+            LegalEditorialExecutionPlan plan) {
+        if (plan.operationType() != LegalEditorialExecutionPlan.OperationType.RETIRE) {
+            throw new LegalEditorialOperationalException(
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
+                    OBSERVATION_LOCATION);
+        }
+        if (plan.expectedReadinessAfter() != LegalEditorialReadiness.NOT_READY) {
+            throw new LegalEditorialBlockedException(
+                    LegalManifestIssueCode.EXPECTED_READINESS_MISMATCH,
+                    MAPPING_LOCATION);
+        }
+        if (!plan.acknowledgeFailClosedGap()) {
+            throw new LegalEditorialBlockedException(
+                    LegalManifestIssueCode.FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED,
+                    MAPPING_LOCATION);
+        }
+        return plan;
+    }
+
+    private static void requireExpectedPostcondition(
             LegalEditorialReadinessResult result,
             LegalEditorialApplyReceipt receipt,
             LegalEditorialExecutionPlan plan) {
         if (result.readiness() == LegalEditorialReadiness.ERROR) {
+            if (plan.operationType() == LegalEditorialExecutionPlan.OperationType.RETIRE) {
+                throw postconditionFailure();
+            }
             throw new LegalEditorialOperationalException(result.issues().getFirst());
         }
-        if (result.readiness() != LegalEditorialReadiness.READY) {
+        if (result.readiness() != plan.expectedReadinessAfter()) {
             throw postconditionFailure();
         }
         LegalEditorialReadinessObservation observation = result.observation().orElseThrow();

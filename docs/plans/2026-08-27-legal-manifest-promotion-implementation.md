@@ -1036,8 +1036,8 @@ Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
 ## Corte 8 — Retiro explícito fail-closed
 
-Estado: en ejecución; diseño específico aprobado, Subcortes 8A y 8B completados el 2026-08-30 y
-8C pendiente.
+Estado: en ejecución; diseño específico aprobado, Subcortes 8A, 8B y 8C completados el 2026-08-30
+y 8D pendiente.
 
 Diseño específico aprobado:
 
@@ -1056,7 +1056,7 @@ El trabajo se divide en siete subcortes acreditables:
 
 1. 8A — invariantes del execution plan — completado el 2026-08-30;
 2. 8B — postestado parcial exacto — completado el 2026-08-30;
-3. 8C — writer dedicado y aplicación;
+3. 8C — writer dedicado y aplicación — completado el 2026-08-30;
 4. 8D — PostgreSQL fresco con rol restringido;
 5. 8E — replay, corrupción y rollback;
 6. 8F — CLI interna y reporte v3;
@@ -1072,8 +1072,10 @@ los scopes sellados: preserva exactamente estados, historias, lotes, slots, punt
 y timestamps sobrevivientes; admite huecos históricos sin recrearlos; y rechaza replay con
 transiciones append-only posteriores. La lectura PostgreSQL aplica límites antes de canonicalizar
 y el planner permanece select-only. SOURCE exige prehistoria estrictamente anterior a la
-observación y POST rechaza un cutover futuro antes de construir el plan. La autenticidad y
-cardinalidad bajo lock permanecen en 8C.
+observación y POST rechaza un cutover futuro antes de construir el plan. 8C agrega el writer
+dedicado, revalida causalidad y grafo antes del DML, congela proyecciones con un lock de tabla
+compatible con el rol mínimo y coordina `verifier → constraints → NOT_READY` sin receipt
+tentativo. La ejecución fresca integral con el rol restringido permanece en 8D.
 
 ## Corte 9 — Reconciliación y UNKNOWN
 

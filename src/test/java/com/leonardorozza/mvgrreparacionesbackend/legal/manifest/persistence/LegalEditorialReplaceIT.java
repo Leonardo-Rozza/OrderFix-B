@@ -552,6 +552,7 @@ class LegalEditorialReplaceIT {
                 planner,
                 harness.promotionCore(),
                 replacementWriter,
+                harness.retirementWriter(),
                 harness.postStateVerifier(),
                 readiness,
                 harness.replaceScopeGuard(),

@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcortes 8A y 8B completados el 2026-08-30; Subcorte 8C pendiente
+Estado: en ejecución — Subcortes 8A, 8B y 8C completados el 2026-08-30; Subcorte 8D pendiente
 
 Diseño aprobado:
 
@@ -217,7 +217,7 @@ Commit:
 
 ## Subcorte 8C — Writer y aplicación RETIRE
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -236,7 +236,7 @@ y postcondición `NOT_READY` dentro de una sola transacción.
 - `LegalEditorialDatabaseConfiguration`;
 - `LegalEditorialApplyServiceTest` y `LegalEditorialApplyServiceReplaceTest` por ensamblado y
   regresión;
-- `LegalEditorialTransactionBoundaryTest`;
+- `LegalEditorialTransactionBoundaryTest`, sólo como regresión reejecutada; no requirió cambios;
 - `LegalManifestPersistenceITSupport` y ensamblados directos del apply service;
 - failure mapper sólo si hace falta conservar el issue tipado exacto.
 
@@ -244,9 +244,10 @@ y postcondición `NOT_READY` dentro de una sola transacción.
 
 1. Escribir el contrato SQL exacto del writer antes de implementarlo.
 2. Rechazar un plan que no sea RETIRE o contenga comandos PROMOTE/REPLACE antes del DML.
-3. Bloquear publicación, líneas, versiones y proyecciones en orden determinista.
-4. Revalidar current/target, estados, membresía, fingerprint y proyecciones bajo lock, incluida la
-   igualdad de key, set, revisión y dependencias de cada puntero.
+3. Bloquear publicación, líneas y versiones en orden determinista; después tomar un lock de tabla
+   combinado y ordenado `SHARE ROW EXCLUSIVE` sobre punteros y slots actuales.
+4. Revalidar current/target, estados, membresía, fingerprint y proyecciones bajo esos locks,
+   incluida la igualdad de key, set, revisión y dependencias de cada puntero.
 5. Eliminar la unión deduplicada de punteros afectados y exigir cardinalidad exacta.
 6. Eliminar slots documentales afectados y exigir cardinalidad exacta.
 7. Insertar transiciones de requisitos y luego documentos en orden UUID.
@@ -263,10 +264,52 @@ y postcondición `NOT_READY` dentro de una sola transacción.
 ### Puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialRetirementWriterTest,LegalEditorialRetireServiceTest,LegalEditorialApplyServiceTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialTransactionBoundaryTest,LegalEditorialFailureMapperTest test
+./mvnw -Dtest=LegalEditorialRetirementWriterTest,LegalEditorialRetireServiceTest,LegalEditorialApplyServiceTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialTransactionBoundaryTest,LegalEditorialFailureMapperTest,LegalEditorialPostStateVerifierTest test
 git diff --check
 git status --short
 ~~~
+
+### Frontera acreditada en 8C
+
+`LegalEditorialRetirementWriter` acepta exclusivamente un apply fresco `RETIRE` con acknowledgement
+y postcondición esperada `NOT_READY`. Antes del primer DML vuelve a acreditar identidad,
+membresía completa, preestados, source fingerprint y la unión survivor+delete de slots y punteros.
+Además exige causalidad local aunque reciba un plan construido fuera del planner: un slot eliminado
+debe pertenecer a un documento retirado, un puntero sobreviviente no puede depender de una versión
+retirada y cada puntero eliminado debe intersectar el retiro explícito.
+
+El orden fresco quedó congelado como `pointer delete → slot delete → requirement transition →
+document transition`, seguido en el coordinador por `verifier → SET CONSTRAINTS ALL IMMEDIATE →
+readiness`. Los deletes conservan CAS estricto `count == 1`; sólo los inserts aceptan también
+`Statement.SUCCESS_NO_INFO`, tal como permite el contrato JDBC ya acreditado para REPLACE. Replay
+no invoca writer, constraints ni readiness, y conserva el `appliedAt` histórico construido por el
+verifier. Una finalización `UNKNOWN` nunca expone receipt, target ni timestamp tentativos.
+
+Las proyecciones actuales no usan `SELECT ... FOR UPDATE`, porque el rol editorial no posee ni
+necesita `UPDATE` sobre ellas. El writer toma en cambio un lock combinado
+`SHARE ROW EXCLUSIVE` sobre ambas tablas, en orden fijo y antes de leerlas. PostgreSQL admite ese
+lock con el privilegio `DELETE` ya requerido por el delta y lo conserva hasta fin de transacción;
+así se mantiene la revalidación estable sin V28, grants o inventario nuevo. La ejecución fresca
+real con el rol restringido queda deliberadamente en 8D.
+
+### Evidencia de cierre 8C
+
+- Puerta focal limpia: 90 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Suite unitaria completa: 2.676 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Ensamblado y privilegios sobre PostgreSQL 16/Flyway V27:
+  `LegalEditorialDatabaseIsolationIT` y `LegalEditorialPrivilegeVerifierIT`, 9 pruebas, 0 fallos,
+  0 errores y 0 omitidas.
+- La revisión adversarial cerró tres riesgos antes del commit: row locks incompatibles con mínimo
+  privilegio, causalidad no repetida por el writer y tratamiento demasiado estricto de
+  `SUCCESS_NO_INFO` en inserts.
+- Se congelaron dispatch exacto por operación, replay select-only, rollback por readiness distinto
+  de `NOT_READY`, error de readiness mapeado a la postcondición RETIRE y completion `UNKNOWN` sin
+  receipt tentativo. PROMOTE y REPLACE permanecieron verdes.
+- Residual explícito: las comparaciones exactas del writer recorren las proyecciones actuales sin
+  un presupuesto SQL propio, igual que el writer REPLACE existente. El planner ya limita el input;
+  capacidad y concurrencia exhaustivas permanecen en el Corte 10, fuera del alcance 8C.
+- No se modificaron V27/V28, schemas, grants, roles, inventarios, API, frontend ni CLI; no hubo
+  push ni deploy.
 
 Commit:
 

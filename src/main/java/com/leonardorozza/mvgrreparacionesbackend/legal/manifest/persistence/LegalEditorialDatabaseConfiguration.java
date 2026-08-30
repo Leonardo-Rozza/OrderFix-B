@@ -196,6 +196,13 @@ public class LegalEditorialDatabaseConfiguration {
     }
 
     @Bean
+    LegalEditorialRetirementWriter legalEditorialRetirementWriter(
+            JdbcTemplate jdbcTemplate,
+            LegalEditorialReadinessCore readinessCore) {
+        return new LegalEditorialRetirementWriter(jdbcTemplate, readinessCore);
+    }
+
+    @Bean
     LegalEditorialPostStateVerifier legalEditorialPostStateVerifier(
             JdbcTemplate jdbcTemplate) {
         return new LegalEditorialPostStateVerifier(jdbcTemplate);
@@ -254,6 +261,7 @@ public class LegalEditorialDatabaseConfiguration {
             LegalEditorialPlannerCore plannerCore,
             LegalInitialPromotionCore promotionCore,
             LegalDocumentReplacementWriter replacementWriter,
+            LegalEditorialRetirementWriter retirementWriter,
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
@@ -266,6 +274,7 @@ public class LegalEditorialDatabaseConfiguration {
                 plannerCore,
                 promotionCore,
                 replacementWriter,
+                retirementWriter,
                 postStateVerifier,
                 readinessCore,
                 replaceScopeGuard,

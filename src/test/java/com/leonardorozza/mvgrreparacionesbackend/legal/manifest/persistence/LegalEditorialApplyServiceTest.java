@@ -55,7 +55,7 @@ class LegalEditorialApplyServiceTest {
         assertThat(LegalEditorialApplyService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(11);
+                    assertThat(constructor.getParameterCount()).isEqualTo(12);
                     assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
                 });
         verify(harness.gate).requireExactEditorialPreflights(
@@ -101,9 +101,10 @@ class LegalEditorialApplyServiceTest {
     }
 
     @Test
-    void foreignReplacementWriterDoesNotParticipateInPromote() {
+    void foreignReplaceAndRetireWritersDoNotParticipateInPromote() {
         Harness harness = new Harness();
         when(harness.replacementWriter.usesJdbc(harness.jdbc)).thenReturn(false);
+        when(harness.retirementWriter.usesJdbc(harness.jdbc)).thenReturn(false);
         executeAndComplete(
                 harness.gate,
                 TransactionSynchronization.STATUS_COMMITTED,
@@ -124,6 +125,8 @@ class LegalEditorialApplyServiceTest {
         verify(harness.writer).write(plan);
         verify(harness.replacementWriter, never()).usesJdbc(harness.jdbc);
         verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).usesJdbc(harness.jdbc);
+        verify(harness.retirementWriter, never()).write(any());
     }
 
     @Test
@@ -147,6 +150,8 @@ class LegalEditorialApplyServiceTest {
                 LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
                 receipt);
         verify(harness.writer, never()).write(any());
+        verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).write(any());
         verify(harness.postStateVerifier).verify(plan);
         verify(harness.jdbc, never()).execute(anyString());
         verify(harness.readinessCore, never()).evaluate(any(), any());
@@ -173,6 +178,8 @@ class LegalEditorialApplyServiceTest {
                 LegalEditorialApplyResult.Outcome.ERROR,
                 LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
         verify(harness.writer, never()).write(any());
+        verify(harness.replacementWriter, never()).write(any());
+        verify(harness.retirementWriter, never()).write(any());
         verify(harness.postStateVerifier, never()).verify(any());
         verify(harness.jdbc, never()).execute(anyString());
         verify(harness.readinessCore, never()).evaluate(any(), any());
@@ -541,6 +548,8 @@ class LegalEditorialApplyServiceTest {
                 mock(LegalEditorialMutationWriter.class);
         private final LegalEditorialMutationWriter replacementWriter =
                 mock(LegalEditorialMutationWriter.class);
+        private final LegalEditorialMutationWriter retirementWriter =
+                mock(LegalEditorialMutationWriter.class);
         private final LegalEditorialPostStateVerifier postStateVerifier =
                 mock(LegalEditorialPostStateVerifier.class);
         private final LegalEditorialReadinessCore readinessCore =
@@ -559,6 +568,7 @@ class LegalEditorialApplyServiceTest {
             when(planner.usesJdbc(jdbc)).thenReturn(true);
             when(writer.usesJdbc(jdbc)).thenReturn(true);
             when(replacementWriter.usesJdbc(jdbc)).thenReturn(true);
+            when(retirementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
             when(jdbc.queryForObject(
@@ -575,6 +585,7 @@ class LegalEditorialApplyServiceTest {
                     planner,
                     writer,
                     replacementWriter,
+                    retirementWriter,
                     postStateVerifier,
                     readinessCore,
                     replaceScopeGuard,

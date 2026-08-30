@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario; implementación pendiente
+Estado: aprobado por el usuario; implementación en ejecución, Subcortes 8A–8C completados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -190,7 +190,8 @@ versiones o la diferencia de fingerprint lo bloquea sin DML.
 4. Acreditar primero un postestado exacto para replay.
 5. Si es fresco, recalcular el plan y source fingerprint dentro de la transacción.
 6. Entregar el execution plan `RETIRE` al writer dedicado.
-7. Bloquear publicación, líneas, versiones y proyecciones en orden determinista.
+7. Bloquear publicación, líneas y versiones por fila; luego bloquear las tablas de proyecciones
+   actuales en orden determinista con `SHARE ROW EXCLUSIVE`.
 8. Revalidar membresía, estados, fingerprint, slots, punteros y ausencia de comandos ajenos.
 9. Eliminar la unión exacta de punteros afectados.
 10. Eliminar los slots documentales afectados.
@@ -215,6 +216,8 @@ un execution plan `RETIRE`. Antes del primer DML comprueba:
 - acknowledgement explícito;
 - ausencia de lotes, sucesoras, inserts y comandos REPLACE/PROMOTE;
 - correspondencia exacta entre miembros retirados, motivos, deletes y transiciones;
+- causalidad exacta: cada slot eliminado pertenece a un documento retirado, cada puntero
+  sobreviviente es disjunto del retiro y cada puntero eliminado lo intersecta;
 - fingerprint y grafo observados bajo los locks de la misma sesión JDBC.
 
 El writer no decide replay, no construye receipts, no fuerza constraints y no consulta readiness.
@@ -269,6 +272,17 @@ No modificar:
 El rol editorial actual ya posee la superficie mínima: INSERT en transiciones, DELETE en slots y
 punteros, SELECT de evidencia y uso de las secuencias involucradas. Las funciones V27 siguen como
 `SECURITY INVOKER` y el advisory lock serializa el job offline con los writers cooperativos.
+
+Para congelar slots y punteros frente a writers no cooperativos sin ampliar grants, RETIRE toma un
+`LOCK TABLE` combinado sobre `legal_requisito_conjuntos_actuales` y `legal_documento_vigentes` en
+modo `SHARE ROW EXCLUSIVE`, después de bloquear publicación, líneas y versiones y antes de leer
+ambas proyecciones. El orden de tablas es fijo y el lock se conserva hasta el final de la
+transacción. Se evita
+deliberadamente `SELECT ... FOR UPDATE` sobre esas tablas: PostgreSQL exige privilegio `UPDATE`
+para ese row lock, mientras el lock de tabla elegido está autorizado por el `DELETE` mínimo que el
+rol ya necesita. No se modifican V27, grants ni el inventario. Referencias:
+[LOCK](https://www.postgresql.org/docs/16/sql-lock.html) y
+[Privileges](https://www.postgresql.org/docs/16/ddl-priv.html).
 
 ## Estrategia de pruebas
 
