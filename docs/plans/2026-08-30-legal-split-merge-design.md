@@ -93,7 +93,7 @@ de contextos de V27 limita en la práctica la cardinalidad útil por lado.
 
 ## Orden canónico
 
-Todos los lugares que transportan lotes actuales e históricos usan el mismo orden:
+El delta actual, sus comandos y la secuencia de sellado usan el mismo orden operativo:
 
 1. UUID mínimo entre predecesores y sucesoras, comparado por representación textual;
 2. `replacementBatchId` como desempate.
@@ -101,8 +101,10 @@ Todos los lugares que transportan lotes actuales e históricos usan el mismo ord
 Dentro de cada lote, predecesores y sucesoras continúan ordenados por UUID. El ID de lote es
 caller-generated y forma parte del postestado, pero no acredita autoría del `operationId`.
 
-Este orden reemplaza el orden accidental por `batchId` de `LegalEditorialExecutionPlan` y gobierna
-la secuencia de sellado del writer.
+`LegalEditorialPlanValidator` ya normaliza así el plan externo. El Corte 7 aplica ese orden a los
+lotes actuales de `LegalEditorialExecutionPlan`, mutation commands y writer. Los lotes históricos,
+la proyección del fingerprint y la comparación set-like del post-verifier conservan su orden por
+`batchId`; no gobiernan DML y no deben cambiar fingerprints existentes.
 
 ## Flujo transaccional
 

@@ -947,7 +947,15 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: pendiente.
+Estado: en ejecución; diseño aprobado el 2026-08-30, Subcorte 7A pendiente.
+
+Diseño específico aprobado:
+
+- docs/plans/2026-08-30-legal-split-merge-design.md.
+
+Plan detallado de ejecución:
+
+- docs/plans/2026-08-30-legal-split-merge-implementation.md.
 
 ### Objetivo
 
@@ -959,9 +967,8 @@ Crear:
 
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialSplitMergeIT.java.
 
-Crear sólo si la separación no nació en Corte 6:
-
-- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalReplacementBatchExecutor.java.
+No crear inicialmente `LegalReplacementBatchExecutor`: el writer actual ya separa apertura,
+membresías y sellado. Reconsiderarlo sólo si una prueba demuestra una frontera necesaria.
 
 Modificar:
 
@@ -973,16 +980,19 @@ Modificar:
 ### Implementación
 
 1. Exigir anteriores y sucesoras no vacíos.
-2. Verificar mismo tipo y locale.
-3. Verificar contextos predecesores y sucesores exactamente iguales como conjunto.
-4. Rechazar overlap, autociclo, miembro duplicado o reutilizado por dos lotes.
-5. Insertar todos los miembros antes de sellar.
-6. Ordenar lotes por mínimo UUID de sus miembros y miembros por UUID.
-7. Dejar que legal_reemplazo_lote_before_update vuelva a bloquear UUIDs y que after_update sea dueño
+2. Admitir `1→1`, `1→N`, `N→1` y múltiples lotes disjuntos; rechazar `N→M` cuando ambos lados
+   superan uno.
+3. Verificar mismo tipo y locale.
+4. Verificar contextos predecesores y sucesores exactamente iguales como conjunto.
+5. Rechazar overlap, autociclo, miembro duplicado o reutilizado por dos lotes.
+6. Insertar todos los miembros antes de sellar.
+7. Ordenar el delta y los sellos por mínimo UUID de sus miembros y miembros por UUID, sin cambiar
+   el orden histórico/fingerprint por `batchId`.
+8. Dejar que legal_reemplazo_lote_before_update vuelva a bloquear UUIDs y que after_update sea dueño
    de transiciones/slots.
-8. Tratar UUID de lote como caller-generated no autoritativo para operationId; el replay compara
+9. Tratar UUID de lote como caller-generated no autoritativo para operationId; el replay compara
    estructura y postestado.
-9. No ampliar report, rol ni schema.
+10. No ampliar report, rol ni schema.
 
 ### Pruebas y puerta
 
