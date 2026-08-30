@@ -481,8 +481,16 @@ class LegalEditorialPlannerCoreTest {
             assertThat(execution.mutationCommands().documentSlotDeletes()).hasSize(1);
             assertThat(execution.mutationCommands().requiredSetPointerDeletes())
                     .singleElement()
-                    .satisfies(pointer -> assertThat(pointer.expectedRequiredSetId())
-                            .isEqualTo(REQUIRED_SET_ID));
+                    .satisfies(pointer -> {
+                        assertThat(pointer.expectedRequiredSetId())
+                                .isEqualTo(REQUIRED_SET_ID);
+                        assertThat(pointer.dependenciesEvidence()).isPresent();
+                        assertThat(pointer.dependenciesEvidence().orElseThrow()
+                                .memberRequirementVersionIds()).isEmpty();
+                        assertThat(pointer.dependenciesEvidence().orElseThrow()
+                                .referencedDocumentVersionIds())
+                                .containsExactly(DOCUMENT_ID);
+                    });
             assertThat(execution.expectedPostState().documentTransitions())
                     .singleElement()
                     .satisfies(transition -> {
@@ -1190,7 +1198,7 @@ class LegalEditorialPlannerCoreTest {
                         "sha256:" + "e".repeat(64),
                         APPLIED_AT,
                         List.of(),
-                        List.of(DOCUMENT_ID))),
+                        List.of(DOCUMENT_ID, DOCUMENT_ID))),
                 List.of(
                         new LegalEditorialPlannerCore.DocumentTransitionEvidence(
                                 1,

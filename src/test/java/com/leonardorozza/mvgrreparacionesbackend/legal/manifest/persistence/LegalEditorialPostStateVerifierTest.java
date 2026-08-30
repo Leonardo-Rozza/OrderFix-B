@@ -111,6 +111,130 @@ class LegalEditorialPostStateVerifierTest {
     }
 
     @Test
+    void exactRetirementPreservesUnaffectedProjectionAndBuildsNotReadyReceipt() {
+        LegalEditorialExecutionPlan plan = retirementPlan();
+        Harness harness = new Harness(retirementSnapshot());
+
+        LegalEditorialApplyReceipt receipt = harness.verifier.verify(plan);
+
+        assertThat(receipt).isEqualTo(new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.RETIRE,
+                PUBLICATION,
+                APPLIED_AT,
+                LegalEditorialReadiness.NOT_READY,
+                2,
+                1,
+                5,
+                2,
+                1,
+                1,
+                1));
+        verify(harness.reader).snapshot(
+                PUBLICATION,
+                PUBLICATION,
+                Set.of(DOCUMENT, SOURCE_DOCUMENT),
+                Set.of(REQUIREMENT),
+                Set.of(HISTORICAL_BATCH));
+    }
+
+    @Test
+    void failsClosedWhenARetirementPointerDiffersFromItsFixedExpectedUpdatedAt() {
+        LegalEditorialPlannerCore.PlannerSnapshot exact = retirementSnapshot();
+        LegalEditorialPlannerCore.PointerEvidence pointer = exact.activePointers().getFirst();
+        LegalEditorialPlannerCore.PointerEvidence drifted =
+                new LegalEditorialPlannerCore.PointerEvidence(
+                        pointer.key(),
+                        pointer.requiredSetId(),
+                        pointer.publicationId(),
+                        pointer.revision(),
+                        pointer.updatedAt().plusMillis(1),
+                        pointer.memberVersionIds(),
+                        pointer.referencedDocumentVersionIds());
+        Harness harness = new Harness(copy(
+                exact,
+                exact.documents(),
+                exact.documentTransitions(),
+                exact.activeSlots(),
+                List.of(drifted),
+                exact.batches()));
+
+        assertPostconditionMismatch(harness, retirementPlan());
+    }
+
+    @Test
+    void failsClosedWhenARetirementPointerDependenciesDifferFromTheFixedExpectedGraph() {
+        LegalEditorialPlannerCore.PlannerSnapshot exact = retirementSnapshot();
+        LegalEditorialPlannerCore.PointerEvidence pointer = exact.activePointers().getFirst();
+        LegalEditorialPlannerCore.PointerEvidence drifted =
+                new LegalEditorialPlannerCore.PointerEvidence(
+                        pointer.key(),
+                        pointer.requiredSetId(),
+                        pointer.publicationId(),
+                        pointer.revision(),
+                        pointer.updatedAt(),
+                        List.of(uuid(99)),
+                        pointer.referencedDocumentVersionIds());
+        Harness harness = new Harness(copy(
+                exact,
+                exact.documents(),
+                exact.documentTransitions(),
+                exact.activeSlots(),
+                List.of(drifted),
+                exact.batches()));
+
+        assertPostconditionMismatch(harness, retirementPlan());
+    }
+
+    @Test
+    void failsClosedWhenARetirementPointerDocumentReferencesDifferFromExpectation() {
+        LegalEditorialPlannerCore.PlannerSnapshot exact = retirementSnapshot();
+        LegalEditorialPlannerCore.PointerEvidence pointer = exact.activePointers().getFirst();
+        LegalEditorialPlannerCore.PointerEvidence drifted =
+                new LegalEditorialPlannerCore.PointerEvidence(
+                        pointer.key(),
+                        pointer.requiredSetId(),
+                        pointer.publicationId(),
+                        pointer.revision(),
+                        pointer.updatedAt(),
+                        pointer.memberVersionIds(),
+                        List.of(uuid(98)));
+        Harness harness = new Harness(copy(
+                exact,
+                exact.documents(),
+                exact.documentTransitions(),
+                exact.activeSlots(),
+                List.of(drifted),
+                exact.batches()));
+
+        assertPostconditionMismatch(harness, retirementPlan());
+    }
+
+    @Test
+    void failsClosedWhenARetirementPreservedRequirementTimestampDrifts() {
+        LegalEditorialPlannerCore.PlannerSnapshot exact = retirementSnapshot();
+        LegalEditorialPlannerCore.RequirementEvidence requirement =
+                exact.requirements().get(REQUIREMENT);
+        LegalEditorialPlannerCore.RequirementEvidence drifted =
+                new LegalEditorialPlannerCore.RequirementEvidence(
+                        requirement.id(),
+                        requirement.lineId(),
+                        requirement.introductionPublicationId(),
+                        requirement.statementSha256(),
+                        requirement.state(),
+                        requirement.stateChangedAt().plusMillis(1),
+                        requirement.lastReason(),
+                        requirement.locale(),
+                        requirement.context(),
+                        requirement.audiences());
+        Harness harness = new Harness(copyRequirements(
+                exact,
+                Map.of(REQUIREMENT, drifted),
+                exact.requirementTransitions()));
+
+        assertPostconditionMismatch(harness, retirementPlan());
+    }
+
+    @Test
     void failsClosedWhenReplacementPreexistingHistoryIsMissingARow() {
         LegalEditorialPlannerCore.PlannerSnapshot exact = replacementSnapshot();
         List<LegalEditorialPlannerCore.DocumentTransitionEvidence> incompleteHistory =
@@ -378,6 +502,24 @@ class LegalEditorialPostStateVerifierTest {
         return plan;
     }
 
+    private static LegalEditorialExecutionPlan retirementPlan() {
+        return new LegalEditorialExecutionPlan(
+                LegalEditorialExecutionPlan.OperationType.RETIRE,
+                Optional.of(new LegalEditorialExecutionPlan.SourceIdentity(
+                        publication(PUBLICATION, "target"),
+                        "sha256:" + "b".repeat(64))),
+                publication(PUBLICATION, "target"),
+                Optional.of(uuid(60)),
+                Optional.of("c".repeat(64)),
+                REPLAY_OBSERVED_AT,
+                APPLIED_AT,
+                LegalEditorialReadiness.NOT_READY,
+                true,
+                false,
+                retirementExpectedPostState(),
+                LegalEditorialExecutionPlan.MutationCommands.empty());
+    }
+
     private static LegalEditorialExecutionPlan.ExpectedPostState promotedExpectedPostState() {
         return new LegalEditorialExecutionPlan.ExpectedPostState(
                 List.of(documentState(DOCUMENT, EstadoVersionLegal.VIGENTE, null)),
@@ -460,6 +602,56 @@ class LegalEditorialPostStateVerifierTest {
                                 slot(DOCUMENT, DOCUMENT_LINE).key(),
                                 SOURCE_DOCUMENT)),
                         List.of(slot(DOCUMENT, DOCUMENT_LINE))));
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedPostState retirementExpectedPostState() {
+        LegalEditorialExecutionPlan.DocumentTransition retirement =
+                new LegalEditorialExecutionPlan.DocumentTransition(
+                        DOCUMENT,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.RETIRADA,
+                        "Retiro operativo explícito",
+                        null,
+                        APPLIED_AT);
+        List<LegalEditorialExecutionPlan.DocumentTransition> preexisting = new ArrayList<>();
+        preexisting.addAll(documentPromotionHistory(DOCUMENT, HISTORICAL_APPLIED_AT));
+        preexisting.addAll(documentPromotionHistory(
+                SOURCE_DOCUMENT,
+                HISTORICAL_APPLIED_AT,
+                HISTORICAL_BATCH));
+        LegalEditorialExecutionPlan.ReplacementBatch historicalBatch =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        HISTORICAL_BATCH,
+                        HISTORICAL_APPLIED_AT,
+                        HISTORICAL_APPLIED_AT,
+                        List.of(HISTORICAL_PREDECESSOR),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                SOURCE_DOCUMENT,
+                                PUBLICATION)));
+        return new LegalEditorialExecutionPlan.ExpectedPostState(
+                List.of(
+                        new LegalEditorialExecutionPlan.ExpectedDocumentState(
+                                DOCUMENT,
+                                EstadoVersionLegal.RETIRADA,
+                                APPLIED_AT,
+                                "Retiro operativo explícito",
+                                null),
+                        new LegalEditorialExecutionPlan.ExpectedDocumentState(
+                                SOURCE_DOCUMENT,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_APPLIED_AT,
+                                null,
+                                HISTORICAL_BATCH)),
+                List.of(requirementState(HISTORICAL_APPLIED_AT)),
+                List.of(retirement),
+                List.of(),
+                preexisting,
+                requirementPromotionHistory(HISTORICAL_APPLIED_AT),
+                List.of(slot(SOURCE_DOCUMENT, SOURCE_DOCUMENT_LINE)),
+                List.of(retirementPointer(HISTORICAL_APPLIED_AT)),
+                List.of(historicalBatch),
+                List.of(),
+                LegalEditorialExecutionPlan.V27TriggerEffects.empty());
     }
 
     private static LegalEditorialPlannerCore.PlannerSnapshot promotedSnapshot() {
@@ -565,6 +757,113 @@ class LegalEditorialPostStateVerifierTest {
                                         PUBLICATION)))));
     }
 
+    private static LegalEditorialPlannerCore.PlannerSnapshot retirementSnapshot() {
+        Map<UUID, LegalEditorialPlannerCore.DocumentEvidence> documents = new LinkedHashMap<>();
+        documents.put(DOCUMENT, new LegalEditorialPlannerCore.DocumentEvidence(
+                DOCUMENT,
+                DOCUMENT_LINE,
+                PUBLICATION,
+                "document-sha",
+                HISTORICAL_APPLIED_AT.minusSeconds(1),
+                EstadoVersionLegal.RETIRADA,
+                APPLIED_AT,
+                "Retiro operativo explícito",
+                null,
+                TipoDocumentoLegal.POLITICA_PRIVACIDAD,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO)));
+        documents.put(SOURCE_DOCUMENT, new LegalEditorialPlannerCore.DocumentEvidence(
+                SOURCE_DOCUMENT,
+                SOURCE_DOCUMENT_LINE,
+                PUBLICATION,
+                "survivor-document-sha",
+                HISTORICAL_APPLIED_AT.minusSeconds(1),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_APPLIED_AT,
+                null,
+                HISTORICAL_BATCH,
+                TipoDocumentoLegal.TERMINOS_SERVICIO,
+                LocaleLegal.ES_AR,
+                List.of(ContextoLegal.REGISTRO)));
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(DOCUMENT, SOURCE_DOCUMENT),
+                List.of(REQUIREMENT),
+                List.of(DOCUMENT, SOURCE_DOCUMENT),
+                List.of(REQUIREMENT),
+                documents,
+                Map.of(REQUIREMENT, requirementEvidence(HISTORICAL_APPLIED_AT)),
+                List.of(),
+                List.of(new LegalEditorialPlannerCore.SlotEvidence(
+                        slot(SOURCE_DOCUMENT, SOURCE_DOCUMENT_LINE).key(),
+                        SOURCE_DOCUMENT,
+                        SOURCE_DOCUMENT_LINE,
+                        PUBLICATION)),
+                List.of(new LegalEditorialPlannerCore.PointerEvidence(
+                        pointer(HISTORICAL_APPLIED_AT).key(),
+                        REQUIRED_SET,
+                        PUBLICATION,
+                        pointer(HISTORICAL_APPLIED_AT).requiredSetRevision(),
+                        HISTORICAL_APPLIED_AT,
+                        List.of(REQUIREMENT),
+                        List.of(SOURCE_DOCUMENT))),
+                List.of(
+                        documentTransitionEvidence(
+                                1,
+                                DOCUMENT,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                null,
+                                HISTORICAL_APPLIED_AT),
+                        documentTransitionEvidence(
+                                2,
+                                DOCUMENT,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                null,
+                                HISTORICAL_APPLIED_AT),
+                        documentTransitionEvidence(
+                                3,
+                                DOCUMENT,
+                                EstadoVersionLegal.VIGENTE,
+                                EstadoVersionLegal.RETIRADA,
+                                "Retiro operativo explícito",
+                                APPLIED_AT),
+                        documentTransitionEvidence(
+                                4,
+                                SOURCE_DOCUMENT,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                null,
+                                HISTORICAL_APPLIED_AT),
+                        documentTransitionEvidence(
+                                5,
+                                SOURCE_DOCUMENT,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                null,
+                                HISTORICAL_BATCH,
+                                HISTORICAL_APPLIED_AT)),
+                List.of(
+                        requirementTransitionEvidence(
+                                1,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                HISTORICAL_APPLIED_AT),
+                        requirementTransitionEvidence(
+                                2,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_APPLIED_AT)),
+                Map.of(HISTORICAL_BATCH, new LegalEditorialPlannerCore.BatchEvidence(
+                        HISTORICAL_BATCH,
+                        HISTORICAL_APPLIED_AT,
+                        HISTORICAL_APPLIED_AT,
+                        List.of(HISTORICAL_PREDECESSOR),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                SOURCE_DOCUMENT,
+                                PUBLICATION)))));
+    }
+
     private static LegalEditorialPlannerCore.PlannerSnapshot copy(
             LegalEditorialPlannerCore.PlannerSnapshot source,
             Map<UUID, LegalEditorialPlannerCore.DocumentEvidence> documents,
@@ -585,6 +884,25 @@ class LegalEditorialPostStateVerifierTest {
                 documentTransitions,
                 source.requirementTransitions(),
                 batches);
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot copyRequirements(
+            LegalEditorialPlannerCore.PlannerSnapshot source,
+            Map<UUID, LegalEditorialPlannerCore.RequirementEvidence> requirements,
+            List<LegalEditorialPlannerCore.RequirementTransitionEvidence> transitions) {
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                source.documents(),
+                requirements,
+                source.targetScopes(),
+                source.activeSlots(),
+                source.activePointers(),
+                source.documentTransitions(),
+                transitions,
+                source.batches());
     }
 
     private static LegalEditorialExecutionPlan.PublicationIdentity publication(
@@ -617,10 +935,15 @@ class LegalEditorialPostStateVerifierTest {
     }
 
     private static LegalEditorialExecutionPlan.ExpectedRequirementState requirementState() {
+        return requirementState(APPLIED_AT);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedRequirementState requirementState(
+            Instant stateChangedAt) {
         return new LegalEditorialExecutionPlan.ExpectedRequirementState(
                 REQUIREMENT,
                 EstadoVersionLegal.VIGENTE,
-                APPLIED_AT,
+                stateChangedAt,
                 null);
     }
 
@@ -638,6 +961,11 @@ class LegalEditorialPostStateVerifierTest {
     }
 
     private static LegalEditorialExecutionPlan.ExpectedRequiredSetPointer pointer() {
+        return pointer(APPLIED_AT);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedRequiredSetPointer pointer(
+            Instant updatedAt) {
         return new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
                 new LegalEditorialExecutionPlan.RequiredSetPointerKey(
                         LocaleLegal.ES_AR,
@@ -646,7 +974,21 @@ class LegalEditorialPostStateVerifierTest {
                 REQUIRED_SET,
                 PUBLICATION,
                 "sha256:" + "b".repeat(64),
-                APPLIED_AT);
+                updatedAt);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedRequiredSetPointer retirementPointer(
+            Instant updatedAt) {
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer pointer = pointer(updatedAt);
+        return new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                pointer.key(),
+                pointer.requiredSetId(),
+                pointer.publicationId(),
+                pointer.requiredSetRevision(),
+                pointer.updatedAt(),
+                Optional.of(new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                        List.of(REQUIREMENT),
+                        List.of(SOURCE_DOCUMENT))));
     }
 
     private static List<LegalEditorialExecutionPlan.DocumentTransition> documentPromotionHistory(
@@ -683,19 +1025,24 @@ class LegalEditorialPostStateVerifierTest {
 
     private static List<LegalEditorialExecutionPlan.RequirementTransition>
             requirementPromotionHistory() {
+        return requirementPromotionHistory(APPLIED_AT);
+    }
+
+    private static List<LegalEditorialExecutionPlan.RequirementTransition>
+            requirementPromotionHistory(Instant occurredAt) {
         return List.of(
                 new LegalEditorialExecutionPlan.RequirementTransition(
                         REQUIREMENT,
                         EstadoVersionLegal.BORRADOR,
                         EstadoVersionLegal.PUBLICADA,
                         null,
-                        APPLIED_AT),
+                        occurredAt),
                 new LegalEditorialExecutionPlan.RequirementTransition(
                         REQUIREMENT,
                         EstadoVersionLegal.PUBLICADA,
                         EstadoVersionLegal.VIGENTE,
                         null,
-                        APPLIED_AT));
+                        occurredAt));
     }
 
     private static LegalEditorialPlannerCore.DocumentEvidence documentEvidence(
@@ -730,13 +1077,18 @@ class LegalEditorialPostStateVerifierTest {
     }
 
     private static LegalEditorialPlannerCore.RequirementEvidence requirementEvidence() {
+        return requirementEvidence(APPLIED_AT);
+    }
+
+    private static LegalEditorialPlannerCore.RequirementEvidence requirementEvidence(
+            Instant stateChangedAt) {
         return new LegalEditorialPlannerCore.RequirementEvidence(
                 REQUIREMENT,
                 REQUIREMENT_LINE,
                 PUBLICATION,
                 "requirement-sha",
                 EstadoVersionLegal.VIGENTE,
-                APPLIED_AT,
+                stateChangedAt,
                 null,
                 LocaleLegal.ES_AR,
                 ContextoLegal.REGISTRO,
@@ -795,6 +1147,15 @@ class LegalEditorialPostStateVerifierTest {
                     long id,
                     EstadoVersionLegal previous,
                     EstadoVersionLegal next) {
+        return requirementTransitionEvidence(id, previous, next, APPLIED_AT);
+    }
+
+    private static LegalEditorialPlannerCore.RequirementTransitionEvidence
+            requirementTransitionEvidence(
+                    long id,
+                    EstadoVersionLegal previous,
+                    EstadoVersionLegal next,
+                    Instant occurredAt) {
         return new LegalEditorialPlannerCore.RequirementTransitionEvidence(
                 id,
                 REQUIREMENT,
@@ -802,7 +1163,7 @@ class LegalEditorialPostStateVerifierTest {
                 next,
                 null,
                 null,
-                APPLIED_AT);
+                occurredAt);
     }
 
     private static UUID uuid(long value) {

@@ -43,10 +43,12 @@ class LegalEditorialExecutionPlanTest {
     private static final UUID DOCUMENT_TWO = uuid(11);
     private static final UUID DOCUMENT_PREDECESSOR = uuid(12);
     private static final UUID DOCUMENT_SUCCESSOR = uuid(13);
+    private static final UUID HISTORICAL_PREDECESSOR = uuid(14);
     private static final UUID DOCUMENT_LINE_ONE = uuid(20);
     private static final UUID DOCUMENT_LINE_TWO = uuid(21);
     private static final UUID REQUIREMENT_ONE = uuid(30);
     private static final UUID REQUIRED_SET = uuid(40);
+    private static final UUID AFFECTED_REQUIRED_SET = uuid(41);
 
     @Test
     void freezesTheOperationAndTopLevelPlanShape() {
@@ -182,23 +184,454 @@ class LegalEditorialExecutionPlanTest {
     }
 
     @Test
-    void retirementIsFailClosedAndOnlyContainsExplicitTerminalEffects() {
+    void retirementPreservesUnaffectedProjectionAndHistoricalBatchesWithoutReissuingThem() {
         LegalEditorialExecutionPlan plan = retirement(true);
 
         assertThat(plan.source()).contains(source());
         assertThat(plan.target()).isEqualTo(source().publication());
         assertThat(plan.expectedReadinessAfter()).isEqualTo(LegalEditorialReadiness.NOT_READY);
         assertThat(plan.acknowledgeFailClosedGap()).isTrue();
-        assertThat(plan.expectedPostState().documentSlots()).isEmpty();
-        assertThat(plan.expectedPostState().requiredSetPointers()).isEmpty();
+        assertThat(plan.expectedPostState().documentSlots())
+                .containsExactly(preservedSlot());
+        assertThat(plan.expectedPostState().requiredSetPointers())
+                .containsExactly(preservedPointer(PREEXISTING_AT));
+        assertThat(plan.expectedPostState().requiredSetPointers().getFirst().updatedAt())
+                .isNotEqualTo(plan.expectedAppliedAt());
+        assertThat(plan.expectedPostState().preexistingReplacementBatches())
+                .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .containsExactly(HISTORICAL_BATCH_ID);
+        assertThat(plan.expectedPostState().replacementBatches()).isEmpty();
         assertThat(plan.mutationCommands().documentTransitions())
                 .singleElement()
                 .satisfies(transition -> {
                     assertThat(transition.newState()).isEqualTo(EstadoVersionLegal.RETIRADA);
                     assertThat(transition.reason()).isEqualTo("Retiro operativo explícito");
                 });
+        assertThat(plan.mutationCommands().documentSlotInserts()).isEmpty();
+        assertThat(plan.mutationCommands().requiredSetPointerInserts()).isEmpty();
+        assertThat(plan.mutationCommands().replacementBatchesToCreateAndSeal()).isEmpty();
         assertThat(plan.deltaCounts()).isEqualTo(new LegalEditorialExecutionPlan.DeltaCounts(
-                1, 0, 0, 1, 0, 0, 0, 0, 0, 0));
+                1, 0, 0, 1, 0, 0, 0, 1, 0, 0));
+    }
+
+    @Test
+    void retirementReplayKeepsPreservedPostStateWithoutCommandsOrDelta() {
+        LegalEditorialExecutionPlan replay = retirement(false);
+
+        assertThat(replay.observedAt()).isEqualTo(OTHER_AT);
+        assertThat(replay.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(replay.expectedPostState().documentSlots())
+                .containsExactly(preservedSlot());
+        assertThat(replay.expectedPostState().requiredSetPointers())
+                .containsExactly(preservedPointer(PREEXISTING_AT));
+        assertThat(replay.expectedPostState().preexistingReplacementBatches())
+                .hasSize(1);
+        assertThat(replay.mutationCommands().isEmpty()).isTrue();
+        assertThat(replay.deltaCounts().isZero()).isTrue();
+    }
+
+    @Test
+    void retirementRejectsProjectionInsertsAndCurrentReplacementBatches() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.MutationCommands original =
+                retirement.mutationCommands();
+
+        LegalEditorialExecutionPlan.MutationCommands withSlotInsert =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        List.of(preservedSlot()),
+                        original.requiredSetPointerDeletes(),
+                        List.of(),
+                        List.of());
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                withSlotInsert))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        LegalEditorialExecutionPlan.MutationCommands withPointerInsert =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        List.of(),
+                        original.requiredSetPointerDeletes(),
+                        List.of(preservedPointer(OBSERVED_AT)),
+                        List.of());
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                withPointerInsert))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        LegalEditorialExecutionPlan.ReplacementBatch currentBatch = replacementBatch(
+                BATCH_ID,
+                DOCUMENT_TWO,
+                DOCUMENT_SUCCESSOR);
+        LegalEditorialExecutionPlan.ExpectedPostState withCurrentBatch = copyPostState(
+                retirement.expectedPostState(),
+                retirement.expectedPostState().documentSlots(),
+                retirement.expectedPostState().requiredSetPointers(),
+                retirement.expectedPostState().preexistingReplacementBatches(),
+                List.of(currentBatch));
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                withCurrentBatch,
+                original))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void retirementDeletesMustBeDisjointFromPreservedPostState() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.MutationCommands original =
+                retirement.mutationCommands();
+
+        LegalEditorialExecutionPlan.MutationCommands overlappingSlot =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        List.of(new LegalEditorialExecutionPlan.DocumentSlotDelete(
+                                preservedSlot().key(),
+                                DOCUMENT_PREDECESSOR)),
+                        List.of(),
+                        original.requiredSetPointerDeletes(),
+                        List.of(),
+                        List.of());
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                overlappingSlot))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("slot")
+                .hasMessageContaining("postestado");
+
+        LegalEditorialExecutionPlan.MutationCommands overlappingPointer =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        List.of(),
+                        List.of(new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                preservedPointer(PREEXISTING_AT).key(),
+                                REQUIRED_SET,
+                                Optional.of(dependencies(
+                                        List.of(),
+                                        List.of(DOCUMENT_PREDECESSOR))))),
+                        List.of(),
+                        List.of());
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                overlappingPointer))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("puntero")
+                .hasMessageContaining("postestado");
+    }
+
+    @Test
+    void retirementRejectsSlotDeleteForANonRetiredDocument() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.MutationCommands original =
+                retirement.mutationCommands();
+        LegalEditorialExecutionPlan.MutationCommands wrongDelete =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        List.of(new LegalEditorialExecutionPlan.DocumentSlotDelete(
+                                slotKey(),
+                                DOCUMENT_ONE)),
+                        List.of(),
+                        original.requiredSetPointerDeletes(),
+                        List.of(),
+                        List.of());
+
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                wrongDelete))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("documento retirado");
+    }
+
+    @Test
+    void retirementRejectsPointerDeleteWithoutAuthoritativeDependencies() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.MutationCommands original =
+                retirement.mutationCommands();
+        LegalEditorialExecutionPlan.MutationCommands deleteWithoutEvidence =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        List.of(),
+                        List.of(new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                affectedPointerKey(),
+                                AFFECTED_REQUIRED_SET)),
+                        List.of(),
+                        List.of());
+
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                deleteWithoutEvidence))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("evidencia autoritativa");
+    }
+
+    @Test
+    void retirementRejectsPointerDeleteUnrelatedToEveryExplicitRetirement() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.MutationCommands original =
+                retirement.mutationCommands();
+        LegalEditorialExecutionPlan.RequiredSetDependencies unrelatedDependencies =
+                dependencies(List.of(REQUIREMENT_ONE), List.of(DOCUMENT_ONE));
+        LegalEditorialExecutionPlan.MutationCommands unrelatedDelete =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        List.of(),
+                        List.of(new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                                        LocaleLegal.ES_AR,
+                                        ContextoLegal.CIERRE_CUENTA,
+                                        AudienciaLegal.USER),
+                                AFFECTED_REQUIRED_SET,
+                                Optional.of(unrelatedDependencies))),
+                        List.of(),
+                        List.of());
+
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                retirement.expectedPostState(),
+                unrelatedDelete))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("puntero eliminado")
+                .hasMessageContaining("retiro explícito");
+    }
+
+    @Test
+    void retirementRejectsPreservedPointerThatStillReferencesARetiredDocument() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer preserved =
+                preservedPointer(PREEXISTING_AT);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer affectedSurvivor =
+                new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                        preserved.key(),
+                        preserved.requiredSetId(),
+                        preserved.publicationId(),
+                        preserved.requiredSetRevision(),
+                        preserved.updatedAt(),
+                        Optional.of(dependencies(
+                                List.of(REQUIREMENT_ONE),
+                                List.of(DOCUMENT_PREDECESSOR))));
+        LegalEditorialExecutionPlan.ExpectedPostState invalidPostState = copyPostState(
+                retirement.expectedPostState(),
+                retirement.expectedPostState().documentSlots(),
+                List.of(affectedSurvivor),
+                retirement.expectedPostState().preexistingReplacementBatches(),
+                retirement.expectedPostState().replacementBatches());
+
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                invalidPostState,
+                retirement.mutationCommands()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("puntero preservado")
+                .hasMessageContaining("retiro explícito");
+    }
+
+    @Test
+    void retirementRejectsPreservedPointerWithoutAuthoritativeDependencies() {
+        LegalEditorialExecutionPlan retirement = retirement(true);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer preserved =
+                preservedPointer(PREEXISTING_AT);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer withoutEvidence =
+                new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                        preserved.key(),
+                        preserved.requiredSetId(),
+                        preserved.publicationId(),
+                        preserved.requiredSetRevision(),
+                        preserved.updatedAt());
+        LegalEditorialExecutionPlan.ExpectedPostState invalidPostState = copyPostState(
+                retirement.expectedPostState(),
+                retirement.expectedPostState().documentSlots(),
+                List.of(withoutEvidence),
+                retirement.expectedPostState().preexistingReplacementBatches(),
+                retirement.expectedPostState().replacementBatches());
+
+        assertThatThrownBy(() -> copy(
+                retirement,
+                retirement.operationType(),
+                retirement.source(),
+                retirement.target(),
+                retirement.operationId(),
+                retirement.planSha256(),
+                retirement.expectedReadinessAfter(),
+                retirement.acknowledgeFailClosedGap(),
+                true,
+                invalidPostState,
+                retirement.mutationCommands()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("puntero preservado")
+                .hasMessageContaining("evidencia autoritativa");
+    }
+
+    @Test
+    void retirementClassifiesPointerAffectedOnlyByARetiredRequirement() {
+        LegalEditorialExecutionPlan plan = retirementWithRequirementImpact(false);
+
+        assertThat(plan.mutationCommands().requiredSetPointerDeletes())
+                .singleElement()
+                .satisfies(pointer -> {
+                    LegalEditorialExecutionPlan.RequiredSetDependencies dependencies =
+                            pointer.dependenciesEvidence().orElseThrow();
+                    assertThat(dependencies.memberRequirementVersionIds())
+                            .containsExactly(REQUIREMENT_ONE);
+                    assertThat(dependencies.referencedDocumentVersionIds()).isEmpty();
+                });
+    }
+
+    @Test
+    void retirementRejectsPreservedPointerDependingOnARetiredRequirement() {
+        assertThatThrownBy(() -> retirementWithRequirementImpact(true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("puntero preservado")
+                .hasMessageContaining("retiro explícito");
+    }
+
+    @Test
+    void requiredSetDependenciesCanonicalizeSharedDocumentReferencesAsAUnion() {
+        LegalEditorialExecutionPlan.RequiredSetDependencies dependencies =
+                new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                        List.of(REQUIREMENT_ONE, uuid(31)),
+                        List.of(DOCUMENT_ONE, DOCUMENT_ONE));
+
+        assertThat(dependencies.memberRequirementVersionIds())
+                .containsExactly(REQUIREMENT_ONE, uuid(31));
+        assertThat(dependencies.referencedDocumentVersionIds())
+                .containsExactly(DOCUMENT_ONE);
+    }
+
+    @Test
+    void promotionStillRequiresPointerInsertAtExpectedAppliedAt() {
+        LegalEditorialExecutionPlan promote = promote(true);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer originalPointer =
+                promote.expectedPostState().requiredSetPointers().getFirst();
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer historicalPointer =
+                new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                        originalPointer.key(),
+                        originalPointer.requiredSetId(),
+                        originalPointer.publicationId(),
+                        originalPointer.requiredSetRevision(),
+                        PREEXISTING_AT);
+        LegalEditorialExecutionPlan.ExpectedPostState historicalPostState = copyPostState(
+                promote.expectedPostState(),
+                promote.expectedPostState().documentSlots(),
+                List.of(historicalPointer),
+                promote.expectedPostState().preexistingReplacementBatches(),
+                promote.expectedPostState().replacementBatches());
+        LegalEditorialExecutionPlan.MutationCommands originalCommands =
+                promote.mutationCommands();
+        LegalEditorialExecutionPlan.MutationCommands historicalCommands =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        originalCommands.documentTransitions(),
+                        originalCommands.requirementTransitions(),
+                        originalCommands.documentSlotDeletes(),
+                        originalCommands.documentSlotInserts(),
+                        originalCommands.requiredSetPointerDeletes(),
+                        List.of(historicalPointer),
+                        originalCommands.replacementBatchesToCreateAndSeal());
+
+        assertThatThrownBy(() -> copy(
+                promote,
+                promote.operationType(),
+                promote.source(),
+                promote.target(),
+                promote.operationId(),
+                promote.planSha256(),
+                promote.expectedReadinessAfter(),
+                promote.acknowledgeFailClosedGap(),
+                true,
+                historicalPostState,
+                historicalCommands))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requiredSetPointers");
     }
 
     @Test
@@ -1134,18 +1567,45 @@ class LegalEditorialExecutionPlanTest {
                         "Retiro operativo explícito",
                         null,
                         OBSERVED_AT);
+        LegalEditorialExecutionPlan.ReplacementBatch historicalBatch = replacementBatch(
+                HISTORICAL_BATCH_ID,
+                HISTORICAL_PREDECESSOR,
+                DOCUMENT_ONE);
         LegalEditorialExecutionPlan.ExpectedPostState postState =
                 new LegalEditorialExecutionPlan.ExpectedPostState(
-                        List.of(new LegalEditorialExecutionPlan.ExpectedDocumentState(
-                                DOCUMENT_PREDECESSOR,
-                                EstadoVersionLegal.RETIRADA,
-                                OBSERVED_AT,
-                                "Retiro operativo explícito",
+                        List.of(
+                                new LegalEditorialExecutionPlan.ExpectedDocumentState(
+                                        DOCUMENT_ONE,
+                                        EstadoVersionLegal.VIGENTE,
+                                        PREEXISTING_AT,
+                                        null,
+                                        HISTORICAL_BATCH_ID),
+                                new LegalEditorialExecutionPlan.ExpectedDocumentState(
+                                        DOCUMENT_PREDECESSOR,
+                                        EstadoVersionLegal.RETIRADA,
+                                        OBSERVED_AT,
+                                        "Retiro operativo explícito",
+                                        null)),
+                        List.of(new LegalEditorialExecutionPlan.ExpectedRequirementState(
+                                REQUIREMENT_ONE,
+                                EstadoVersionLegal.VIGENTE,
+                                PREEXISTING_AT,
                                 null)),
-                        List.of(),
                         List.of(transition),
                         List.of(),
                         List.of(
+                                transitionAt(
+                                        DOCUMENT_ONE,
+                                        EstadoVersionLegal.BORRADOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        null,
+                                        PREEXISTING_AT),
+                                transitionAt(
+                                        DOCUMENT_ONE,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        EstadoVersionLegal.VIGENTE,
+                                        HISTORICAL_BATCH_ID,
+                                        PREEXISTING_AT),
                                 transitionAt(
                                         DOCUMENT_PREDECESSOR,
                                         EstadoVersionLegal.BORRADOR,
@@ -1158,9 +1618,22 @@ class LegalEditorialExecutionPlanTest {
                                         EstadoVersionLegal.VIGENTE,
                                         null,
                                         PREEXISTING_AT)),
-                        List.of(),
-                        List.of(),
-                        List.of(),
+                        List.of(
+                                new LegalEditorialExecutionPlan.RequirementTransition(
+                                        REQUIREMENT_ONE,
+                                        EstadoVersionLegal.BORRADOR,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        null,
+                                        PREEXISTING_AT),
+                                new LegalEditorialExecutionPlan.RequirementTransition(
+                                        REQUIREMENT_ONE,
+                                        EstadoVersionLegal.PUBLICADA,
+                                        EstadoVersionLegal.VIGENTE,
+                                        null,
+                                        PREEXISTING_AT)),
+                        List.of(preservedSlot()),
+                        List.of(preservedPointer(PREEXISTING_AT)),
+                        List.of(historicalBatch),
                         List.of(),
                         LegalEditorialExecutionPlan.V27TriggerEffects.empty());
         LegalEditorialExecutionPlan.MutationCommands commands = changeRequired
@@ -1171,7 +1644,12 @@ class LegalEditorialExecutionPlanTest {
                                 slotKey(),
                                 DOCUMENT_PREDECESSOR)),
                         List.of(),
-                        List.of(),
+                        List.of(new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                affectedPointerKey(),
+                                AFFECTED_REQUIRED_SET,
+                                Optional.of(dependencies(
+                                        List.of(REQUIREMENT_ONE),
+                                        List.of(DOCUMENT_PREDECESSOR))))),
                         List.of(),
                         List.of())
                 : LegalEditorialExecutionPlan.MutationCommands.empty();
@@ -1188,6 +1666,93 @@ class LegalEditorialExecutionPlanTest {
                 changeRequired,
                 postState,
                 commands);
+    }
+
+    private static LegalEditorialExecutionPlan retirementWithRequirementImpact(
+            boolean preserveAffectedPointer) {
+        LegalEditorialExecutionPlan original = retirement(true);
+        LegalEditorialExecutionPlan.ExpectedPostState originalPostState =
+                original.expectedPostState();
+        LegalEditorialExecutionPlan.RequirementTransition requirementRetirement =
+                new LegalEditorialExecutionPlan.RequirementTransition(
+                        REQUIREMENT_ONE,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.RETIRADA,
+                        "Retiro explícito del requisito",
+                        OBSERVED_AT);
+        LegalEditorialExecutionPlan.ExpectedRequiredSetPointer affectedSurvivor =
+                new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                        preservedPointer(PREEXISTING_AT).key(),
+                        REQUIRED_SET,
+                        SOURCE_PUBLICATION,
+                        REVISION,
+                        PREEXISTING_AT,
+                        Optional.of(dependencies(List.of(REQUIREMENT_ONE), List.of())));
+        LegalEditorialExecutionPlan.ExpectedPostState postState =
+                new LegalEditorialExecutionPlan.ExpectedPostState(
+                        originalPostState.documentStates(),
+                        List.of(new LegalEditorialExecutionPlan.ExpectedRequirementState(
+                                REQUIREMENT_ONE,
+                                EstadoVersionLegal.RETIRADA,
+                                OBSERVED_AT,
+                                "Retiro explícito del requisito")),
+                        originalPostState.documentTransitions(),
+                        List.of(requirementRetirement),
+                        originalPostState.preexistingDocumentTransitions(),
+                        originalPostState.preexistingRequirementTransitions(),
+                        originalPostState.documentSlots(),
+                        preserveAffectedPointer
+                                ? List.of(affectedSurvivor)
+                                : List.of(),
+                        originalPostState.preexistingReplacementBatches(),
+                        originalPostState.replacementBatches(),
+                        originalPostState.v27TriggerEffects());
+        LegalEditorialExecutionPlan.MutationCommands commands =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.mutationCommands().documentTransitions(),
+                        List.of(requirementRetirement),
+                        original.mutationCommands().documentSlotDeletes(),
+                        List.of(),
+                        List.of(new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
+                                affectedPointerKey(),
+                                AFFECTED_REQUIRED_SET,
+                                Optional.of(dependencies(
+                                        List.of(REQUIREMENT_ONE),
+                                        List.of())))),
+                        List.of(),
+                        List.of());
+        return copy(
+                original,
+                original.operationType(),
+                original.source(),
+                original.target(),
+                original.operationId(),
+                original.planSha256(),
+                original.expectedReadinessAfter(),
+                original.acknowledgeFailClosedGap(),
+                true,
+                postState,
+                commands);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedPostState copyPostState(
+            LegalEditorialExecutionPlan.ExpectedPostState original,
+            List<LegalEditorialExecutionPlan.ExpectedDocumentSlot> documentSlots,
+            List<LegalEditorialExecutionPlan.ExpectedRequiredSetPointer> requiredSetPointers,
+            List<LegalEditorialExecutionPlan.ReplacementBatch> preexistingReplacementBatches,
+            List<LegalEditorialExecutionPlan.ReplacementBatch> replacementBatches) {
+        return new LegalEditorialExecutionPlan.ExpectedPostState(
+                original.documentStates(),
+                original.requirementStates(),
+                original.documentTransitions(),
+                original.requirementTransitions(),
+                original.preexistingDocumentTransitions(),
+                original.preexistingRequirementTransitions(),
+                documentSlots,
+                requiredSetPointers,
+                preexistingReplacementBatches,
+                replacementBatches,
+                original.v27TriggerEffects());
     }
 
     private static LegalEditorialExecutionPlan.ExpectedPostState postStateWithBatches(
@@ -1333,6 +1898,48 @@ class LegalEditorialExecutionPlanTest {
                 TipoDocumentoLegal.TERMINOS_SERVICIO,
                 LocaleLegal.ES_AR,
                 ContextoLegal.REGISTRO);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedDocumentSlot preservedSlot() {
+        return slot(
+                new LegalEditorialExecutionPlan.DocumentSlotKey(
+                        TipoDocumentoLegal.POLITICA_PRIVACIDAD,
+                        LocaleLegal.ES_AR,
+                        ContextoLegal.USO_CONTINUADO),
+                DOCUMENT_ONE,
+                DOCUMENT_LINE_ONE,
+                SOURCE_PUBLICATION);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedRequiredSetPointer preservedPointer(
+            Instant updatedAt) {
+        return new LegalEditorialExecutionPlan.ExpectedRequiredSetPointer(
+                new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                        LocaleLegal.ES_AR,
+                        ContextoLegal.USO_CONTINUADO,
+                        AudienciaLegal.ADMIN_TITULAR),
+                REQUIRED_SET,
+                SOURCE_PUBLICATION,
+                REVISION,
+                updatedAt,
+                Optional.of(dependencies(
+                        List.of(REQUIREMENT_ONE),
+                        List.of(DOCUMENT_ONE))));
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetDependencies dependencies(
+            List<UUID> requirementVersionIds,
+            List<UUID> documentVersionIds) {
+        return new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                requirementVersionIds,
+                documentVersionIds);
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetPointerKey affectedPointerKey() {
+        return new LegalEditorialExecutionPlan.RequiredSetPointerKey(
+                LocaleLegal.ES_AR,
+                ContextoLegal.REGISTRO,
+                AudienciaLegal.ADMIN_TITULAR);
     }
 
     private static LegalEditorialExecutionPlan.ExpectedDocumentSlot slot(

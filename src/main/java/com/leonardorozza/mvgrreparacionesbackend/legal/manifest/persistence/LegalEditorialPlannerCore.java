@@ -979,7 +979,8 @@ final class LegalEditorialPlannerCore {
                                 .map(pointer ->
                                         new LegalEditorialExecutionPlan.RequiredSetPointerDelete(
                                                 pointer.key(),
-                                                pointer.requiredSetId()))
+                                                pointer.requiredSetId(),
+                                                Optional.of(pointerDependencies(pointer))))
                                 .toList()
                         : List.of();
         Optional<PreexistingTransitionHistory> preexistingHistory =
@@ -2059,6 +2060,13 @@ final class LegalEditorialPlannerCore {
             Set<UUID> requirementVersionIds) {
         return pointer.referencedDocumentVersionIds().stream().anyMatch(documentVersionIds::contains)
                 || pointer.memberVersionIds().stream().anyMatch(requirementVersionIds::contains);
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetDependencies pointerDependencies(
+            PointerEvidence pointer) {
+        return new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                pointer.memberVersionIds(),
+                pointer.referencedDocumentVersionIds());
     }
 
     private static <K, V> Map<K, Set<V>> immutableSetMap(Map<K, Set<V>> source) {

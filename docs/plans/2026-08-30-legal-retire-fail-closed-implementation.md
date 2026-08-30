@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcorte 8A pendiente
+Estado: en ejecución — Subcorte 8A completado el 2026-08-30; Subcorte 8B pendiente
 
 Diseño aprobado:
 
@@ -45,7 +45,7 @@ atómico. No se hace push ni deploy.
 
 ## Subcorte 8A — Invariantes del execution plan
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -56,26 +56,43 @@ a emitir el postestado parcial completo.
 ### Modificar
 
 - `LegalEditorialExecutionPlan`;
+- `LegalEditorialPlannerCore`, sólo para adaptar el delete RETIRE a la nueva forma de evidencia;
+- `LegalEditorialPostStateVerifier`;
 - `LegalEditorialExecutionPlanTest`;
-- `LegalEditorialPostStateVerifierTest`;
-- `LegalEditorialPostStateVerifier` sólo si una prueba demuestra una brecha de comparación;
-- tests de construcción RETIRE de `LegalEditorialPlannerCoreTest` sólo para conservar
-  compatibilidad durante la transición.
+- `LegalEditorialPlannerCoreTest`;
+- `LegalEditorialPostStateVerifierTest`.
 
 ### Pasos
 
 1. Caracterizar la matriz actual que exige slots/punteros/lotes finales vacíos para RETIRE.
 2. Permitir colecciones finales no vacías cuando representen proyecciones históricas preservadas.
-3. Exigir que cada transición terminal, delete de slot y delete de puntero corresponda al retiro
-   explícito exacto.
+3. Exigir correspondencia causal entre cada transición terminal, delete de slot y delete de
+   puntero declarado y al menos un miembro del retiro explícito.
 4. Prohibir inserts de slots/punteros, altas, sucesoras, rebinds y lotes nuevos.
 5. Prohibir que una clave eliminada aparezca también como sobreviviente.
 6. No exigir `updatedAt == expectedAppliedAt` a punteros preservados.
 7. Exigir `expectedAppliedAt` uniforme sólo para las transiciones nuevas del delta.
 8. Separar lotes históricos esperados de comandos de lote actuales, que deben ser vacíos.
-9. Mantener el verifier global: falta/exceso de membresía, historia, slot, puntero o lote bloquea el
-   postestado.
+9. Mantener el verifier global: falta/exceso de membresía, historia, slot, puntero, conjunto de
+   dependencias o lote bloquea el postestado fijo esperado.
 10. Ejecutar regresión de execution plans PROMOTE y REPLACE.
+
+### Frontera acreditada en 8A
+
+`RequiredSetDependencies` transporta dos conjuntos canonicalizados y ordenados: versiones de
+requisitos miembros y versiones documentales referenciadas. La canonicalización conserva una sola
+aparición de un documento compartido por varios requisitos; el límite de lectura continúa
+aplicándose sobre las filas originales antes de formar la unión.
+
+En RETIRE, todo puntero sobreviviente y todo delete declarado debe aportar esa evidencia. Un
+survivor no puede intersectar versiones retiradas y un delete debe intersectar al menos una. El
+post-verifier compara ambos conjuntos contra la expectativa fija, además de key, set, publicación,
+revisión y `updatedAt`. PROMOTE y REPLACE conservan su forma y comparación previas.
+
+Esta capa no puede acreditar por sí sola que una key fue omitida de delete y postestado, ni que la
+evidencia autocontenida de un delete coincide con PostgreSQL. La completitud del universo se
+demuestra en 8B al derivar survivors y deletes desde todos los scopes autoritativos. La autenticidad
+de key, set, dependencias y cardinalidad se revalida bajo lock en 8C antes del primer DML.
 
 ### Puerta
 
@@ -84,6 +101,22 @@ a emitir el postestado parcial completo.
 git diff --check
 git status --short
 ~~~
+
+### Evidencia de cierre 8A
+
+- Caracterización inicial: las pruebas nuevas reprodujeron las seis denegaciones de la matriz
+  RETIRE previa cuando el postestado preservaba slots, punteros o lotes históricos.
+- Prueba adversarial adicional: el contrato previo no podía representar dependencias de punteros y
+  aceptaba un delete sin vínculo causal; la prueba quedó roja antes de agregar la nueva evidencia.
+- Puerta focal final: 74 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Suite completa: 2.646 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- La revisión adversarial detectó y corrigió dos riesgos antes del commit: over-delete declarado
+  sin causalidad y referencias documentales repetidas legítimas entre varios requisitos.
+- Se acreditaron retiros por documento y por requisito, evidencia obligatoria de deletes y
+  survivors, drift de ambos conjuntos, timestamps históricos preservados y regresión
+  PROMOTE/REPLACE.
+- No se modificaron V27/V28, schemas, grants, API, frontend, writer, apply ni CLI; no hubo push ni
+  deploy.
 
 Commit:
 
@@ -111,9 +144,9 @@ forma exacta los elementos retirados y los sobrevivientes, todavía sin habilita
 2. Hacer que `retirementPlan` clasifique la membresía documental y de requisitos completa.
 3. Preservar el estado y la prehistoria exacta de todas las versiones no retiradas.
 4. Agregar una sola transición terminal por versión explícita, con motivo y timestamp esperados.
-5. Enriquecer la evidencia autoritativa de cada scope con miembros del conjunto sellado y
-   versiones documentales referenciadas; derivar desde allí las claves sobrevivientes y la unión
-   afectada tanto en SOURCE como en POST.
+5. Enriquecer la evidencia autoritativa de cada scope con miembros del conjunto sellado y la unión
+   canonicalizada de versiones documentales referenciadas; derivar desde allí las claves
+   sobrevivientes y la unión afectada tanto en SOURCE como en POST.
 6. Acreditar existencia y unicidad de cada slot/puntero esperado antes de copiar sus valores; sólo
    los punteros transportan `updatedAt`.
 7. Construir la unión exacta de punteros afectados por documentos y requisitos retirados.
@@ -164,7 +197,8 @@ y postcondición `NOT_READY` dentro de una sola transacción.
 1. Escribir el contrato SQL exacto del writer antes de implementarlo.
 2. Rechazar un plan que no sea RETIRE o contenga comandos PROMOTE/REPLACE antes del DML.
 3. Bloquear publicación, líneas, versiones y proyecciones en orden determinista.
-4. Revalidar current/target, estados, membresía, fingerprint y proyecciones bajo lock.
+4. Revalidar current/target, estados, membresía, fingerprint y proyecciones bajo lock, incluida la
+   igualdad de key, set, revisión y dependencias de cada puntero.
 5. Eliminar la unión deduplicada de punteros afectados y exigir cardinalidad exacta.
 6. Eliminar slots documentales afectados y exigir cardinalidad exacta.
 7. Insertar transiciones de requisitos y luego documentos en orden UUID.

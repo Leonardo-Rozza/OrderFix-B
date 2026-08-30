@@ -121,7 +121,10 @@ record LegalEditorialExecutionPlan(
                 expectedPostState,
                 mutationCommands);
         requireExpectedStateConsistency(expectedPostState);
-        requireExpectedDeltaTimeConsistency(expectedAppliedAt, expectedPostState);
+        requireExpectedDeltaTimeConsistency(
+                operationType,
+                expectedAppliedAt,
+                expectedPostState);
         if (changeRequired) {
             if (!expectedAppliedAt.equals(observedAt)) {
                 throw new IllegalArgumentException(
@@ -131,7 +134,10 @@ record LegalEditorialExecutionPlan(
                 throw new IllegalArgumentException(
                         "changeRequired=true requiere al menos un comando mutante");
             }
-            requireCommandPlanConsistency(expectedPostState, mutationCommands);
+            requireCommandPlanConsistency(
+                    operationType,
+                    expectedPostState,
+                    mutationCommands);
         } else if (!mutationCommands.isEmpty()) {
             throw new IllegalArgumentException(
                     "changeRequired=false requiere un conjunto de comandos vacío");
@@ -664,7 +670,8 @@ record LegalEditorialExecutionPlan(
             UUID requiredSetId,
             UUID publicationId,
             String requiredSetRevision,
-            Instant updatedAt
+            Instant updatedAt,
+            Optional<RequiredSetDependencies> dependenciesEvidence
     ) {
 
         ExpectedRequiredSetPointer {
@@ -675,12 +682,31 @@ record LegalEditorialExecutionPlan(
                     requiredSetRevision,
                     "requiredSetRevision");
             updatedAt = requirePostgresInstant(updatedAt, "updatedAt");
+            dependenciesEvidence = Objects.requireNonNull(
+                    dependenciesEvidence,
+                    "dependenciesEvidence");
+        }
+
+        ExpectedRequiredSetPointer(
+                RequiredSetPointerKey key,
+                UUID requiredSetId,
+                UUID publicationId,
+                String requiredSetRevision,
+                Instant updatedAt) {
+            this(
+                    key,
+                    requiredSetId,
+                    publicationId,
+                    requiredSetRevision,
+                    updatedAt,
+                    Optional.empty());
         }
     }
 
     record RequiredSetPointerDelete(
             RequiredSetPointerKey key,
-            UUID expectedRequiredSetId
+            UUID expectedRequiredSetId,
+            Optional<RequiredSetDependencies> dependenciesEvidence
     ) {
 
         RequiredSetPointerDelete {
@@ -688,6 +714,32 @@ record LegalEditorialExecutionPlan(
             expectedRequiredSetId = Objects.requireNonNull(
                     expectedRequiredSetId,
                     "expectedRequiredSetId");
+            dependenciesEvidence = Objects.requireNonNull(
+                    dependenciesEvidence,
+                    "dependenciesEvidence");
+        }
+
+        RequiredSetPointerDelete(
+                RequiredSetPointerKey key,
+                UUID expectedRequiredSetId) {
+            this(key, expectedRequiredSetId, Optional.empty());
+        }
+    }
+
+    record RequiredSetDependencies(
+            List<UUID> memberRequirementVersionIds,
+            List<UUID> referencedDocumentVersionIds
+    ) {
+
+        RequiredSetDependencies {
+            memberRequirementVersionIds = sortedDistinctCopy(
+                    memberRequirementVersionIds,
+                    UUID_TEXT_ORDER,
+                    "memberRequirementVersionIds");
+            referencedDocumentVersionIds = sortedDistinctCopy(
+                    referencedDocumentVersionIds,
+                    UUID_TEXT_ORDER,
+                    "referencedDocumentVersionIds");
         }
     }
 
@@ -843,9 +895,6 @@ record LegalEditorialExecutionPlan(
                         || !acknowledgeFailClosedGap
                         || !samePublication(source.orElseThrow().publication(), target)
                         || !containsRetirement
-                        || !expectedPostState.documentSlots().isEmpty()
-                        || !expectedPostState.requiredSetPointers().isEmpty()
-                        || !expectedPostState.preexistingReplacementBatches().isEmpty()
                         || !expectedPostState.replacementBatches().isEmpty()
                         || !expectedPostState.v27TriggerEffects().isEmpty()
                         || !mutationCommands.documentSlotInserts().isEmpty()
@@ -857,6 +906,9 @@ record LegalEditorialExecutionPlan(
                                 transition.newState() != EstadoVersionLegal.RETIRADA)) {
                     throw invalidOperationMatrix();
                 }
+                requireRetirementPointerClassification(
+                        expectedPostState,
+                        mutationCommands);
             }
             default -> throw invalidOperationMatrix();
         }
@@ -1003,6 +1055,7 @@ record LegalEditorialExecutionPlan(
     }
 
     private static void requireCommandPlanConsistency(
+            OperationType operationType,
             ExpectedPostState postState,
             MutationCommands commands) {
         Set<DocumentTransition> derivedTransitions = Set.copyOf(
@@ -1016,17 +1069,22 @@ record LegalEditorialExecutionPlan(
                     "Los comandos directos no particionan las transiciones esperadas");
         }
 
-        Set<ExpectedDocumentSlot> derivedSlotInserts = Set.copyOf(
-                postState.v27TriggerEffects().documentSlotInserts());
-        List<ExpectedDocumentSlot> expectedDirectSlotInserts = postState.documentSlots().stream()
-                .filter(slot -> !derivedSlotInserts.contains(slot))
-                .toList();
-        if (!commands.documentSlotInserts().equals(expectedDirectSlotInserts)
-                || !commands.requiredSetPointerInserts().equals(postState.requiredSetPointers())
-                || !commands.replacementBatchesToCreateAndSeal()
-                        .equals(postState.replacementBatches())) {
-            throw new IllegalArgumentException(
-                    "Los comandos no producen el postestado esperado exacto");
+        if (operationType == OperationType.RETIRE) {
+            requireRetirementProjectionCommands(postState, commands);
+        } else {
+            Set<ExpectedDocumentSlot> derivedSlotInserts = Set.copyOf(
+                    postState.v27TriggerEffects().documentSlotInserts());
+            List<ExpectedDocumentSlot> expectedDirectSlotInserts = postState.documentSlots().stream()
+                    .filter(slot -> !derivedSlotInserts.contains(slot))
+                    .toList();
+            if (!commands.documentSlotInserts().equals(expectedDirectSlotInserts)
+                    || !commands.requiredSetPointerInserts()
+                            .equals(postState.requiredSetPointers())
+                    || !commands.replacementBatchesToCreateAndSeal()
+                            .equals(postState.replacementBatches())) {
+                throw new IllegalArgumentException(
+                        "Los comandos no producen el postestado esperado exacto");
+            }
         }
         Set<DocumentSlotKey> triggerDeletedKeys = postState.v27TriggerEffects()
                 .documentSlotDeletes().stream()
@@ -1040,7 +1098,92 @@ record LegalEditorialExecutionPlan(
         }
     }
 
+    private static void requireRetirementProjectionCommands(
+            ExpectedPostState postState,
+            MutationCommands commands) {
+        if (!commands.documentSlotInserts().isEmpty()
+                || !commands.requiredSetPointerInserts().isEmpty()
+                || !commands.replacementBatchesToCreateAndSeal().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "RETIRE no admite inserts de proyecciones ni lotes nuevos");
+        }
+
+        Set<DocumentSlotKey> finalSlotKeys = postState.documentSlots().stream()
+                .map(ExpectedDocumentSlot::key)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (commands.documentSlotDeletes().stream()
+                .map(DocumentSlotDelete::key)
+                .anyMatch(finalSlotKeys::contains)) {
+            throw new IllegalArgumentException(
+                    "Un slot eliminado no puede permanecer en el postestado RETIRE");
+        }
+
+        Set<RequiredSetPointerKey> finalPointerKeys = postState.requiredSetPointers().stream()
+                .map(ExpectedRequiredSetPointer::key)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (commands.requiredSetPointerDeletes().stream()
+                .map(RequiredSetPointerDelete::key)
+                .anyMatch(finalPointerKeys::contains)) {
+            throw new IllegalArgumentException(
+                    "Un puntero eliminado no puede permanecer en el postestado RETIRE");
+        }
+
+        Set<UUID> retiredDocumentIds = postState.documentTransitions().stream()
+                .filter(transition -> transition.newState() == EstadoVersionLegal.RETIRADA)
+                .map(DocumentTransition::documentVersionId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (commands.documentSlotDeletes().stream()
+                .map(DocumentSlotDelete::expectedDocumentVersionId)
+                .anyMatch(versionId -> !retiredDocumentIds.contains(versionId))) {
+            throw new IllegalArgumentException(
+                    "Todo slot eliminado por RETIRE debe pertenecer a un documento retirado");
+        }
+    }
+
+    private static void requireRetirementPointerClassification(
+            ExpectedPostState postState,
+            MutationCommands commands) {
+        Set<UUID> retiredDocumentIds = postState.documentTransitions().stream()
+                .filter(transition -> transition.newState() == EstadoVersionLegal.RETIRADA)
+                .map(DocumentTransition::documentVersionId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<UUID> retiredRequirementIds = postState.requirementTransitions().stream()
+                .filter(transition -> transition.newState() == EstadoVersionLegal.RETIRADA)
+                .map(RequirementTransition::requirementVersionId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+        for (ExpectedRequiredSetPointer pointer : postState.requiredSetPointers()) {
+            RequiredSetDependencies dependencies = pointer.dependenciesEvidence()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Todo puntero preservado por RETIRE requiere evidencia autoritativa"));
+            if (referencesAny(dependencies, retiredDocumentIds, retiredRequirementIds)) {
+                throw new IllegalArgumentException(
+                        "Un puntero preservado no puede depender del retiro explícito");
+            }
+        }
+        for (RequiredSetPointerDelete pointer : commands.requiredSetPointerDeletes()) {
+            RequiredSetDependencies dependencies = pointer.dependenciesEvidence()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Todo puntero eliminado por RETIRE requiere evidencia autoritativa"));
+            if (!referencesAny(dependencies, retiredDocumentIds, retiredRequirementIds)) {
+                throw new IllegalArgumentException(
+                        "Todo puntero eliminado debe corresponder al retiro explícito");
+            }
+        }
+    }
+
+    private static boolean referencesAny(
+            RequiredSetDependencies dependencies,
+            Set<UUID> retiredDocumentIds,
+            Set<UUID> retiredRequirementIds) {
+        return dependencies.memberRequirementVersionIds().stream()
+                .anyMatch(retiredRequirementIds::contains)
+                || dependencies.referencedDocumentVersionIds().stream()
+                .anyMatch(retiredDocumentIds::contains);
+    }
+
     private static void requireExpectedDeltaTimeConsistency(
+            OperationType operationType,
             Instant expectedAppliedAt,
             ExpectedPostState postState) {
         requireAllAtExpectedAppliedAt(
@@ -1055,12 +1198,14 @@ record LegalEditorialExecutionPlan(
                         .map(RequirementTransition::occurredAt)
                         .toList(),
                 "requirementTransitions");
-        requireAllAtExpectedAppliedAt(
-                expectedAppliedAt,
-                postState.requiredSetPointers().stream()
-                        .map(ExpectedRequiredSetPointer::updatedAt)
-                        .toList(),
-                "requiredSetPointers");
+        if (operationType != OperationType.RETIRE) {
+            requireAllAtExpectedAppliedAt(
+                    expectedAppliedAt,
+                    postState.requiredSetPointers().stream()
+                            .map(ExpectedRequiredSetPointer::updatedAt)
+                            .toList(),
+                    "requiredSetPointers");
+        }
         for (ReplacementBatch batch : postState.replacementBatches()) {
             if (!batch.createdAt().equals(expectedAppliedAt)
                     || !batch.sealedAt().equals(expectedAppliedAt)) {
@@ -1416,6 +1561,15 @@ record LegalEditorialExecutionPlan(
         }
         copy.sort(comparator);
         return List.copyOf(copy);
+    }
+
+    private static <T> List<T> sortedDistinctCopy(
+            List<T> values,
+            Comparator<? super T> comparator,
+            String field) {
+        return sortedCopy(values, comparator, field).stream()
+                .distinct()
+                .toList();
     }
 
     private static <T, K> void rejectDuplicateKeys(

@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -89,7 +90,10 @@ final class LegalEditorialPostStateVerifier {
         requireExact(expectedDocumentHistory(expected).equals(actualDocumentHistory(actual)));
         requireExact(expectedRequirementHistory(expected).equals(actualRequirementHistory(actual)));
         requireExact(expectedSlots(expected).equals(actualSlots(actual)));
-        requireExact(expectedPointers(expected).equals(actualPointers(actual)));
+        boolean comparePointerDependencies = required.operationType()
+                == LegalEditorialExecutionPlan.OperationType.RETIRE;
+        requireExact(expectedPointers(expected, comparePointerDependencies)
+                .equals(actualPointers(actual, comparePointerDependencies)));
         requireExact(expectedBatches(expected).equals(actualBatches(actual)));
 
         UUID targetPublicationId = required.target().publicationUuid();
@@ -310,29 +314,44 @@ final class LegalEditorialPostStateVerifier {
     }
 
     private static List<PointerProjection> expectedPointers(
-            LegalEditorialExecutionPlan.ExpectedPostState expected) {
+            LegalEditorialExecutionPlan.ExpectedPostState expected,
+            boolean includeDependencies) {
         return expected.requiredSetPointers().stream()
                 .map(pointer -> new PointerProjection(
                         pointer.key(),
                         pointer.requiredSetId(),
                         pointer.publicationId(),
                         pointer.requiredSetRevision(),
-                        pointer.updatedAt()))
+                        pointer.updatedAt(),
+                        includeDependencies
+                                ? pointer.dependenciesEvidence()
+                                : Optional.empty()))
                 .sorted(POINTER_ORDER)
                 .toList();
     }
 
     private static List<PointerProjection> actualPointers(
-            LegalEditorialPlannerCore.PlannerSnapshot actual) {
+            LegalEditorialPlannerCore.PlannerSnapshot actual,
+            boolean includeDependencies) {
         return actual.activePointers().stream()
                 .map(pointer -> new PointerProjection(
                         pointer.key(),
                         pointer.requiredSetId(),
                         pointer.publicationId(),
                         pointer.revision(),
-                        pointer.updatedAt()))
+                        pointer.updatedAt(),
+                        includeDependencies
+                                ? Optional.of(pointerDependencies(pointer))
+                                : Optional.empty()))
                 .sorted(POINTER_ORDER)
                 .toList();
+    }
+
+    private static LegalEditorialExecutionPlan.RequiredSetDependencies pointerDependencies(
+            LegalEditorialPlannerCore.PointerEvidence pointer) {
+        return new LegalEditorialExecutionPlan.RequiredSetDependencies(
+                pointer.memberVersionIds(),
+                pointer.referencedDocumentVersionIds());
     }
 
     private static List<BatchProjection> expectedBatches(
@@ -434,7 +453,8 @@ final class LegalEditorialPostStateVerifier {
             UUID requiredSetId,
             UUID publicationId,
             String requiredSetRevision,
-            Instant updatedAt) { }
+            Instant updatedAt,
+            Optional<LegalEditorialExecutionPlan.RequiredSetDependencies> dependenciesEvidence) { }
 
     private record BatchProjection(
             UUID batchId,
