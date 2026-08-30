@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 7 completados;
-Cortes 8 a 11 pendientes
+Corte 8 en ejecución con Subcorte 8A pendiente; Cortes 9 a 11 pendientes
 
 Diseño aprobado:
 
@@ -1036,62 +1036,34 @@ Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
 ## Corte 8 — Retiro explícito fail-closed
 
-Estado: pendiente.
+Estado: en ejecución; diseño específico aprobado y Subcorte 8A pendiente.
+
+Diseño específico aprobado:
+
+- `docs/plans/2026-08-30-legal-retire-fail-closed-design.md`;
+- commit local `5d2c358` y precisión de evidencia de replay `9991857`.
+
+Plan detallado de ejecución:
+
+- `docs/plans/2026-08-30-legal-retire-fail-closed-implementation.md`.
 
 ### Objetivo
 
 Aplicar RETIRE sin sucesor y confirmar de forma deliberada APPLIED+NOT_READY.
 
-### Archivos
+El trabajo se divide en siete subcortes acreditables:
 
-Crear:
+1. 8A — invariantes del execution plan;
+2. 8B — postestado parcial exacto;
+3. 8C — writer dedicado y aplicación;
+4. 8D — PostgreSQL fresco con rol restringido;
+5. 8E — replay, corrupción y rollback;
+6. 8F — CLI interna y reporte v3;
+7. 8G — regresiones y cierre documental.
 
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialRetireServiceTest.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialRetireIT.java.
-
-Crear sólo si el executor común no basta:
-
-- src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialRetirementWriter.java.
-
-Modificar:
-
-- LegalEditorialPlannerCore y LegalEditorialApplyService;
-- parser/report/CLI v3 para plan-retire y apply-retire;
-- LegalEditorialPostStateVerifier;
-- fixtures RETIRE.
-
-### Implementación
-
-1. Comparar postestado y devolver ALREADY_APPLIED antes de validar fuente.
-2. Exigir target=current, source fingerprint, motivo por versión, expectedReadinessAfter=NOT_READY y
-   acknowledgement true.
-3. Leer timestamp y bloquear versiones en orden UUID.
-4. Eliminar primero todos los punteros afectados.
-5. Eliminar slots documentales afectados.
-6. Insertar transiciones de requisitos VIGENTE→RETIRADA.
-7. Insertar transiciones documentales VIGENTE→RETIRADA.
-8. Considerar las invalidaciones adicionales de punteros ejecutadas por triggers.
-9. Forzar constraints y calcular readiness con el transaction_timestamp ya leído.
-10. Aceptar sólo NOT_READY; READY o una forma distinta produce EXPECTED_READINESS_MISMATCH y
-    rollback.
-11. Emitir PASS/persisted=true/APPLIED/NOT_READY/exit 0.
-12. No revivir terminales ni completar planes parciales.
-
-### Pruebas y puerta
-
-Cubrir retiro documental, requisito y mixto; motivo/ack/readiness inválidos con cero DML; target
-distinto; replay exacto; terminal no revivible; punteros invalidados; JSON v3 y exit 0.
-
-~~~bash
-./mvnw -Dtest=LegalEditorialRetireServiceTest,LegalEditorialReportTest,LegalEditorialCliTest test
-./mvnw -Dit.test=LegalEditorialRetireIT,LegalPersistenceIT verify
-git diff --check
-git status --short
-~~~
-
-Commit:
-
-    feat(legal): retira contenido de forma fail closed
+El plan enlazado congela archivos, pasos, puertas y commits. RETIRE no agrega ledger, migración,
+grant, endpoint o frontend; `persisted=true` acredita postestado confirmado y no un receipt
+persistido.
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
@@ -1348,7 +1320,13 @@ Commit backend:
 | 7C | test(legal): acredita split y merge en postgresql |
 | 7D | test(legal): acredita atomicidad multibatch |
 | 7E | docs(legal): cierra reemplazos split y merge |
-| 8 | feat(legal): retira contenido de forma fail closed |
+| 8A | fix(legal): valida plan exacto de retiro |
+| 8B | fix(legal): preserva postestado parcial de retiro |
+| 8C | feat(legal): aplica retiro editorial fail closed |
+| 8D | test(legal): acredita retiro editorial en postgresql |
+| 8E | test(legal): acredita replay y rollback de retiro |
+| 8F | feat(legal): expone retiro editorial interno |
+| 8G | docs(legal): cierra retiro editorial fail closed |
 | 9 | fix(legal): reconcilia commits editoriales ambiguos |
 | 10 | test(legal): acredita concurrencia y procesos editoriales |
 | 11 frontend | docs(plan): registra cierre de fase 2.3C |

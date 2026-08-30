@@ -110,7 +110,7 @@ El planner debe producir:
 - el estado final y la historia completa de todas las versiones clasificadas;
 - las versiones enumeradas con una única transición nueva a `RETIRADA`;
 - todas las demás versiones con estado e historia sin cambios;
-- slots no afectados con identidad, rango, publicación y timestamp originales;
+- slots no afectados con clave, versión, línea y publicación exactas;
 - punteros no afectados con scope, snapshot, revisión y `updatedAt` originales;
 - ausencia de cada slot documental afectado;
 - ausencia de la unión exacta de punteros afectados por documentos o requisitos retirados;
@@ -119,7 +119,8 @@ El planner debe producir:
 Las claves esperadas de slots y punteros sobrevivientes se derivan del grafo autoritativo e
 inmutable de publicación, membresía, versiones y snapshots. Las proyecciones mutables actuales se
 usan sólo después de comprobar que cada clave esperada existe una vez, no hay extras y sus valores
-son coherentes. Recién entonces se transportan al postestado sus timestamps existentes.
+son coherentes. Recién entonces se transporta al postestado el `updatedAt` existente de cada
+puntero sobreviviente.
 
 Para los punteros, la evidencia autoritativa de cada scope incluye miembros del conjunto sellado y
 versiones documentales referenciadas. Así la unión afectada se deriva igual antes y después del
@@ -147,8 +148,8 @@ La consistencia del plan exige:
 - `observedAt` describe la lectura actual y `expectedAppliedAt` el instante transaccional del
   retiro fresco.
 
-Las transiciones nuevas usan `expectedAppliedAt`. Los timestamps preservados conservan su valor
-histórico y no se normalizan al instante del retiro.
+Las transiciones nuevas usan `expectedAppliedAt`. Los timestamps de punteros preservados conservan
+su valor histórico y no se normalizan al instante del retiro.
 
 ## Planificación y replay
 
@@ -224,9 +225,12 @@ Esas responsabilidades permanecen en el coordinador y el verifier compartidos.
 - éxito fresco: `APPLIED`, `persisted=true`, `NOT_READY`, exit code 0;
 - replay acreditado: `ALREADY_APPLIED`, `persisted=true`, `NOT_READY`, exit code 0, sólo SELECT;
 - plan o confirmación inválidos: `BLOCKED`, antes de JDBC cuando la evidencia es input-safe;
-- fingerprint, scope, estado fuente o postestado incompatibles: `BLOCKED`, sin healing;
+- fingerprint, scope o estado fuente incompatibles: `BLOCKED`, sin healing;
 - acknowledgement ausente: issue estable `FAIL_CLOSED_GAP_NOT_ACKNOWLEDGED`;
-- readiness distinto de `NOT_READY`: `EXPECTED_READINESS_MISMATCH` y rollback;
+- readiness esperado en el input distinto de `NOT_READY`:
+  `BLOCKED/EXPECTED_READINESS_MISMATCH` antes de DML;
+- readiness real posterior distinto de `NOT_READY` o postcondición no exacta:
+  `ERROR/POSTCONDITION_NOT_READY`, rollback y `persisted=false`;
 - fallo SQL, verifier o constraints con rollback confirmado: `ERROR`, `persisted=false`;
 - commit cuya finalización no puede acreditarse: `UNKNOWN`, `persisted=null`, sin receipt
   tentativo.
@@ -242,9 +246,10 @@ La superficie interna incorpora únicamente:
 - `plan-retire`;
 - `apply-retire`.
 
-Ambos reutilizan el parser estricto de manifest, plan y confirmaciones editoriales. `apply-retire`
-exige además la confirmación mutante literal correspondiente. No hay aliases, argumentos separados,
-defaults destructivos ni prompts.
+Ambos reutilizan el parser estricto de manifest, plan y las mismas cuatro confirmaciones
+editoriales. `apply-retire` sólo se habilita con el flag operativo existente
+`ORDENFIX_LEGAL_EDITOR_ENABLED=true`; no agrega un quinto token. No hay aliases, argumentos
+separados, defaults destructivos ni prompts.
 
 El reporte v3 admite `operationType=RETIRE` y `expectedReadinessAfter=NOT_READY`. Para éxito fresco
 o replay conserva identidad input-safe, receipt exacto y `persisted=true`. Los fallos no exponen
@@ -271,7 +276,7 @@ punteros, SELECT de evidencia y uso de las secuencias involucradas. Las funcione
 
 - retiro sólo documental, sólo de requisitos y mixto;
 - publicación con múltiples miembros, contextos y audiencias no afectados;
-- membresía, historia, lotes, slots, punteros y timestamps preservados;
+- membresía, historia, lotes, slots, punteros y `updatedAt` de punteros preservados;
 - ausencia o exceso de una proyección sobreviviente bloquea y no se normaliza;
 - invariantes operation-aware de execution plan;
 - orden SQL y parámetros exactos del writer;
@@ -302,10 +307,10 @@ punteros, SELECT de evidencia y uso de las secuencias involucradas. Las funcione
 
 ## Subcortes aprobados
 
-1. **8A — Postestado parcial exacto.** Derivación autoritativa y preservación de todo miembro,
+1. **8A — Invariantes del plan.** Admitir postestado preservado sin confundirlo con comandos del
+   delta y mantener el verifier global exacto.
+2. **8B — Postestado parcial exacto.** Derivación autoritativa y preservación de todo miembro,
    historia, lote y proyección no afectado.
-2. **8B — Invariantes del plan.** Diferenciar postestado preservado de comandos del delta y
-   mantener el verifier global exacto.
 3. **8C — Writer y aplicación.** Writer dedicado, `applyRetire` y postcondición `NOT_READY`.
 4. **8D — PostgreSQL fresco.** Documentos, requisitos, mixto y rol restringido.
 5. **8E — Replay, corrupción y rollback.** Cero DML en replay, no healing y atomicidad exacta.
