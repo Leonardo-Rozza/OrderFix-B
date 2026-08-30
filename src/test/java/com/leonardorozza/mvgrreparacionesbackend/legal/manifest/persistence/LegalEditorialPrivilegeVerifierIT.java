@@ -173,6 +173,106 @@ class LegalEditorialPrivilegeVerifierIT {
     }
 
     @Test
+    void projectionTableLockUsesOnlyTheExistingDeletePrivilege() {
+        assertThat(restricted.queryForObject(
+                "SELECT current_user = ? AND session_user = ?",
+                Boolean.class,
+                EDITORIAL_ROLE,
+                EDITORIAL_ROLE)).isTrue();
+        List<ProjectionPrivilege> privileges = restricted.query("""
+                SELECT c.relname,
+                       pg_catalog.has_table_privilege(c.oid, 'SELECT') AS can_select,
+                       pg_catalog.has_table_privilege(c.oid, 'DELETE') AS can_delete,
+                       pg_catalog.has_table_privilege(c.oid, 'UPDATE') AS can_update,
+                       pg_catalog.has_table_privilege(c.oid, 'TRUNCATE') AS can_truncate,
+                       EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_attribute a
+                            WHERE a.attrelid = c.oid
+                              AND a.attnum > 0
+                              AND NOT a.attisdropped
+                              AND pg_catalog.has_column_privilege(
+                                  c.oid, a.attnum, 'UPDATE')
+                       ) AS can_update_any_column
+                  FROM pg_catalog.pg_class c
+                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'public'
+                   AND c.relname IN (
+                       'legal_documento_vigentes',
+                       'legal_requisito_conjuntos_actuales'
+                   )
+                 ORDER BY c.relname
+                """, (resultSet, rowNumber) -> new ProjectionPrivilege(
+                resultSet.getString("relname"),
+                resultSet.getBoolean("can_select"),
+                resultSet.getBoolean("can_delete"),
+                resultSet.getBoolean("can_update"),
+                resultSet.getBoolean("can_truncate"),
+                resultSet.getBoolean("can_update_any_column")));
+        assertThat(privileges)
+                .extracting(ProjectionPrivilege::table)
+                .containsExactly(
+                        "legal_documento_vigentes",
+                        "legal_requisito_conjuntos_actuales");
+        privileges.forEach(privilege -> {
+            assertThat(privilege.canSelect())
+                    .as("SELECT on %s", privilege.table()).isTrue();
+            assertThat(privilege.canDelete())
+                    .as("DELETE on %s", privilege.table()).isTrue();
+            assertThat(privilege.canUpdate())
+                    .as("table UPDATE on %s", privilege.table()).isFalse();
+            assertThat(privilege.canTruncate())
+                    .as("TRUNCATE on %s", privilege.table()).isFalse();
+            assertThat(privilege.canUpdateAnyColumn())
+                    .as("column UPDATE on %s", privilege.table()).isFalse();
+        });
+
+        DataSource restrictedDataSource = Objects.requireNonNull(
+                restricted.getDataSource(),
+                "restricted dataSource");
+        TransactionTemplate transaction = new TransactionTemplate(
+                new DataSourceTransactionManager(restrictedDataSource));
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setReadOnly(false);
+        transaction.executeWithoutResult(status -> {
+            Integer backendPid = restricted.queryForObject(
+                    "SELECT pg_catalog.pg_backend_pid()",
+                    Integer.class);
+
+            restricted.execute("""
+                    LOCK TABLE legal_requisito_conjuntos_actuales,
+                               legal_documento_vigentes
+                    IN SHARE ROW EXCLUSIVE MODE
+                    """);
+
+            assertThat(restricted.queryForObject(
+                    "SELECT pg_catalog.pg_backend_pid()",
+                    Integer.class)).isEqualTo(backendPid);
+            assertThat(restricted.queryForList("""
+                    SELECT c.relname
+                      FROM pg_catalog.pg_locks held
+                      JOIN pg_catalog.pg_class c ON c.oid = held.relation
+                      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                     WHERE held.locktype = 'relation'
+                       AND held.pid = pg_catalog.pg_backend_pid()
+                       AND held.mode = 'ShareRowExclusiveLock'
+                       AND held.granted
+                       AND n.nspname = 'public'
+                       AND c.relname IN (
+                           'legal_documento_vigentes',
+                           'legal_requisito_conjuntos_actuales'
+                       )
+                     ORDER BY c.relname
+                    """, String.class)).containsExactly(
+                    "legal_documento_vigentes",
+                    "legal_requisito_conjuntos_actuales");
+        });
+
+        verifier.verify();
+    }
+
+    @Test
     void roleCapabilitiesMembershipAndDatabaseOrSchemaExpansionFailClosed() {
         assertPrivilegeDrift(
                 "ALTER ROLE " + quoteIdentifier(EDITORIAL_ROLE) + " SUPERUSER",
@@ -435,4 +535,12 @@ class LegalEditorialPrivilegeVerifierIT {
     private static String quoteIdentifier(String identifier) {
         return '"' + identifier.replace("\"", "\"\"") + '"';
     }
+
+    private record ProjectionPrivilege(
+            String table,
+            boolean canSelect,
+            boolean canDelete,
+            boolean canUpdate,
+            boolean canTruncate,
+            boolean canUpdateAnyColumn) { }
 }

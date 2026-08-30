@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcortes 8A, 8B y 8C completados el 2026-08-30; Subcorte 8D pendiente
+Estado: en ejecución — Subcortes 8A, 8B, 8C y 8D completados el 2026-08-30; Subcorte 8E pendiente
 
 Diseño aprobado:
 
@@ -317,35 +317,88 @@ Commit:
 
 ## Subcorte 8D — PostgreSQL fresco
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
 Acreditar ejecuciones frescas documentales, de requisitos y mixtas sobre PostgreSQL 16/Flyway V27
 con el rol editorial restringido exacto.
 
-### Crear
+### Archivos
 
 - `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialRetireIT.java`.
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPrivilegeVerifierIT.java`.
 
-### Modificar
+### Alcance acreditado
 
-- `LegalManifestPersistenceITSupport` sólo para fixtures compartidas estrictamente necesarias;
-- `LegalEditorialPrivilegeVerifierIT` sólo si hace falta ensamblar el writer nuevo.
+`LegalEditorialRetireIT` ejecuta cuatro retiros frescos e independientes:
 
-### Escenarios
+1. retiro exclusivamente documental;
+2. retiro exclusivamente de requisito;
+3. retiro mixto documental y de requisito;
+4. `REPLACE` real seguido por el retiro de `account-closure`, con un lote histórico sellado.
 
-- retirar un documento y conservar otros documentos, requisitos, slots y punteros;
-- retirar un requisito de un scope y conservar otros requisitos y audiencias;
-- retirar documentos y requisitos en una misma operación;
-- publicación con múltiples contextos, locales, audiencias y lotes históricos;
-- motivos, estados, historia y `expectedAppliedAt` exactos;
-- `updatedAt` de punteros sobrevivientes sin cambios;
-- unión de punteros afectados eliminada una sola vez;
-- triggers y constraints V27 satisfechos sin DML duplicado;
-- snapshots, aceptación, idempotencia y tablas ajenas sin cambios;
-- `APPLIED`, `persisted=true`, `NOT_READY` y receipt exacto;
-- ejecución completa como el rol editorial restringido, sin grant nuevo.
+Las cuatro operaciones se aplican mediante el datasource del rol editorial restringido, sin
+suplantación de owner y sin agregar grants. La integración acredita así que el `LOCK TABLE` de
+`legal_requisito_conjuntos_actuales` y `legal_documento_vigentes` en modo
+`SHARE ROW EXCLUSIVE` puede adquirirse con la superficie V27 existente y mantenerse durante el
+apply completo.
+
+Las fixtures usan el único locale admitido por el contrato v1, `ES_AR` (`es-AR`), y ejercitan
+múltiples contextos y audiencias. No se modelan múltiples locales: agregar otro locale implicaría
+cambiar contrato, schema y alcance.
+
+Cada escenario acredita:
+
+- `PASS`, `APPLIED`, `persisted=true`, `operationType=RETIRE` y `readinessAfter=NOT_READY`;
+- receipt exacto para documentos, requisitos, historias, slots, punteros y lotes;
+- estados `RETIRADA`, motivos y `appliedAt` iguales a las transiciones persistidas;
+- una única transición terminal por miembro retirado;
+- `appliedAt` contenido en el bracket de timestamps obtenido directamente de PostgreSQL antes y
+  después del apply;
+- eliminación exacta de slots documentales declarados;
+- eliminación deduplicada de la unión de punteros afectados;
+- preservación exacta de estados, historias, slots, punteros, dependencias y `updatedAt` no
+  afectados;
+- sentinelas canónicos no vacíos de aceptación e idempotencia preservados en todos los casos;
+- constraints y triggers V27 satisfechos;
+- columnas de origen, aceptaciones, idempotencia y tablas ajenas sin cambios;
+- avance exclusivo de las secuencias de transición realmente consumidas;
+- ejecución completa con el rol editorial restringido y sin modificación de V27, inventario o
+  privilegios.
+
+Las tres primeras fixtures frescas parten sin lotes de reemplazo y confirman
+`replacementBatches=0`. La cuarta construye un `REPLACE` real, confirma un lote histórico sellado
+y luego aplica `RETIRE` sobre `account-closure`: las snapshots de
+`legal_documento_reemplazo_lotes`, `legal_documento_reemplazo_anteriores` y
+`legal_documento_reemplazo_sucesoras`, junto con las versiones y transiciones históricas, se
+preservan exactamente. 8E conserva replay, corrupción extra o faltante, ausencia de healing,
+fallo tardío, rollback fila por fila y completion `UNKNOWN`.
+
+### Evidencia de cierre
+
+- retiro documental: `documents=11`, `requirements=6`, `documentTransitions=23`,
+  `requirementTransitions=12`, `documentSlots=19`, `requiredSetPointers=4` y
+  `replacementBatches=0`;
+- retiro de requisito: `documents=11`, `requirements=6`, `documentTransitions=22`,
+  `requirementTransitions=13`, `documentSlots=21`, `requiredSetPointers=6` y
+  `replacementBatches=0`;
+- retiro mixto: `documents=11`, `requirements=6`, `documentTransitions=23`,
+  `requirementTransitions=13`, `documentSlots=19`, `requiredSetPointers=4` y
+  `replacementBatches=0`;
+- retiro posterior al `REPLACE` real: `documents=11`, `requirements=6`,
+  `documentTransitions=22`, `requirementTransitions=13`, `documentSlots=21`,
+  `requiredSetPointers=7` y `replacementBatches=1`;
+- la unión mixta elimina cuatro punteros únicos y no seis operaciones superpuestas;
+- los deltas RETIRE de secuencias documental/requisito son `+1/+0`, `+0/+1`, `+1/+1` y
+  `+0/+1`; las demás secuencias editoriales permanecen sin cambios respecto de la snapshot previa
+  a cada retiro;
+- la puerta focal ejecutó 42 pruebas unitarias, con cero fallos, errores u omitidas;
+- la puerta `verify` ejecutó 2.676 pruebas unitarias y 21 integraciones seleccionadas: 8 de
+  privilegios, 9 de readiness y 4 de RETIRE fresco, con cero fallos, errores u omitidas;
+- PostgreSQL 16.14, Flyway 27 y la verificación del rol restringido quedaron verdes;
+- `git diff --check` no reportó observaciones;
+- no se modificaron migraciones, grants, inventario, API, CLI ni frontend.
 
 ### Puerta
 
