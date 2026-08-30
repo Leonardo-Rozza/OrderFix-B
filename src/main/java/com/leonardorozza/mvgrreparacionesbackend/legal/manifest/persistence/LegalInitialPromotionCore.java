@@ -6,8 +6,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.Statement;
 import java.sql.Timestamp;
-import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -18,7 +16,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /** Executes only the mutating portion of a fresh, already-derived PROMOTE plan. */
-final class LegalInitialPromotionCore {
+final class LegalInitialPromotionCore implements LegalEditorialMutationWriter {
 
     private static final Comparator<UUID> UUID_ORDER = Comparator.comparing(UUID::toString);
 
@@ -28,7 +26,8 @@ final class LegalInitialPromotionCore {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
     }
 
-    LegalEditorialApplyReceipt apply(LegalEditorialExecutionPlan plan) {
+    @Override
+    public void write(LegalEditorialExecutionPlan plan) {
         LegalEditorialExecutionPlan required = requireInitialPromotion(plan);
         LegalEditorialExecutionPlan.MutationCommands commands = required.mutationCommands();
         UUID publicationId = required.target().publicationUuid();
@@ -47,27 +46,10 @@ final class LegalInitialPromotionCore {
                 commands.requirementTransitions(), EstadoVersionLegal.PUBLICADA);
         insertDocumentSlots(commands.documentSlotInserts());
         insertRequiredSetPointers(commands.requiredSetPointerInserts());
-        jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
-
-        return readReceipt(required);
     }
 
-    LegalEditorialApplyReceipt confirmAlreadyApplied(LegalEditorialExecutionPlan plan) {
-        LegalEditorialExecutionPlan required = Objects.requireNonNull(plan, "plan");
-        if (required.operationType() != LegalEditorialExecutionPlan.OperationType.PROMOTE
-                || required.changeRequired()
-                || required.source().isPresent()
-                || required.operationId().isPresent()
-                || required.planSha256().isPresent()
-                || required.expectedReadinessAfter() != LegalEditorialReadiness.READY
-                || required.acknowledgeFailClosedGap()
-                || !required.mutationCommands().isEmpty()) {
-            throw new IllegalArgumentException("El replay inicial requiere un plan PROMOTE sin cambios");
-        }
-        return readReceipt(required);
-    }
-
-    boolean usesJdbc(JdbcTemplate candidate) {
+    @Override
+    public boolean usesJdbc(JdbcTemplate candidate) {
         return jdbc == candidate;
     }
 
@@ -331,104 +313,6 @@ final class LegalInitialPromotionCore {
                 throw new IllegalStateException("El batch editorial no insertó exactamente una fila");
             }
         }
-    }
-
-    private LegalEditorialApplyReceipt readReceipt(LegalEditorialExecutionPlan plan) {
-        Map<String, Object> row = jdbc.queryForMap("""
-                SELECT p.id AS publication_id,
-                       max(t.ocurrido_en) AS applied_at,
-                       (SELECT count(*) FROM legal_publicacion_documentos pd
-                         WHERE pd.publicacion_id = p.id) AS document_versions,
-                       (SELECT count(*) FROM legal_publicacion_requisitos pr
-                         WHERE pr.publicacion_id = p.id) AS requirement_versions,
-                       (SELECT count(*) FROM legal_documento_transiciones dt
-                         JOIN legal_publicacion_documentos pd
-                           ON pd.documento_version_id = dt.documento_version_id
-                        WHERE pd.publicacion_id = p.id) AS document_transitions,
-                       (SELECT count(*) FROM legal_requisito_transiciones rt
-                         JOIN legal_publicacion_requisitos pr
-                           ON pr.requisito_version_id = rt.requisito_version_id
-                        WHERE pr.publicacion_id = p.id) AS requirement_transitions,
-                       (SELECT count(*) FROM legal_documento_vigentes s
-                         WHERE s.publicacion_id = p.id) AS document_slots,
-                       (SELECT count(*) FROM legal_requisito_conjuntos_actuales a
-                         WHERE a.publicacion_id = p.id) AS required_set_pointers,
-                       (SELECT count(DISTINCT dt.reemplazo_lote_id)
-                          FROM legal_documento_transiciones dt
-                          JOIN legal_publicacion_documentos pd
-                            ON pd.documento_version_id = dt.documento_version_id
-                         WHERE pd.publicacion_id = p.id
-                           AND dt.reemplazo_lote_id IS NOT NULL) AS replacement_batches
-                  FROM legal_publicaciones p
-                  JOIN (
-                        SELECT dt.ocurrido_en, pd.publicacion_id
-                          FROM legal_documento_transiciones dt
-                          JOIN legal_publicacion_documentos pd
-                            ON pd.documento_version_id = dt.documento_version_id
-                        UNION ALL
-                        SELECT rt.ocurrido_en, pr.publicacion_id
-                          FROM legal_requisito_transiciones rt
-                          JOIN legal_publicacion_requisitos pr
-                            ON pr.requisito_version_id = rt.requisito_version_id
-                  ) t ON t.publicacion_id = p.id
-                 WHERE p.id = ?
-                 GROUP BY p.id
-                """, plan.target().publicationUuid());
-        if (!plan.target().publicationUuid().equals(row.get("publication_id"))) {
-            throw new IllegalStateException("No se pudo releer el receipt PROMOTE exacto");
-        }
-        LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
-                LegalEditorialApplyReceipt.OperationType.PROMOTE,
-                plan.target().publicationUuid(),
-                instant(row.get("applied_at")),
-                LegalEditorialReadiness.READY,
-                number(row, "document_versions"),
-                number(row, "requirement_versions"),
-                number(row, "document_transitions"),
-                number(row, "requirement_transitions"),
-                number(row, "document_slots"),
-                number(row, "required_set_pointers"),
-                number(row, "replacement_batches"));
-        LegalEditorialExecutionPlan.ExpectedPostState expected = plan.expectedPostState();
-        Instant expectedAppliedAt = java.util.stream.Stream.concat(
-                        expected.documentTransitions().stream()
-                                .map(LegalEditorialExecutionPlan.DocumentTransition::occurredAt),
-                        expected.requirementTransitions().stream()
-                                .map(LegalEditorialExecutionPlan.RequirementTransition::occurredAt))
-                .max(Comparator.naturalOrder())
-                .orElseThrow(() -> new IllegalStateException("PROMOTE carece de transiciones"));
-        if (!receipt.appliedAt().equals(expectedAppliedAt)
-                || receipt.documentVersions() != expected.documentStates().size()
-                || receipt.requirementVersions() != expected.requirementStates().size()
-                || receipt.documentTransitions() != expected.documentTransitions().size()
-                || receipt.requirementTransitions() != expected.requirementTransitions().size()
-                || receipt.documentSlots() != expected.documentSlots().size()
-                || receipt.requiredSetPointers() != expected.requiredSetPointers().size()
-                || receipt.replacementBatches() != expected.replacementBatches().size()) {
-            throw new IllegalStateException("El receipt PROMOTE no coincide con el plan aplicado");
-        }
-        return receipt;
-    }
-
-    private static int number(Map<String, Object> row, String key) {
-        Object value = row.get(key);
-        if (!(value instanceof Number number)) {
-            throw new IllegalStateException("El receipt PROMOTE carece de " + key);
-        }
-        return Math.toIntExact(number.longValue());
-    }
-
-    private static Instant instant(Object value) {
-        if (value instanceof OffsetDateTime timestamp) {
-            return timestamp.toInstant();
-        }
-        if (value instanceof Timestamp timestamp) {
-            return timestamp.toInstant();
-        }
-        if (value instanceof Instant timestamp) {
-            return timestamp;
-        }
-        throw new IllegalStateException("El receipt PROMOTE carece de appliedAt");
     }
 
     private static List<UUID> distinctSorted(List<UUID> ids) {

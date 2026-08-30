@@ -189,6 +189,12 @@ public class LegalEditorialDatabaseConfiguration {
     }
 
     @Bean
+    LegalEditorialPostStateVerifier legalEditorialPostStateVerifier(
+            JdbcTemplate jdbcTemplate) {
+        return new LegalEditorialPostStateVerifier(jdbcTemplate);
+    }
+
+    @Bean
     LegalEditorialFailureMapper legalEditorialFailureMapper() {
         return new LegalEditorialFailureMapper();
     }
@@ -240,6 +246,7 @@ public class LegalEditorialDatabaseConfiguration {
             JdbcTemplate jdbcTemplate,
             LegalEditorialPlannerCore plannerCore,
             LegalInitialPromotionCore promotionCore,
+            LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
@@ -249,6 +256,7 @@ public class LegalEditorialDatabaseConfiguration {
                 jdbcTemplate,
                 plannerCore,
                 promotionCore,
+                postStateVerifier,
                 readinessCore,
                 failureMapper,
                 schemaVerifier,

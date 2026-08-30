@@ -111,6 +111,12 @@ class LegalEditorialDatabaseIsolationIT {
             assertThat(context.getBeansOfType(LegalEditorialReadinessService.class)).hasSize(1);
             assertThat(context.getBeansOfType(LegalEditorialPlanService.class)).hasSize(1);
             assertThat(context.getBeansOfType(LegalEditorialApplyService.class)).hasSize(1);
+            assertThat(context.getBeansOfType(LegalEditorialMutationWriter.class).values())
+                    .singleElement()
+                    .satisfies(writer -> assertThat(writer.usesJdbc(jdbc)).isTrue());
+            assertThat(context.getBeansOfType(LegalEditorialPostStateVerifier.class).values())
+                    .singleElement()
+                    .satisfies(verifier -> assertThat(verifier.usesJdbc(jdbc)).isTrue());
             assertThat(context.getBeansOfType(LegalManifestDryRunService.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalManifestImportService.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalImportPrivilegeVerifier.class)).isEmpty();

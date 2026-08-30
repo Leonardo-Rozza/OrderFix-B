@@ -21,7 +21,8 @@ public final class LegalEditorialApplyService {
     private final LegalManifestDatabaseGate databaseGate;
     private final JdbcTemplate jdbc;
     private final LegalEditorialPlannerCore planner;
-    private final LegalInitialPromotionCore promotionCore;
+    private final LegalEditorialMutationWriter mutationWriter;
+    private final LegalEditorialPostStateVerifier postStateVerifier;
     private final LegalEditorialReadinessCore readinessCore;
     private final LegalEditorialFailureMapper failureMapper;
 
@@ -29,7 +30,8 @@ public final class LegalEditorialApplyService {
             LegalManifestDatabaseGate databaseGate,
             JdbcTemplate jdbc,
             LegalEditorialPlannerCore planner,
-            LegalInitialPromotionCore promotionCore,
+            LegalEditorialMutationWriter mutationWriter,
+            LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
@@ -37,7 +39,10 @@ public final class LegalEditorialApplyService {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.planner = Objects.requireNonNull(planner, "planner");
-        this.promotionCore = Objects.requireNonNull(promotionCore, "promotionCore");
+        this.mutationWriter = Objects.requireNonNull(mutationWriter, "mutationWriter");
+        this.postStateVerifier = Objects.requireNonNull(
+                postStateVerifier,
+                "postStateVerifier");
         this.readinessCore = Objects.requireNonNull(readinessCore, "readinessCore");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
         this.databaseGate.requireExactEditorialPreflights(
@@ -56,8 +61,8 @@ public final class LegalEditorialApplyService {
             databaseGate.executeMutable(status -> {
                 transactionState.callbackStarted();
                 Instant observedAt = readTransactionTimestamp();
-                LegalEditorialExecutionPlan plan = requireApplicable(
-                        planner.planPromote(target, observedAt));
+                LegalEditorialExecutionPlan plan = requirePromotePlan(requireApplicable(
+                        planner.planPromote(target, observedAt)));
 
                 ConfirmedApply confirmed = plan.changeRequired()
                         ? applyFresh(target, plan, observedAt)
@@ -82,9 +87,11 @@ public final class LegalEditorialApplyService {
             ValidatedRelease target,
             LegalEditorialExecutionPlan plan,
             Instant observedAt) {
-        LegalEditorialApplyReceipt receipt = promotionCore.apply(plan);
+        mutationWriter.write(plan);
+        LegalEditorialApplyReceipt receipt = postStateVerifier.verify(plan);
+        jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
         LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, observedAt);
-        requireReadyPostcondition(readiness, receipt, observedAt);
+        requireReadyPostcondition(readiness, receipt, plan);
         return new ConfirmedApply(
                 LegalEditorialApplyResult.Outcome.APPLIED,
                 receipt);
@@ -93,7 +100,7 @@ public final class LegalEditorialApplyService {
     private ConfirmedApply confirmReplay(LegalEditorialExecutionPlan plan) {
         return new ConfirmedApply(
                 LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
-                promotionCore.confirmAlreadyApplied(plan));
+                postStateVerifier.verify(plan));
     }
 
     private static LegalEditorialExecutionPlan requireApplicable(
@@ -108,10 +115,20 @@ public final class LegalEditorialApplyService {
         };
     }
 
+    private static LegalEditorialExecutionPlan requirePromotePlan(
+            LegalEditorialExecutionPlan plan) {
+        if (plan.operationType() != LegalEditorialExecutionPlan.OperationType.PROMOTE) {
+            throw new LegalEditorialOperationalException(
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
+                    OBSERVATION_LOCATION);
+        }
+        return plan;
+    }
+
     private static void requireReadyPostcondition(
             LegalEditorialReadinessResult result,
             LegalEditorialApplyReceipt receipt,
-            Instant observedAt) {
+            LegalEditorialExecutionPlan plan) {
         if (result.readiness() == LegalEditorialReadiness.ERROR) {
             throw new LegalEditorialOperationalException(result.issues().getFirst());
         }
@@ -120,20 +137,14 @@ public final class LegalEditorialApplyService {
         }
         LegalEditorialReadinessObservation observation = result.observation().orElseThrow();
         boolean exact = observation.publicationUuid()
-                        .filter(receipt.targetPublicationUuid()::equals)
+                        .filter(plan.target().publicationUuid()::equals)
                         .isPresent()
-                && observation.observedAt().equals(observedAt)
-                && receipt.operationType()
-                        == LegalEditorialApplyReceipt.OperationType.PROMOTE
-                && receipt.appliedAt().equals(observedAt)
-                && receipt.readinessAfter() == LegalEditorialReadiness.READY
-                && receipt.documentVersions() == observation.documentVersions()
-                && receipt.requirementVersions() == observation.requirementVersions()
-                && receipt.documentTransitions() == observation.documentTransitions()
-                && receipt.requirementTransitions() == observation.requirementTransitions()
-                && receipt.documentSlots() == observation.documentSlots()
-                && receipt.requiredSetPointers() == observation.currentRequirementSets()
-                && receipt.replacementBatches() == observation.replacementLots();
+                && observation.observedAt().equals(plan.observedAt())
+                && receipt.operationType() == receiptOperation(plan.operationType())
+                && receipt.targetPublicationUuid().equals(plan.target().publicationUuid())
+                && receipt.appliedAt().equals(plan.expectedAppliedAt())
+                && receipt.readinessAfter() == plan.expectedReadinessAfter()
+                && promoteReadinessCountsMatch(plan, observation, receipt);
         if (!exact) {
             throw postconditionFailure();
         }
@@ -149,7 +160,8 @@ public final class LegalEditorialApplyService {
     private void requireSharedJdbcSession() {
         if (!databaseGate.usesJdbc(jdbc)
                 || !planner.usesJdbc(jdbc)
-                || !promotionCore.usesJdbc(jdbc)
+                || !mutationWriter.usesJdbc(jdbc)
+                || !postStateVerifier.usesJdbc(jdbc)
                 || !readinessCore.usesJdbc(jdbc)) {
             throw new LegalEditorialOperationalException(
                     LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
@@ -199,6 +211,29 @@ public final class LegalEditorialApplyService {
         return new LegalEditorialOperationalException(
                 LegalManifestIssueCode.POSTCONDITION_NOT_READY,
                 POSTCONDITION_LOCATION);
+    }
+
+    private static LegalEditorialApplyReceipt.OperationType receiptOperation(
+            LegalEditorialExecutionPlan.OperationType operationType) {
+        return switch (operationType) {
+            case PROMOTE -> LegalEditorialApplyReceipt.OperationType.PROMOTE;
+            case REPLACE -> LegalEditorialApplyReceipt.OperationType.REPLACE;
+            case RETIRE -> LegalEditorialApplyReceipt.OperationType.RETIRE;
+        };
+    }
+
+    private static boolean promoteReadinessCountsMatch(
+            LegalEditorialExecutionPlan plan,
+            LegalEditorialReadinessObservation observation,
+            LegalEditorialApplyReceipt receipt) {
+        return plan.operationType() != LegalEditorialExecutionPlan.OperationType.PROMOTE
+                || (receipt.documentVersions() == observation.documentVersions()
+                        && receipt.requirementVersions() == observation.requirementVersions()
+                        && receipt.documentTransitions() == observation.documentTransitions()
+                        && receipt.requirementTransitions() == observation.requirementTransitions()
+                        && receipt.documentSlots() == observation.documentSlots()
+                        && receipt.requiredSetPointers() == observation.currentRequirementSets()
+                        && receipt.replacementBatches() == observation.replacementLots());
     }
 
     private record ConfirmedApply(

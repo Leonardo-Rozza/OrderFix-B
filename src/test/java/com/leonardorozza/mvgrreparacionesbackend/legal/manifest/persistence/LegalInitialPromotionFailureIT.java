@@ -42,6 +42,7 @@ import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persisten
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.pooledDataSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -119,14 +120,14 @@ class LegalInitialPromotionFailureIT {
     }
 
     @Test
-    void aNotReadyPostconditionRollsBackTheCompletePromotion() throws Exception {
+    void aPostStateMismatchRollsBackTheCompletePromotion() throws Exception {
         ImportedRelease target = importedDraft("initial-promotion-postcondition-v1");
         Map<String, Long> rowsBeforeAttempt = editorialTableCounts(observer);
-        LegalInitialPromotionCore sabotagedCore = mock(LegalInitialPromotionCore.class);
-        when(sabotagedCore.usesJdbc(production.jdbc())).thenReturn(true);
-        when(sabotagedCore.apply(any())).thenAnswer(invocation -> {
-            LegalEditorialApplyReceipt receipt = production.promotionCore()
-                    .apply(invocation.getArgument(0));
+        LegalEditorialMutationWriter sabotagedWriter =
+                mock(LegalEditorialMutationWriter.class);
+        when(sabotagedWriter.usesJdbc(production.jdbc())).thenReturn(true);
+        doAnswer(invocation -> {
+            production.promotionCore().write(invocation.getArgument(0));
             int deleted = production.jdbc().update("""
                     DELETE FROM legal_requisito_conjuntos_actuales
                      WHERE contexto = 'CIERRE_CUENTA'
@@ -134,13 +135,14 @@ class LegalInitialPromotionFailureIT {
                        AND publicacion_id = ?
                     """, target.publicationId());
             assertThat(deleted).isEqualTo(1);
-            return receipt;
-        });
+            return null;
+        }).when(sabotagedWriter).write(any());
         LegalEditorialApplyService sabotagedService = new LegalEditorialApplyService(
                 production.gate(),
                 production.jdbc(),
                 production.plannerCore(),
-                sabotagedCore,
+                sabotagedWriter,
+                production.postStateVerifier(),
                 production.readinessCore(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),
@@ -174,6 +176,7 @@ class LegalInitialPromotionFailureIT {
                 production.jdbc(),
                 sabotagedPlanner,
                 production.promotionCore(),
+                production.postStateVerifier(),
                 production.readinessCore(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),

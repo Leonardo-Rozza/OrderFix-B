@@ -391,6 +391,7 @@ class LegalEditorialPrivilegeVerifierIT {
                 jdbc,
                 planner,
                 new LegalInitialPromotionCore(jdbc),
+                new LegalEditorialPostStateVerifier(jdbc),
                 readiness,
                 new LegalEditorialFailureMapper(),
                 schema,

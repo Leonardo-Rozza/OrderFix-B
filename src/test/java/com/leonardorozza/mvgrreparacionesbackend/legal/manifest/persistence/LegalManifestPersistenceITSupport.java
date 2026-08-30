@@ -266,6 +266,8 @@ final class LegalManifestPersistenceITSupport {
                 readinessCore,
                 originVerifier);
         LegalInitialPromotionCore promotionCore = new LegalInitialPromotionCore(jdbc);
+        LegalEditorialPostStateVerifier postStateVerifier =
+                new LegalEditorialPostStateVerifier(jdbc);
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -276,6 +278,7 @@ final class LegalManifestPersistenceITSupport {
                 jdbc,
                 plannerCore,
                 promotionCore,
+                postStateVerifier,
                 readinessCore,
                 new LegalEditorialFailureMapper(),
                 schemaVerifier,
@@ -291,6 +294,7 @@ final class LegalManifestPersistenceITSupport {
                 readinessCore,
                 plannerCore,
                 promotionCore,
+                postStateVerifier,
                 service);
     }
 
@@ -905,6 +909,7 @@ final class LegalManifestPersistenceITSupport {
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialPlannerCore plannerCore,
             LegalInitialPromotionCore promotionCore,
+            LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialApplyService service
     ) { }
 

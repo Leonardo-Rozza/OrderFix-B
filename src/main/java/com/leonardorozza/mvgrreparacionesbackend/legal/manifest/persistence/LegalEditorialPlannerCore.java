@@ -2471,11 +2471,11 @@ final class LegalEditorialPlannerCore {
     }
 
     /** Bounded SELECT-only materialization used by the pure classifier above. */
-    private static final class JdbcPlannerStateReader implements PlannerStateReader {
+    static final class JdbcPlannerStateReader implements PlannerStateReader {
 
         private final JdbcTemplate jdbc;
 
-        private JdbcPlannerStateReader(JdbcTemplate jdbc) {
+        JdbcPlannerStateReader(JdbcTemplate jdbc) {
             this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         }
 

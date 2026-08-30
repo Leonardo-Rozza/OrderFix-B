@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-29
 
-Estado: en ejecución — Subcortes 6A y 6B completados
+Estado: en ejecución — Subcortes 6A, 6B y 6C completados
 
 Diseño aprobado:
 
@@ -184,6 +184,8 @@ Commit:
 
 ## Subcorte 6C — Writers y postestado común
 
+Estado: completado el 2026-08-29.
+
 ### Objetivo
 
 Separar coordinación, DML y verificación sin cambiar el comportamiento acreditado de PROMOTE.
@@ -220,7 +222,7 @@ Separar coordinación, DML y verificación sin cambiar el comportamiento acredit
 ### Puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialPostStateVerifierTest,LegalInitialPromotionCoreTest,LegalEditorialApplyServiceTest,LegalEditorialTransactionBoundaryTest,LegalEditorialApplyReceiptTest test
+./mvnw -Dtest=LegalEditorialPostStateVerifierTest,LegalEditorialMutationWriterTest,LegalInitialPromotionCoreTest,LegalEditorialApplyServiceTest,LegalEditorialTransactionBoundaryTest,LegalEditorialApplyReceiptTest test
 ./mvnw -Dit.test=LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialDatabaseIsolationIT verify
 git diff --check
 git status --short
@@ -229,6 +231,33 @@ git status --short
 Commit:
 
     refactor(legal): separa mutacion y postestado editorial
+
+### Evidencia de cierre 6C
+
+- `LegalInitialPromotionCore` implementa la nueva frontera `LegalEditorialMutationWriter` y quedó
+  limitado a releer/bloquear el grafo y ejecutar los seis batches PROMOTE exactos. Ya no acredita
+  replay, construye receipts, fuerza constraints ni consulta readiness.
+- `LegalEditorialPostStateVerifier` es SELECT-only y quedó como única autoridad del receipt fresco
+  y de replay. Compara membresía target, estados, historia completa (prehistoria más delta), slots,
+  punteros y lotes, y usa siempre `expectedAppliedAt`; no infiere tiempo mediante
+  `max(historial)`.
+- El coordinador ejecuta `writer → verifier → SET CONSTRAINTS ALL IMMEDIATE → readiness`. Replay
+  ejecuta sólo el verificador, y `applyPromote` rechaza fail-closed un plan de otro tipo antes de
+  writer o verifier. PROMOTE conserva además la igualdad de sus siete conteos receipt↔readiness.
+- Completion-state conserva el contrato previo: un commit confirmado devuelve su receipt y
+  `UNKNOWN` nunca filtra receipt ni metadata tentativa. Un mismatch real detectado por el
+  verificador, una constraint diferida o readiness no exacto revierten todo el delta.
+- TDD: el primer focal rojo falló por las dos fronteras todavía ausentes. El focal final en Java
+  21 ejecutó 40 tests, sin fallos, errores ni omitidos; congela orden, SQL y parámetros de los seis
+  batches, replay select-only, historia previa separada del delta y guard PROMOTE.
+- Puerta final `verify`: suite unitaria backend completa de 1.829 tests y 22 tests de integración
+  sobre PostgreSQL 16/Flyway V27, todos sin fallos, errores ni omitidos. Incluye promoción,
+  replay, rollback por corrupción observada, constraints, readiness y sesión JDBC única.
+- Tres revisiones independientes cerraron sin hallazgos P0–P2 ejecutables en 6C. Antes de exponer
+  `apply-replace`, 6D debe representar y probar lotes históricos de reemplazos encadenados; la
+  membresía parcial RETIRE y la extracción del reader anidado permanecen fuera de este subcorte.
+- No se modificaron V27, grants, endpoints, JPA, frontend, contenido legal ni despliegue; no hubo
+  push.
 
 ## Subcorte 6D — Apply REPLACE uno a uno
 
@@ -252,20 +281,22 @@ Ejecutar el delta REPLACE permitido y exponer `apply-replace` con la frontera tr
 
 ### Pasos
 
-1. Ejecutar `LegalEditorialReplaceScopeGuard` sobre `ValidatedEditorialPlan` antes de
+1. Extender el verificador para acreditar lotes históricos además del lote nuevo y cubrir un
+   reemplazo encadenado X→B→C sin tratar el lote X como extra.
+2. Ejecutar `LegalEditorialReplaceScopeGuard` sobre `ValidatedEditorialPlan` antes de
    `executeMutable`; una entrada programática fuera de alcance no abre el gate ni JDBC.
-2. Repetir la defensa 0..1/1→1 sobre execution plan antes del primer DML.
-3. Releer y bloquear publicaciones, líneas y versiones en orden UUID.
-4. Releer slots/punteros en orden PK bajo advisory lock, sin ampliar row-lock grants.
-5. Revalidar source fingerprint y grafo exacto bajo locks.
-6. Ejecutar el orden DML congelado y cardinalidad exacta por batch.
-7. Eliminar todos los punteros observados por PK más `conjunto_id` esperado.
-8. Crear/sellar el lote opcional sin duplicar efectos de triggers V27.
-9. Ejecutar retiros, requisitos, rebinds y punteros target.
-10. Verificar el postestado antes de constraints y readiness después.
-11. Implementar replay con verifier, sin writer ni avance de secuencias.
-12. Exponer `apply-replace`, exigir flag e incluir identidad input-safe en fallos/UNKNOWN.
-13. Probar rollback en cada frontera tardía y ausencia de DML fuera de superficie.
+3. Repetir la defensa 0..1/1→1 sobre execution plan antes del primer DML.
+4. Releer y bloquear publicaciones, líneas y versiones en orden UUID.
+5. Releer slots/punteros en orden PK bajo advisory lock, sin ampliar row-lock grants.
+6. Revalidar source fingerprint y grafo exacto bajo locks.
+7. Ejecutar el orden DML congelado y cardinalidad exacta por batch.
+8. Eliminar todos los punteros observados por PK más `conjunto_id` esperado.
+9. Crear/sellar el lote opcional sin duplicar efectos de triggers V27.
+10. Ejecutar retiros, requisitos, rebinds y punteros target.
+11. Verificar el postestado antes de constraints y readiness después.
+12. Implementar replay con verifier, sin writer ni avance de secuencias.
+13. Exponer `apply-replace`, exigir flag e incluir identidad input-safe en fallos/UNKNOWN.
+14. Probar rollback en cada frontera tardía y ausencia de DML fuera de superficie.
 
 ### Puerta
 

@@ -13,7 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,7 +46,7 @@ class LegalInitialPromotionCoreTest {
     private static final UUID REQUIRED_SET = uuid(40);
 
     @Test
-    void locksInUuidOrderThenExecutesTheV27ProtocolAndRereadsTheReceipt() {
+    void locksInUuidOrderThenExecutesOnlyTheSixV27MutationBatches() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         LegalEditorialExecutionPlan plan = promotePlan();
         stubLockedGraph(jdbc);
@@ -58,24 +58,50 @@ class LegalInitialPromotionCoreTest {
             rows.add(batchRows);
             return java.util.stream.IntStream.range(0, batchRows.size()).map(ignored -> 1).toArray();
         }).when(jdbc).batchUpdate(anyString(), any(List.class));
-        when(jdbc.queryForMap(anyString(), any(Object[].class))).thenReturn(receiptRow());
+        new LegalInitialPromotionCore(jdbc).write(plan);
 
-        LegalEditorialApplyReceipt receipt = new LegalInitialPromotionCore(jdbc).apply(plan);
-
-        assertThat(receipt.operationType()).isEqualTo(LegalEditorialApplyReceipt.OperationType.PROMOTE);
-        assertThat(receipt.targetPublicationUuid()).isEqualTo(PUBLICATION);
-        assertThat(receipt.appliedAt()).isEqualTo(APPLIED_AT);
-        assertThat(receipt.documentTransitions()).isEqualTo(4);
-        assertThat(receipt.requirementTransitions()).isEqualTo(2);
         assertThat(batches).hasSize(6);
-        assertThat(batches.get(0)).contains("legal_documento_transiciones");
-        assertThat(batches.get(1)).contains("legal_requisito_transiciones");
-        assertThat(batches.get(2)).contains("legal_documento_transiciones");
-        assertThat(batches.get(3)).contains("legal_requisito_transiciones");
-        assertThat(rows.get(0)).extracting(row -> row[0]).containsExactly(DOCUMENT_A, DOCUMENT_B);
-        assertThat(rows.get(1)).extracting(row -> row[0]).containsExactly(REQUIREMENT);
-        assertThat(rows.get(2)).extracting(row -> row[0]).containsExactly(DOCUMENT_A, DOCUMENT_B);
-        assertThat(rows.get(3)).extracting(row -> row[0]).containsExactly(REQUIREMENT);
+        assertThat(batches.get(0)).contains("INSERT INTO legal_documento_transiciones");
+        assertThat(batches.get(1)).contains("INSERT INTO legal_requisito_transiciones");
+        assertThat(batches.get(2)).contains("INSERT INTO legal_documento_transiciones");
+        assertThat(batches.get(3)).contains("INSERT INTO legal_requisito_transiciones");
+        assertThat(batches.get(4)).contains("INSERT INTO legal_documento_vigentes");
+        assertThat(batches.get(5)).contains("INSERT INTO legal_requisito_conjuntos_actuales");
+
+        Timestamp appliedAt = Timestamp.from(APPLIED_AT);
+        assertThat(rowValues(rows.get(0))).containsExactly(
+                Arrays.asList(DOCUMENT_A, "BORRADOR", "PUBLICADA", null, null, appliedAt),
+                Arrays.asList(DOCUMENT_B, "BORRADOR", "PUBLICADA", null, null, appliedAt));
+        assertThat(rowValues(rows.get(1))).containsExactly(
+                Arrays.asList(REQUIREMENT, "BORRADOR", "PUBLICADA", null, appliedAt));
+        assertThat(rowValues(rows.get(2))).containsExactly(
+                Arrays.asList(DOCUMENT_A, "PUBLICADA", "VIGENTE", null, null, appliedAt),
+                Arrays.asList(DOCUMENT_B, "PUBLICADA", "VIGENTE", null, null, appliedAt));
+        assertThat(rowValues(rows.get(3))).containsExactly(
+                Arrays.asList(REQUIREMENT, "PUBLICADA", "VIGENTE", null, appliedAt));
+        assertThat(rowValues(rows.get(4))).containsExactly(
+                Arrays.asList(
+                        TipoDocumentoLegal.TERMINOS_SERVICIO.name(),
+                        LocaleLegal.ES_AR.getCodigo(),
+                        ContextoLegal.REGISTRO.name(),
+                        DOCUMENT_A,
+                        DOCUMENT_LINE_A,
+                        PUBLICATION),
+                Arrays.asList(
+                        TipoDocumentoLegal.POLITICA_PRIVACIDAD.name(),
+                        LocaleLegal.ES_AR.getCodigo(),
+                        ContextoLegal.USO_CONTINUADO.name(),
+                        DOCUMENT_B,
+                        DOCUMENT_LINE_B,
+                        PUBLICATION));
+        assertThat(rowValues(rows.get(5))).containsExactly(
+                Arrays.asList(
+                        LocaleLegal.ES_AR.getCodigo(),
+                        ContextoLegal.REGISTRO.name(),
+                        AudienciaLegal.ADMIN_TITULAR.name(),
+                        REQUIRED_SET,
+                        PUBLICATION,
+                        appliedAt));
 
         InOrder order = inOrder(jdbc);
         order.verify(jdbc).queryForList(
@@ -100,8 +126,8 @@ class LegalInitialPromotionCoreTest {
                 org.mockito.ArgumentMatchers.contains("FROM legal_requisito_versiones"),
                 any(Object[].class));
         order.verify(jdbc, org.mockito.Mockito.times(6)).batchUpdate(anyString(), any(List.class));
-        order.verify(jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
-        order.verify(jdbc).queryForMap(anyString(), any(Object[].class));
+        verify(jdbc, never()).execute(anyString());
+        verify(jdbc, never()).queryForMap(anyString(), any(Object[].class));
     }
 
     @Test
@@ -113,9 +139,7 @@ class LegalInitialPromotionCoreTest {
             List<Object[]> rows = invocation.getArgument(1);
             return java.util.stream.IntStream.range(0, rows.size()).map(ignored -> 1).toArray();
         });
-        when(jdbc.queryForMap(anyString(), any(Object[].class))).thenReturn(receiptRow());
-
-        new LegalInitialPromotionCore(jdbc).apply(plan);
+        new LegalInitialPromotionCore(jdbc).write(plan);
 
         InOrder order = inOrder(jdbc);
         order.verify(jdbc).queryForList(
@@ -151,7 +175,7 @@ class LegalInitialPromotionCoreTest {
         LegalEditorialExecutionPlan plan = mock(LegalEditorialExecutionPlan.class);
         when(plan.operationType()).thenReturn(LegalEditorialExecutionPlan.OperationType.REPLACE);
 
-        assertThatThrownBy(() -> new LegalInitialPromotionCore(jdbc).apply(plan))
+        assertThatThrownBy(() -> new LegalInitialPromotionCore(jdbc).write(plan))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("PROMOTE");
         verifyNoInteractions(jdbc);
@@ -163,40 +187,9 @@ class LegalInitialPromotionCoreTest {
         LegalEditorialExecutionPlan plan = promotePlan();
         stubLockedGraph(jdbc, PUBLICATION, "otra");
 
-        assertThatThrownBy(() -> new LegalInitialPromotionCore(jdbc).apply(plan))
+        assertThatThrownBy(() -> new LegalInitialPromotionCore(jdbc).write(plan))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("no coincide");
-        verify(jdbc, never()).batchUpdate(anyString(), any(List.class));
-        verify(jdbc, never()).execute(anyString());
-    }
-
-    @Test
-    void confirmsReplayUsingMembershipEvidenceWithoutLocksOrWrites() {
-        JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        LegalEditorialExecutionPlan fresh = promotePlan();
-        LegalEditorialExecutionPlan replay = mock(LegalEditorialExecutionPlan.class);
-        LegalEditorialExecutionPlan.PublicationIdentity target = fresh.target();
-        LegalEditorialExecutionPlan.ExpectedPostState expectedPostState = fresh.expectedPostState();
-        when(replay.operationType()).thenReturn(LegalEditorialExecutionPlan.OperationType.PROMOTE);
-        when(replay.changeRequired()).thenReturn(false);
-        when(replay.source()).thenReturn(Optional.empty());
-        when(replay.operationId()).thenReturn(Optional.empty());
-        when(replay.planSha256()).thenReturn(Optional.empty());
-        when(replay.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
-        when(replay.acknowledgeFailClosedGap()).thenReturn(false);
-        when(replay.mutationCommands()).thenReturn(LegalEditorialExecutionPlan.MutationCommands.empty());
-        when(replay.target()).thenReturn(target);
-        when(replay.expectedPostState()).thenReturn(expectedPostState);
-        when(jdbc.queryForMap(anyString(), any(Object[].class))).thenReturn(receiptRow());
-
-        LegalEditorialApplyReceipt receipt =
-                new LegalInitialPromotionCore(jdbc).confirmAlreadyApplied(replay);
-
-        assertThat(receipt.targetPublicationUuid()).isEqualTo(PUBLICATION);
-        verify(jdbc).queryForMap(
-                org.mockito.ArgumentMatchers.contains("legal_publicacion_documentos"),
-                any(Object[].class));
-        verify(jdbc, never()).queryForList(anyString(), any(Object[].class));
         verify(jdbc, never()).batchUpdate(anyString(), any(List.class));
         verify(jdbc, never()).execute(anyString());
     }
@@ -210,9 +203,13 @@ class LegalInitialPromotionCoreTest {
                 .doesNotContain("TransactionTemplate", "LegalManifestDatabaseGate", "Clock.",
                         "transaction_timestamp()", "UPDATE legal_documento_versiones",
                         "UPDATE legal_requisito_versiones", "legal_validar_publicacion_sellada",
-                        "publicacion_intro_id =")
-                .contains("SET CONSTRAINTS ALL IMMEDIATE", "FOR UPDATE",
-                        "v.publicacion_intro_id");
+                        "publicacion_intro_id =", "SET CONSTRAINTS ALL IMMEDIATE",
+                        "LegalEditorialApplyReceipt", "queryForMap", ".update(", "DELETE FROM")
+                .contains("FOR UPDATE", "v.publicacion_intro_id");
+    }
+
+    private static List<List<Object>> rowValues(List<Object[]> rows) {
+        return rows.stream().map(Arrays::asList).toList();
     }
 
     @SuppressWarnings("unchecked")
@@ -336,20 +333,6 @@ class LegalInitialPromotionCoreTest {
             }
             throw new AssertionError("SQL inesperado: " + sql);
         }).when(jdbc).queryForList(anyString(), any(Object[].class));
-    }
-
-    private static Map<String, Object> receiptRow() {
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("publication_id", PUBLICATION);
-        row.put("applied_at", Timestamp.from(APPLIED_AT));
-        row.put("document_versions", 2L);
-        row.put("requirement_versions", 1L);
-        row.put("document_transitions", 4L);
-        row.put("requirement_transitions", 2L);
-        row.put("document_slots", 2L);
-        row.put("required_set_pointers", 1L);
-        row.put("replacement_batches", 0L);
-        return row;
     }
 
     private static LegalEditorialExecutionPlan.DocumentTransition doc(
