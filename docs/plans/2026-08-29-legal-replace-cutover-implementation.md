@@ -442,3 +442,7 @@ Los cinco subcortes quedan ordenados en commits locales atómicos:
 Corte 7 y la Fase 2.3C permanecen pendientes. Concurrencia multithread, capacidad y matriz completa
 de procesos continúan reservadas para Corte 10. El cierre no equivale a producción pública, push ni
 deploy.
+
+Nota de continuidad (2026-08-30): el párrafo anterior conserva el estado histórico al cerrar el
+Corte 6. Corte 7 fue completado posteriormente en cinco commits locales; la Fase 2.3C, los Cortes 8
+a 11 y la habilitación de producción pública continúan pendientes.

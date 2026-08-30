@@ -2,8 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario el 2026-08-30; implementación en ejecución, Subcortes 7A a 7D
-completados y 7E pendiente
+Estado: aprobado por el usuario y completado el 2026-08-30; Subcortes 7A a 7E acreditados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -214,3 +213,8 @@ Cada subcorte termina en un commit local atómico. No se hace push ni deploy.
 Corte 7 queda cerrado cuando `1→N`, `N→1` y múltiples lotes disjuntos convergen a `READY` con el
 rol exacto, `N→M` permanece fail-closed, replay es no mutante, un fallo multibatch revierte toda la
 operación y las regresiones de Corte 6/V27 permanecen verdes.
+
+Estado del criterio: satisfecho el 2026-08-30. La evidencia ejecutable, los conteos finales y los
+cinco commits locales se registran en
+`docs/plans/2026-08-30-legal-split-merge-implementation.md`. Corte 7 no cierra la Fase 2.3C ni
+habilita por sí solo producción pública.

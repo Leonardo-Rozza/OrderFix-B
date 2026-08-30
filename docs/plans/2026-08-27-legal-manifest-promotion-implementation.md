@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4, 5 y 6
-completados; Corte 7 en ejecución con Subcortes 7A a 7D completados; Cortes 8 a 11 pendientes
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 7 completados;
+Cortes 8 a 11 pendientes
 
 Diseño aprobado:
 
@@ -947,7 +947,7 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A a 7D completados y 7E pendiente.
+Estado: completado el 2026-08-30; Subcortes 7A a 7E acreditados.
 
 Diseño específico aprobado:
 
@@ -997,17 +997,34 @@ Modificar:
 ### Pruebas y puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialApplyServiceReplaceTest test
-./mvnw -Dit.test=LegalEditorialSplitMergeIT,LegalEditorialReplaceIT,LegalConcurrencyIT verify
+./mvnw -Dtest=LegalEditorialPlanValidatorTest,LegalEditorialReplaceScopeGuardTest,LegalEditorialExecutionPlanTest,LegalEditorialPlannerCoreTest,LegalDocumentReplacementWriterTest,LegalEditorialPostStateVerifierTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialPlanServiceTest,LegalEditorialCliTest,LegalEditorialReportTest test
+./mvnw -Dit.test=LegalEditorialSplitMergeIT,LegalEditorialReplaceIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestImportIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT,LegalConcurrencyIT verify
+./mvnw test
+sh -n scripts/legal-manifest-editor.sh
 git diff --check
 git status --short
 ~~~
 
-Al cierre del Subcorte 7D, PostgreSQL 16.14/Flyway V27 acredita replay multibatch sin DML,
-corrupción extra/faltante sin healing y rollback integral por un fallo observado exactamente entre
-dos sellos. La puerta quedó en 2.629 tests unitarios y 33 integraciones focales, todas verdes; no se
-modificaron V27/V28, privilegios, contratos externos ni frontend. La regresión ampliada y el cierre
-definitivo del Corte 7 permanecen en 7E.
+### Evidencia de cierre
+
+- `1→N`, `N→1` y múltiples lotes disjuntos convergen a `READY` con el rol restringido;
+  `N→M` continúa bloqueado. Replay exacto y con otra identidad de plan no ejecuta DML; corrupción
+  extra/faltante no se repara y el fallo entre sellos revierte las 19 tablas editoriales.
+- Java 21 (Corretto 21.0.10): 134 unitarios focales y 2.629 unitarios completos, todos sin fallos,
+  errores ni omitidos. La matriz seleccionada ejecutó 82 integraciones sobre PostgreSQL 16.14 y
+  Flyway V27: 13 split/merge, 13 REPLACE, 7 PROMOTE, 4 fallos PROMOTE, 9 readiness, 7 privilegios,
+  2 de aislamiento DB, 7 de import, 3 de aislamiento CLI, 10 de procesos CLI y 7 de concurrencia
+  V27. El control de secretos del JAR también pasó.
+- La suite unitaria completa se repitió de forma independiente; el launcher pasó `sh -n` y el diff
+  quedó limpio. Las revisiones adversariales de alcance, pruebas y documentación cerraron sin
+  hallazgos P0–P2 pendientes.
+- 7E fue exclusivamente documental. En todo Corte 7 no se modificaron V27/V28, schemas externos,
+  grants, rol, endpoints, JPA, frontend ni contenido legal. Backend quedó en
+  `codex/lanzamiento-publico-backend`; frontend siguió en `codex/frontend-refactor-checkpoint` sin
+  cambios versionados. No hubo deploy ni push.
+- Corte 7 queda completo, pero no cierra la Fase 2.3C ni habilita producción pública. RETIRE,
+  reconciliación de `UNKNOWN`, concurrencia multithread/capacidad/procesos editoriales exhaustivos y
+  cierre cross-repo permanecen en Cortes 8 a 11.
 
 Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 

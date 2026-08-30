@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcortes 7A a 7D completados, 7E pendiente
+Estado: completado el 2026-08-30 — Subcortes 7A a 7E acreditados
 
 Diseño aprobado:
 
@@ -322,7 +322,7 @@ Commit:
 
 ## Subcorte 7E — Regresiones y cierre
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -331,7 +331,10 @@ Cerrar Corte 7 con evidencia real, documentación alineada y ninguna expansión 
 ### Modificar
 
 - `docs/plans/2026-08-27-legal-manifest-promotion-implementation.md`;
-- este documento.
+- `docs/plans/2026-08-30-legal-split-merge-design.md`;
+- este documento;
+- `docs/plans/2026-08-29-legal-replace-cutover-implementation.md`, sólo con una nota de
+  continuidad que preserve como histórico el cierre del Corte 6.
 
 Los documentos del Corte 6 permanecen como registro histórico; sólo agregar una nota de continuidad
 si evita una lectura engañosa.
@@ -355,8 +358,42 @@ Commit:
 
     docs(legal): cierra reemplazos split y merge
 
+### Evidencia de cierre 7E
+
+- La puerta unitaria focal ejecutó 134 tests de validator, scope guard, execution plan, planner,
+  writer, post-verifier, apply, plan service, CLI y reportes: 0 fallos, 0 errores y 0 omitidos.
+- La matriz final seleccionada volvió a ejecutar los 2.629 tests unitarios y 82 integraciones:
+  13 split/merge, 13 REPLACE, 7 PROMOTE, 4 fallos PROMOTE, 9 readiness, 7 privilegios, 2 de
+  aislamiento DB, 7 de import, 3 de aislamiento CLI, 10 de procesos CLI y 7 de concurrencia V27.
+  Todo pasó con Java 21 (Corretto 21.0.10), PostgreSQL 16.14 y Flyway V27; el control de secretos
+  del JAR también quedó verde.
+- `./mvnw test` se ejecutó nuevamente de forma independiente y confirmó los 2.629 unitarios sin
+  fallos, errores ni omitidos. `sh -n scripts/legal-manifest-editor.sh` y `git diff --check`
+  quedaron limpios.
+- La regresión conserva `1→N`, `N→1` y lotes disjuntos; `N→M` sigue fail-closed. Replay no mutante,
+  corrupción sin healing, rollback multibatch, PROMOTE, REPLACE `1→1`, readiness, privilegios,
+  import, aislamiento y procesos mantienen los contratos acreditados en 7A–7D y Corte 6.
+- 7E modifica sólo documentación. El Corte 7 sí incluye los cambios productivos acotados de 7A y
+  7B, pero nunca modificó V27/V28, schemas externos, grants, rol, endpoints, JPA, frontend ni
+  contenido legal. No hubo deploy ni push.
+- La rama backend es `codex/lanzamiento-publico-backend`; el frontend permanece en
+  `codex/frontend-refactor-checkpoint` sin cambios versionados y conserva únicamente sus dos
+  directorios no versionados preexistentes. Las revisiones adversariales de alcance, pruebas y
+  documentación cerraron sin hallazgos P0–P2 pendientes.
+
+Commits locales atómicos del Corte 7:
+
+1. `cf0b281` — `feat(legal): prepara lotes split y merge` (7A);
+2. `e177590` — `feat(legal): habilita reemplazos split y merge` (7B);
+3. `a780482` — `test(legal): acredita split y merge en postgresql` (7C);
+4. `8b2c96f` — `test(legal): acredita atomicidad multibatch` (7D);
+5. `docs(legal): cierra reemplazos split y merge` (7E, este cierre).
+
 ## Criterio de cierre
 
 Corte 7 termina únicamente cuando 7A–7E están en commits locales separados, `N→M` sigue bloqueado,
 los tres escenarios PostgreSQL frescos y su replay/rollback son exactos, las regresiones quedan
 verdes, frontend permanece intacto y no hubo push ni deploy.
+
+Estado del criterio: satisfecho el 2026-08-30. Corte 7 queda completado; los Cortes 8 a 11 y la
+Fase 2.3C permanecen abiertos.
