@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcorte 7A pendiente
+Estado: en ejecución — diseño aprobado; Subcorte 7A completado, 7B pendiente
 
 Diseño aprobado:
 
@@ -35,7 +35,7 @@ limpio y se registra en un commit local atómico. No se hace push ni deploy.
 
 ## Subcorte 7A — Soporte interno y orden canónico
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -82,6 +82,26 @@ git status --short
 Commit:
 
     feat(legal): prepara lotes split y merge
+
+### Evidencia de cierre 7A
+
+- `LegalEditorialExecutionPlan` conserva los lotes históricos por `batchId` y ordena sólo el delta
+  actual y sus comandos por el UUID textual mínimo de todos sus miembros, con `batchId` como
+  desempate. La regresión adversarial distingue este contrato de `UUID.compareTo` y mantiene
+  predecesores y sucesoras en orden canónico.
+- `LegalDocumentReplacementWriter` admite múltiples lotes `1→1`, `1→N` y `N→1`. Lados vacíos y
+  `N→M` bloquean con `REPLACEMENT_MAPPING_INVALID` antes de cualquier interacción JDBC.
+- El recorder JDBC acredita una sola secuencia global: todas las cabeceras, todas las predecesoras,
+  todas las sucesoras y recién entonces los sellos en orden canónico. Una cardinalidad inesperada
+  en el segundo sello detiene el writer exactamente allí.
+- El overlap entre lotes actuales sigue rechazado en los boundaries de postestado y comandos. El
+  guard externo no se modificó: split, merge y multibatch todavía bloquean antes de gate/JDBC hasta
+  el Subcorte 7B.
+- Java 21 (Corretto 21.0.10): puerta focal de 76 tests y suite unitaria completa de 2.621 tests,
+  todas con 0 fallos, 0 errores y 0 omitidos. `git diff --check` quedó limpio.
+- Dos revisiones adversariales finales cerraron sin hallazgos P0–P2. No se modificaron V27/V28,
+  schemas, grants, rol, CLI, reportes, endpoints, JPA ni frontend; tampoco hubo push o deploy.
+  PostgreSQL fresco y la semántica integral de split/merge permanecen deliberadamente para 7C.
 
 ## Subcorte 7B — Apertura controlada y planner
 

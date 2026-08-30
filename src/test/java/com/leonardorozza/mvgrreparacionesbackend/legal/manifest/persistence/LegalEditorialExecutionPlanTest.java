@@ -779,7 +779,90 @@ class LegalEditorialExecutionPlanTest {
     }
 
     @Test
-    void historicalBatchesAllowADeepSuccessorToPredecessorChain() {
+    void currentBatchesAndMutationCommandsUseTheirMinimumMemberBeforeBatchId() {
+        UUID firstTextualMember = uuid("7fffffff-0000-0000-0000-000000000100");
+        UUID secondTextualMember = uuid("80000000-0000-0000-0000-000000000500");
+        UUID firstSuccessorOutOfOrder = uuid("90000000-0000-0000-0000-000000000200");
+        UUID firstPredecessor = uuid("f0000000-0000-0000-0000-000000000400");
+        UUID secondPredecessorOutOfOrder = uuid("a0000000-0000-0000-0000-000000000600");
+        UUID secondSuccessor = uuid("b0000000-0000-0000-0000-000000000700");
+        LegalEditorialExecutionPlan.ReplacementBatch firstByMember =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        uuid(900),
+                        OBSERVED_AT,
+                        OBSERVED_AT,
+                        List.of(firstPredecessor),
+                        List.of(
+                                new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        firstSuccessorOutOfOrder,
+                                        TARGET_PUBLICATION),
+                                new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        firstTextualMember,
+                                        SOURCE_PUBLICATION)));
+        LegalEditorialExecutionPlan.ReplacementBatch firstByBatchId =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        uuid(800),
+                        OBSERVED_AT,
+                        OBSERVED_AT,
+                        List.of(secondPredecessorOutOfOrder, secondTextualMember),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                secondSuccessor,
+                                TARGET_PUBLICATION)));
+
+        LegalEditorialExecutionPlan.ExpectedPostState postState = postStateWithBatches(
+                List.of(),
+                List.of(firstByBatchId, firstByMember));
+        LegalEditorialExecutionPlan.MutationCommands commands =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(firstByBatchId, firstByMember));
+
+        assertThat(firstByMember.successors())
+                .extracting(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
+                .containsExactly(firstTextualMember, firstSuccessorOutOfOrder);
+        assertThat(firstByBatchId.predecessorDocumentVersionIds())
+                .containsExactly(secondTextualMember, secondPredecessorOutOfOrder);
+        assertThat(postState.replacementBatches())
+                .containsExactly(firstByMember, firstByBatchId);
+        assertThat(commands.replacementBatchesToCreateAndSeal())
+                .containsExactly(firstByMember, firstByBatchId);
+    }
+
+    @Test
+    void currentBatchesRejectMemberOverlapAtPostStateAndCommandBoundaries() {
+        LegalEditorialExecutionPlan.ReplacementBatch first = replacementBatch(
+                BATCH_ID,
+                DOCUMENT_ONE,
+                DOCUMENT_TWO);
+        LegalEditorialExecutionPlan.ReplacementBatch overlapping = replacementBatch(
+                SECOND_HISTORICAL_BATCH_ID,
+                DOCUMENT_PREDECESSOR,
+                DOCUMENT_ONE);
+
+        assertThatThrownBy(() -> postStateWithBatches(
+                List.of(),
+                List.of(first, overlapping)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("más de un lote");
+        assertThatThrownBy(() -> new LegalEditorialExecutionPlan.MutationCommands(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(first, overlapping)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("más de un lote");
+    }
+
+    @Test
+    void historicalBatchesRemainOrderedByBatchIdAndAllowADeepSuccessorChain() {
         LegalEditorialExecutionPlan.ReplacementBatch first = replacementBatch(
                 SECOND_HISTORICAL_BATCH_ID,
                 DOCUMENT_ONE,
@@ -1266,5 +1349,9 @@ class LegalEditorialExecutionPlanTest {
 
     private static UUID uuid(long value) {
         return new UUID(0, value);
+    }
+
+    private static UUID uuid(String value) {
+        return UUID.fromString(value);
     }
 }

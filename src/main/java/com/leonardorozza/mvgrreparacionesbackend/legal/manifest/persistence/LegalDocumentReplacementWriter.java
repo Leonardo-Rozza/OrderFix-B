@@ -26,7 +26,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** Executes only the direct DML of one fresh, one-to-one REPLACE execution plan. */
+/** Executes the direct DML of a fresh REPLACE execution plan. */
 final class LegalDocumentReplacementWriter implements LegalEditorialMutationWriter {
 
     private static final String MAPPING_LOCATION = "documentReplacementBatches";
@@ -82,9 +82,8 @@ final class LegalDocumentReplacementWriter implements LegalEditorialMutationWrit
         List<LegalEditorialExecutionPlan.ReplacementBatch> batches = Objects.requireNonNull(
                 commands.replacementBatchesToCreateAndSeal(),
                 "replacementBatchesToCreateAndSeal");
-        if (batches.size() > 1 || batches.stream().anyMatch(batch ->
-                batch.predecessorDocumentVersionIds().size() != 1
-                        || batch.successors().size() != 1)) {
+        if (batches.stream().anyMatch(
+                LegalDocumentReplacementWriter::hasInvalidReplacementCardinality)) {
             throw mappingMismatch();
         }
 
@@ -112,6 +111,20 @@ final class LegalDocumentReplacementWriter implements LegalEditorialMutationWrit
                 commands,
                 expectedDocumentPreStates(expected),
                 expectedRequirementPreStates(expected));
+    }
+
+    private static boolean hasInvalidReplacementCardinality(
+            LegalEditorialExecutionPlan.ReplacementBatch batch) {
+        if (batch == null
+                || batch.predecessorDocumentVersionIds() == null
+                || batch.successors() == null) {
+            return true;
+        }
+        int predecessorCount = batch.predecessorDocumentVersionIds().size();
+        int successorCount = batch.successors().size();
+        return predecessorCount == 0
+                || successorCount == 0
+                || (predecessorCount > 1 && successorCount > 1);
     }
 
     private static void requireCommandShape(

@@ -106,7 +106,42 @@ class LegalDocumentReplacementWriterTest {
     }
 
     @Test
-    void rejectsMoreThanOneReplacementBatchBeforeTouchingJdbc() {
+    void rejectsReplacementBatchWithoutPredecessorsBeforeTouchingJdbc() {
+        LegalEditorialExecutionPlan.ReplacementBatch batch = replacementBatchMock(
+                List.of(),
+                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                        id(801),
+                        TARGET_PUBLICATION_ID)));
+
+        assertInvalidReplacementMappingBeforeJdbc(batch);
+    }
+
+    @Test
+    void rejectsReplacementBatchWithoutSuccessorsBeforeTouchingJdbc() {
+        LegalEditorialExecutionPlan.ReplacementBatch batch = replacementBatchMock(
+                List.of(id(801)),
+                List.of());
+
+        assertInvalidReplacementMappingBeforeJdbc(batch);
+    }
+
+    @Test
+    void rejectsManyToManyReplacementBatchBeforeTouchingJdbc() {
+        LegalEditorialExecutionPlan.ReplacementBatch batch = replacementBatchMock(
+                List.of(id(801), id(802)),
+                List.of(
+                        new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                id(803),
+                                TARGET_PUBLICATION_ID),
+                        new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                id(804),
+                                TARGET_PUBLICATION_ID)));
+
+        assertInvalidReplacementMappingBeforeJdbc(batch);
+    }
+
+    private static void assertInvalidReplacementMappingBeforeJdbc(
+            LegalEditorialExecutionPlan.ReplacementBatch batch) {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         LegalEditorialReadinessCore readiness = mock(LegalEditorialReadinessCore.class);
         when(readiness.usesJdbc(jdbc)).thenReturn(true);
@@ -116,9 +151,7 @@ class LegalDocumentReplacementWriterTest {
         when(plan.operationType()).thenReturn(LegalEditorialExecutionPlan.OperationType.REPLACE);
         when(plan.changeRequired()).thenReturn(true);
         when(plan.mutationCommands()).thenReturn(commands);
-        when(commands.replacementBatchesToCreateAndSeal()).thenReturn(List.of(
-                mock(LegalEditorialExecutionPlan.ReplacementBatch.class),
-                mock(LegalEditorialExecutionPlan.ReplacementBatch.class)));
+        when(commands.replacementBatchesToCreateAndSeal()).thenReturn(List.of(batch));
 
         LegalDocumentReplacementWriter writer = new LegalDocumentReplacementWriter(
                 jdbc,
@@ -132,6 +165,16 @@ class LegalDocumentReplacementWriterTest {
                             .isEqualTo("documentReplacementBatches");
                 });
         verifyNoInteractions(jdbc);
+    }
+
+    private static LegalEditorialExecutionPlan.ReplacementBatch replacementBatchMock(
+            List<UUID> predecessors,
+            List<LegalEditorialExecutionPlan.ReplacementSuccessor> successors) {
+        LegalEditorialExecutionPlan.ReplacementBatch batch =
+                mock(LegalEditorialExecutionPlan.ReplacementBatch.class);
+        when(batch.predecessorDocumentVersionIds()).thenReturn(predecessors);
+        when(batch.successors()).thenReturn(successors);
+        return batch;
     }
 
     @Test
@@ -347,6 +390,88 @@ class LegalDocumentReplacementWriterTest {
     }
 
     @Test
+    void writesSplitMergeAndMultipleBatchMembershipsInCanonicalCommandOrder() {
+        Fixture fixture = fixture(true, SOURCE_FINGERPRINT);
+        UUID splitBatchId = id(611);
+        UUID mergeBatchId = id(610);
+        LegalEditorialExecutionPlan.ReplacementBatch split = replacementBatch(
+                splitBatchId,
+                List.of(id(801)),
+                List.of(id(802), id(803)));
+        LegalEditorialExecutionPlan.ReplacementBatch merge = replacementBatch(
+                mergeBatchId,
+                List.of(id(901), id(902)),
+                List.of(id(903)));
+        List<LegalEditorialExecutionPlan.ReplacementBatch> canonicalBatches =
+                replaceCurrentBatches(fixture, List.of(merge, split));
+
+        fixture.writer().write(fixture.plan());
+
+        assertThat(canonicalBatches)
+                .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .containsExactly(splitBatchId, mergeBatchId);
+        List<DmlCall> replacementCalls = fixture.jdbc().dmlCalls().stream()
+                .filter(call -> call.signature().startsWith("replacement-"))
+                .toList();
+        assertThat(replacementCalls)
+                .extracting(DmlCall::signature)
+                .containsExactly(
+                        "replacement-batch:insert",
+                        "replacement-predecessor:insert",
+                        "replacement-successor:insert",
+                        "replacement-batch:seal",
+                        "replacement-batch:seal");
+        assertThat(rows(replacementCalls.get(0))).containsExactly(
+                parameters(splitBatchId, Timestamp.from(OBSERVED_AT)),
+                parameters(mergeBatchId, Timestamp.from(OBSERVED_AT)));
+        assertThat(rows(replacementCalls.get(1))).containsExactly(
+                parameters(splitBatchId, id(801)),
+                parameters(mergeBatchId, id(901)),
+                parameters(mergeBatchId, id(902)));
+        assertThat(rows(replacementCalls.get(2))).containsExactly(
+                parameters(splitBatchId, id(802), TARGET_PUBLICATION_ID),
+                parameters(splitBatchId, id(803), TARGET_PUBLICATION_ID),
+                parameters(mergeBatchId, id(903), TARGET_PUBLICATION_ID));
+        assertThat(rows(replacementCalls.get(3))).containsExactly(parameters(
+                Timestamp.from(OBSERVED_AT),
+                splitBatchId));
+        assertThat(rows(replacementCalls.get(4))).containsExactly(parameters(
+                Timestamp.from(OBSERVED_AT),
+                mergeBatchId));
+    }
+
+    @Test
+    void stopsAtTheSecondUnexpectedSealCardinality() {
+        Fixture fixture = fixture(true, SOURCE_FINGERPRINT);
+        UUID splitBatchId = id(611);
+        UUID mergeBatchId = id(610);
+        replaceCurrentBatches(fixture, List.of(
+                replacementBatch(
+                        mergeBatchId,
+                        List.of(id(901), id(902)),
+                        List.of(id(903))),
+                replacementBatch(
+                        splitBatchId,
+                        List.of(id(801)),
+                        List.of(id(802), id(803)))));
+        fixture.jdbc().failUpdateNumber(2);
+
+        assertThatThrownBy(() -> fixture.writer().write(fixture.plan()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("El DML REPLACE no afectó exactamente una fila esperada");
+
+        assertThat(fixture.jdbc().dmlSignatures()).endsWith(
+                "replacement-batch:insert",
+                "replacement-predecessor:insert",
+                "replacement-successor:insert",
+                "replacement-batch:seal",
+                "replacement-batch:seal");
+        assertThat(rows(fixture.jdbc().dmlCalls().getLast())).containsExactly(parameters(
+                Timestamp.from(OBSERVED_AT),
+                mergeBatchId));
+    }
+
+    @Test
     void blocksObservedGraphDriftBeforeFingerprintRevalidationOrAnyDml() {
         Fixture fixture = fixture(true, SOURCE_FINGERPRINT);
         fixture.jdbc().omitTargetDocument(REUSED_DOCUMENT_ID);
@@ -418,6 +543,45 @@ class LegalDocumentReplacementWriterTest {
                 "document-transition:BORRADOR->PUBLICADA",
                 "requirement-transition:BORRADOR->PUBLICADA",
                 "required-set-pointer:delete");
+    }
+
+    private static LegalEditorialExecutionPlan.ReplacementBatch replacementBatch(
+            UUID batchId,
+            List<UUID> predecessors,
+            List<UUID> successorIds) {
+        return new LegalEditorialExecutionPlan.ReplacementBatch(
+                batchId,
+                OBSERVED_AT,
+                OBSERVED_AT,
+                predecessors,
+                successorIds.stream()
+                        .map(successorId ->
+                                new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        successorId,
+                                        TARGET_PUBLICATION_ID))
+                        .toList());
+    }
+
+    private static List<LegalEditorialExecutionPlan.ReplacementBatch> replaceCurrentBatches(
+            Fixture fixture,
+            List<LegalEditorialExecutionPlan.ReplacementBatch> batches) {
+        LegalEditorialExecutionPlan.MutationCommands original =
+                fixture.plan().mutationCommands();
+        LegalEditorialExecutionPlan.MutationCommands updated =
+                new LegalEditorialExecutionPlan.MutationCommands(
+                        original.documentTransitions(),
+                        original.requirementTransitions(),
+                        original.documentSlotDeletes(),
+                        original.documentSlotInserts(),
+                        original.requiredSetPointerDeletes(),
+                        original.requiredSetPointerInserts(),
+                        batches);
+        when(fixture.plan().mutationCommands()).thenReturn(updated);
+        LegalEditorialExecutionPlan.ExpectedPostState expected =
+                fixture.plan().expectedPostState();
+        when(expected.replacementBatches()).thenReturn(
+                updated.replacementBatchesToCreateAndSeal());
+        return updated.replacementBatchesToCreateAndSeal();
     }
 
     private static Fixture fixture(boolean withBatch, String observedFingerprint) {
@@ -826,6 +990,8 @@ class LegalDocumentReplacementWriterTest {
         private final List<DmlCall> dml = new ArrayList<>();
         private String forcedBatchSqlToken;
         private int forcedBatchCount;
+        private int updateCallCount;
+        private int failedUpdateCallNumber = -1;
 
         RecordingJdbcTemplate(
                 LegalEditorialExecutionPlan.PublicationIdentity sourcePublication,
@@ -952,6 +1118,10 @@ class LegalDocumentReplacementWriterTest {
                     dmlSignature(sql, rows),
                     sql,
                     rows));
+            updateCallCount++;
+            if (updateCallCount == failedUpdateCallNumber) {
+                return 0;
+            }
             return 1;
         }
 
@@ -965,6 +1135,10 @@ class LegalDocumentReplacementWriterTest {
 
         void returnSuccessNoInfoForNextBatchContaining(String token) {
             forceNextBatchCountContaining(token, Statement.SUCCESS_NO_INFO);
+        }
+
+        void failUpdateNumber(int updateNumber) {
+            failedUpdateCallNumber = updateNumber;
         }
 
         private void forceNextBatchCountContaining(String token, int count) {

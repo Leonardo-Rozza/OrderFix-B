@@ -83,8 +83,13 @@ record LegalEditorialExecutionPlan(
             Comparator.comparing(
                     RequiredSetPointerDelete::key,
                     REQUIRED_SET_POINTER_KEY_ORDER);
-    private static final Comparator<ReplacementBatch> REPLACEMENT_BATCH_ORDER = Comparator
-            .comparing(ReplacementBatch::batchId, UUID_TEXT_ORDER);
+    private static final Comparator<ReplacementBatch> HISTORICAL_REPLACEMENT_BATCH_ORDER =
+            Comparator.comparing(ReplacementBatch::batchId, UUID_TEXT_ORDER);
+    private static final Comparator<ReplacementBatch> CURRENT_REPLACEMENT_BATCH_ORDER = Comparator
+            .comparing(
+                    LegalEditorialExecutionPlan::minimumReplacementMemberId,
+                    UUID_TEXT_ORDER)
+            .thenComparing(ReplacementBatch::batchId, UUID_TEXT_ORDER);
 
     LegalEditorialExecutionPlan {
         operationType = Objects.requireNonNull(operationType, "operationType");
@@ -231,11 +236,11 @@ record LegalEditorialExecutionPlan(
                     "requiredSetPointers");
             preexistingReplacementBatches = sortedCopy(
                     preexistingReplacementBatches,
-                    REPLACEMENT_BATCH_ORDER,
+                    HISTORICAL_REPLACEMENT_BATCH_ORDER,
                     "preexistingReplacementBatches");
             replacementBatches = sortedCopy(
                     replacementBatches,
-                    REPLACEMENT_BATCH_ORDER,
+                    CURRENT_REPLACEMENT_BATCH_ORDER,
                     "replacementBatches");
             v27TriggerEffects = Objects.requireNonNull(
                     v27TriggerEffects,
@@ -436,7 +441,7 @@ record LegalEditorialExecutionPlan(
                     "commands.requiredSetPointerInserts");
             replacementBatchesToCreateAndSeal = sortedCopy(
                     replacementBatchesToCreateAndSeal,
-                    REPLACEMENT_BATCH_ORDER,
+                    CURRENT_REPLACEMENT_BATCH_ORDER,
                     "commands.replacementBatchesToCreateAndSeal");
 
             rejectDuplicateKeys(
@@ -1192,6 +1197,21 @@ record LegalEditorialExecutionPlan(
             throw new IllegalArgumentException(
                     "La cadena de requisito no coincide con el estado final esperado");
         }
+    }
+
+    private static UUID minimumReplacementMemberId(ReplacementBatch batch) {
+        UUID minimum = batch.predecessorDocumentVersionIds().getFirst();
+        for (UUID predecessor : batch.predecessorDocumentVersionIds()) {
+            if (UUID_TEXT_ORDER.compare(predecessor, minimum) < 0) {
+                minimum = predecessor;
+            }
+        }
+        for (ReplacementSuccessor successor : batch.successors()) {
+            if (UUID_TEXT_ORDER.compare(successor.documentVersionId(), minimum) < 0) {
+                minimum = successor.documentVersionId();
+            }
+        }
+        return minimum;
     }
 
     private static void rejectOverlappingReplacementMembers(List<ReplacementBatch> batches) {

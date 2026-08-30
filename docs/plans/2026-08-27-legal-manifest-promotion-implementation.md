@@ -947,7 +947,7 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: en ejecución; diseño aprobado el 2026-08-30, Subcorte 7A pendiente.
+Estado: en ejecución; diseño aprobado el 2026-08-30, Subcorte 7A completado y 7B pendiente.
 
 Diseño específico aprobado:
 
