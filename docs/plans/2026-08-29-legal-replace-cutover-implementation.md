@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-29
 
-Estado: en ejecución — Subcortes 6A, 6B, 6C y 6D completados
+Estado: completado el 2026-08-30 — Subcortes 6A, 6B, 6C, 6D y 6E cerrados
 
 Diseño aprobado:
 
@@ -344,6 +344,8 @@ Commit:
 
 ## Subcorte 6E — Acreditación PostgreSQL y cierre
 
+Estado: completado el 2026-08-30.
+
 ### Objetivo
 
 Acreditar el flujo combinado, replay, rollback y regresiones sobre PostgreSQL 16 con el rol exacto.
@@ -354,6 +356,8 @@ Acreditar el flujo combinado, replay, rollback y regresiones sobre PostgreSQL 16
 
 ### Modificar
 
+- `LegalEditorialPlannerCore` y `LegalEditorialPlannerCoreTest` para preservar y acreditar miembros
+  source terminales con su historia exacta al recuperar un gap;
 - `LegalManifestPersistenceITSupport` y fixtures sintéticas estrictamente necesarios;
 - tests de aislamiento/proceso sólo si la evidencia del jar lo requiere;
 - `docs/plans/2026-08-27-legal-manifest-promotion-implementation.md`;
@@ -378,7 +382,7 @@ Acreditar el flujo combinado, replay, rollback y regresiones sobre PostgreSQL 16
 ### Puerta final
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialReplaceScopeGuardTest,LegalEditorialPostStateVerifierTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialArgumentsTest,LegalEditorialPlanConfirmationTest,LegalEditorialCliExecutionStateTest,LegalEditorialCliTest,LegalEditorialReportTest,LegalEditorialApplyServiceTest,LegalInitialPromotionCoreTest test
+./mvnw -Dtest=LegalEditorialPlannerCoreTest,LegalEditorialReplaceScopeGuardTest,LegalEditorialPostStateVerifierTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialArgumentsTest,LegalEditorialPlanConfirmationTest,LegalEditorialCliExecutionStateTest,LegalEditorialCliTest,LegalEditorialReportTest,LegalEditorialApplyServiceTest,LegalInitialPromotionCoreTest test
 ./mvnw -Dit.test=LegalEditorialReplaceIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestImportIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
 ./mvnw test
 sh -n scripts/legal-manifest-editor.sh
@@ -391,16 +395,50 @@ capacidad y matriz completa de procesos permanecen en el Corte 10.
 
 Commit:
 
-    test(legal): acredita cutover editorial uno a uno
+    fix(legal): acredita cutover editorial uno a uno
+
+### Evidencia de cierre 6E
+
+- `LegalEditorialReplaceIT` acredita 13 ejecuciones sobre PostgreSQL 16/Flyway V27: cutover mixto
+  con lote 1→1, dos adiciones —incluida una recuperación real de gap—, ocho reuses/rebinds, retiro
+  documental, delta de requisitos completo y target `NOT_READY→READY`; también cubre el caso sin
+  lote y compuesto sólo por requisitos.
+- El escenario principal corre `apply-replace` con el rol editorial restringido exacto y verifica
+  21 slots, ocho punteros, todas las audiencias, snapshots sellados y las seis tablas de
+  aceptación/idempotencia sin cambios. Los miembros source ya terminales no integran el delta:
+  `PlannerCore` conserva su estado e historia exactos y bloquea una cadena incompleta o corrupta.
+- Replay exacto y replay con otro `operationId`/SHA externo devuelven `ALREADY_APPLIED`, conservan
+  `observedAt > appliedAt` y no cambian filas ni las diez secuencias observadas. Fingerprint
+  distinto, lote ajeno, postestado parcial, múltiples lotes, split y merge bloquean sin healing.
+- Cinco fallos tardíos acreditan rollback completo después del sello, punteros, verifier,
+  `SET CONSTRAINTS ALL IMMEDIATE` observado explícitamente y readiness. Una pérdida de acuse tras
+  commit devuelve `UNKNOWN`; el estado queda realmente confirmado y el retry exacto acredita
+  `ALREADY_APPLIED` sin mutar filas ni secuencias.
+- Java 21 (Corretto 21.0.10): puerta unitaria focal de 1.628 tests y suite unitaria completa de
+  2.615 tests, sin fallos, errores ni omitidos. La matriz seleccionada ejecutó 62 integraciones:
+  13 REPLACE, 11 PROMOTE/rollback, nueve readiness, siete privilegios, dos de aislamiento, siete de
+  import, tres de aislamiento CLI y diez de proceso CLI; todas verdes. El proceso CLI acredita
+  empaquetado, dispatch/aislamiento y regresiones, no la matriz E2E completa de `apply-replace`.
+- Dos debilidades P2 detectadas en la primera revisión adversarial —lote ajeno bloqueado demasiado
+  pronto y checkpoint de constraints no observado— fueron corregidas y el focal PostgreSQL 13/13
+  volvió a pasar. Las revisiones finales de producción, integración y alcance cerraron sin
+  hallazgos P0–P2.
+- `sh -n scripts/legal-manifest-editor.sh` y `git diff --check` quedaron limpios. No se modificaron
+  V27, schema, grants, endpoints, JPA, frontend, contenido legal ni despliegue. El frontend conserva
+  únicamente sus dos directorios no versionados preexistentes; no hubo push.
 
 ## Cierre del Corte 6
 
-Al terminar 6E:
+Estado: completado el 2026-08-30.
 
-- cambiar Corte 6 a completado con fecha y evidencia;
-- reemplazar en la matriz maestra el único commit previsto por los cinco commits reales y sus
-  puertas/evidencia;
-- mantener Corte 7 pendiente;
-- comprobar que frontend no fue modificado;
-- revisar los cinco commits locales en orden;
-- no hacer push ni deploy.
+Los cinco subcortes quedan ordenados en commits locales atómicos:
+
+1. `f0875a7` — `fix(legal): delimita cutover editorial uno a uno` (6A);
+2. `99e1504` — `feat(legal): expone plan de cutover editorial` (6B);
+3. `ca28171` — `refactor(legal): separa mutacion y postestado editorial` (6C);
+4. `3570490` — `feat(legal): aplica cutover editorial uno a uno` (6D);
+5. `fix(legal): acredita cutover editorial uno a uno` (6E, este cierre).
+
+Corte 7 y la Fase 2.3C permanecen pendientes. Concurrencia multithread, capacidad y matriz completa
+de procesos continúan reservadas para Corte 10. El cierre no equivale a producción pública, push ni
+deploy.

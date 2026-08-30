@@ -238,6 +238,41 @@ final class LegalManifestPersistenceITSupport {
             DataSource dataSource,
             LegalDatabaseBudgets budgets) {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(jdbc, LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
+        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
+        return applyHarness(jdbc, budgets, schemaVerifier, privilegeVerifier);
+    }
+
+    static ApplyHarness restrictedApplyHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets,
+            String username) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(jdbc, LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalEditorialPrivilegeVerifier privilegeVerifier =
+                new LegalEditorialPrivilegeVerifier(
+                        jdbc,
+                        username,
+                        LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        return applyHarness(jdbc, budgets, schemaVerifier, privilegeVerifier);
+    }
+
+    static ApplyHarness applyHarness(
+            JdbcTemplate jdbc,
+            LegalDatabaseBudgets budgets,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
+        Objects.requireNonNull(jdbc, "jdbc");
+        Objects.requireNonNull(budgets, "budgets");
+        Objects.requireNonNull(schemaVerifier, "schemaVerifier");
+        Objects.requireNonNull(privilegeVerifier, "privilegeVerifier");
+        DataSource dataSource = Objects.requireNonNull(
+                jdbc.getDataSource(),
+                "jdbc dataSource");
         DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
         manager.setRollbackOnCommitFailure(false);
         TransactionTemplate transaction = new TransactionTemplate(manager);
@@ -249,11 +284,6 @@ final class LegalManifestPersistenceITSupport {
 
         LegalRequiredSetRevisionCalculator revisionCalculator =
                 new LegalRequiredSetRevisionCalculator();
-        LegalEditorialSchemaVerifier schemaVerifier =
-                new LegalEditorialSchemaVerifier(jdbc, "public");
-        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
-                LegalEditorialPrivilegeVerifier.class);
-        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
         LegalManifestOriginGraphVerifier originVerifier =
                 new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
         LegalEditorialReadinessCore readinessCore = new LegalEditorialReadinessCore(

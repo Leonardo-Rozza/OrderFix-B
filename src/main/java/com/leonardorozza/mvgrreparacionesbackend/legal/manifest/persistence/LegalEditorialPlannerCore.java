@@ -804,6 +804,13 @@ final class LegalEditorialPlannerCore {
                     operationAt));
         }
 
+        if (!includeTerminalSourceMembership(
+                snapshot,
+                documentStates,
+                requirementStates)) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
+
         List<LegalEditorialExecutionPlan.ExpectedRequiredSetPointer> finalPointers =
                 expectedPointers(snapshot.targetScopes(), operationAt);
         List<LegalEditorialExecutionPlan.RequiredSetPointerDelete> pointerDeletes =
@@ -1709,6 +1716,71 @@ final class LegalEditorialPlannerCore {
                 requirement.state(),
                 requirement.stateChangedAt(),
                 requirement.lastReason());
+    }
+
+    private static boolean includeTerminalSourceMembership(
+            PlannerSnapshot snapshot,
+            List<LegalEditorialExecutionPlan.ExpectedDocumentState> documentStates,
+            List<LegalEditorialExecutionPlan.ExpectedRequirementState> requirementStates) {
+        Set<UUID> classifiedDocumentIds = documentStates.stream()
+                .map(LegalEditorialExecutionPlan.ExpectedDocumentState::documentVersionId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (UUID documentId : snapshot.sourceDocumentIds()) {
+            if (classifiedDocumentIds.contains(documentId)) {
+                continue;
+            }
+            DocumentEvidence document = snapshot.documents().get(documentId);
+            List<TransitionEvidence> history = document == null
+                    ? List.of()
+                    : histories(snapshot.documentTransitions(), documentId);
+            UUID activationBatch = history.size() > 1
+                    ? history.get(1).replacementBatchId()
+                    : null;
+            if (document == null
+                    || !isTerminalState(document.state())
+                    || !exactDocumentChain(
+                            document,
+                            history,
+                            document.state(),
+                            document.lastReason(),
+                            document.replacementBatchId(),
+                            activationBatch)) {
+                return false;
+            }
+            documentStates.add(expectedDocumentState(document));
+            classifiedDocumentIds.add(documentId);
+        }
+
+        Set<UUID> classifiedRequirementIds = requirementStates.stream()
+                .map(LegalEditorialExecutionPlan.ExpectedRequirementState::requirementVersionId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (UUID requirementId : snapshot.sourceRequirementIds()) {
+            if (classifiedRequirementIds.contains(requirementId)) {
+                continue;
+            }
+            RequirementEvidence requirement = snapshot.requirements().get(requirementId);
+            List<TransitionEvidence> history = requirement == null
+                    ? List.of()
+                    : histories(snapshot.requirementTransitions(), requirementId);
+            if (requirement == null
+                    || !isTerminalState(requirement.state())
+                    || !exactRequirementChain(
+                            requirement,
+                            history,
+                            requirement.state(),
+                            requirement.lastReason(),
+                            null)) {
+                return false;
+            }
+            requirementStates.add(expectedRequirementState(requirement));
+            classifiedRequirementIds.add(requirementId);
+        }
+        return true;
+    }
+
+    private static boolean isTerminalState(EstadoVersionLegal state) {
+        return state == EstadoVersionLegal.REEMPLAZADA
+                || state == EstadoVersionLegal.RETIRADA;
     }
 
     private static LegalEditorialExecutionPlan.ReplacementBatch replacementBatch(

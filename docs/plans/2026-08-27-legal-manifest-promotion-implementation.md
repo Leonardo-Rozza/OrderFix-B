@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4 y 5
-completados
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4, 5 y 6
+completados; Cortes 7 a 11 pendientes
 
 Diseño aprobado:
 
@@ -832,7 +832,7 @@ Commit:
 
 ## Corte 6 — Cutover uno a uno, adiciones y reutilización
 
-Estado: en ejecución; Subcortes 6A y 6B completados el 2026-08-29.
+Estado: completado el 2026-08-30 mediante los Subcortes 6A, 6B, 6C, 6D y 6E.
 
 Diseño específico aprobado:
 
@@ -854,12 +854,12 @@ Crear según la separación final del executor:
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialMutationWriter.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialPostStateVerifier.java;
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalDocumentReplacementWriter.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReplaceServiceTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialApplyServiceReplaceTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReplaceIT.java.
 
 Modificar:
 
-- LegalEditorialPlannerCore, LegalEditorialApplyService y LegalEditorialExecutionPlan;
+- LegalEditorialPlannerCore, LegalEditorialApplyService, LegalEditorialExecutionPlan y sus tests;
 - parser/report/CLI v3 para plan-replace y apply-replace;
 - LegalManifestPersistenceITSupport.
 
@@ -867,30 +867,32 @@ Modificar:
 
 Orden SQL obligatorio:
 
-1. adquirir gate y comparar postestado exacto;
-2. si no está aplicado, validar target SELLADO y source fingerprint;
-3. leer transaction_timestamp y prebloquear publicación, líneas y versiones;
-4. publicar versiones nuevas documentales y de requisito;
-5. eliminar punteros actuales que serán reemplazados;
-6. activar adiciones documentales sin predecesor e insertar slots;
-7. para uno a uno: insertar lote ABIERTO, anterior y sucesora; sellar el lote;
-8. dejar que el trigger del sello elimine slots anteriores, active sucesora, reemplace predecesora e
-   inserte slots; no duplicar ese DML;
-9. para documentos salientes sin sucesor: borrar slots y luego RETIRADA con motivo;
-10. requisitos nuevos: BORRADOR→PUBLICADA→VIGENTE;
-11. requisitos con sucesor: nuevo VIGENTE y anterior REEMPLAZADA;
-12. requisitos sin sucesor: RETIRADA con motivo;
-13. documentos/requisitos reutilizados permanecen VIGENTE;
-14. rebind de cada slot reutilizado mediante DELETE+INSERT con publicationId target;
-15. insertar punteros target hacia snapshots sellados existentes;
-16. nunca insertar, actualizar ni borrar snapshots sellados en legal_requisito_conjuntos ni sus
-    miembros; sólo reemplazar legal_requisito_conjuntos_actuales;
-17. forzar constraints, recalcular readiness en la misma sesión con el transaction_timestamp ya
-    leído y confirmar sólo READY.
+1. validar el alcance 0..1/1→1 antes del gate; adquirir el gate y el advisory lock compartido;
+2. leer `transaction_timestamp` antes de invocar al planner;
+3. comparar primero el postestado exacto para replay; si falta, validar target `SELLADO`, source
+   fingerprint, historia y grafo completos;
+4. en el writer releer y bloquear publicación, líneas y versiones en orden UUID, releer
+   slots/punteros y revalidar estado fuente bajo los mismos locks;
+5. publicar las versiones nuevas documentales y de requisito (`BORRADOR→PUBLICADA`);
+6. eliminar los punteros actuales que serán reemplazados;
+7. liberar todos los slots directos antes de ejecutar cualquier insert directo;
+8. activar adiciones documentales sin predecesor e insertar sus slots;
+9. para uno a uno, insertar lote `ABIERTO`, anterior y sucesora, y sellarlo; el trigger V27 es el
+   único dueño de transiciones y slots derivados del reemplazo;
+10. retirar documentos salientes sin sucesor;
+11. aplicar transiciones de requisitos nuevos, reemplazados y retirados; los reutilizados quedan
+    `VIGENTE`;
+12. insertar los slots directos restantes para rebinds hacia la publicación target;
+13. insertar punteros target hacia snapshots sellados existentes, sin mutar los snapshots ni sus
+    miembros;
+14. acreditar el postestado exacto con el verificador SELECT-only;
+15. ejecutar `SET CONSTRAINTS ALL IMMEDIATE`;
+16. recalcular readiness en la misma sesión y confirmar sólo `READY`, sin DML posterior.
 
 Además:
 
-- cada elemento source/target debe estar clasificado explícitamente;
+- cada elemento operativo source/target debe estar clasificado explícitamente; un miembro source ya
+  terminal queda fuera del delta, pero conserva estado e historia exactos dentro del postestado;
 - un target puede recuperar un hueco dejado por RETIRE mediante una adición directa;
 - plan-replace nunca escribe;
 - apply-replace exige el flag operativo, dos rutas y cuatro confirmaciones exactas;
@@ -904,15 +906,44 @@ audiencias completas, retiro explícito dentro del cutover, source distinto, tar
 replay, rollback tardío y regresión import.
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialReplaceServiceTest,LegalEditorialPlanResultTest,LegalEditorialReportTest test
-./mvnw -Dit.test=LegalEditorialReplaceIT,LegalEditorialReadinessIT,LegalManifestImportIT verify
+./mvnw -Dtest=LegalEditorialPlannerCoreTest,LegalEditorialReplaceScopeGuardTest,LegalEditorialPostStateVerifierTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialArgumentsTest,LegalEditorialPlanConfirmationTest,LegalEditorialCliExecutionStateTest,LegalEditorialCliTest,LegalEditorialReportTest,LegalEditorialApplyServiceTest,LegalInitialPromotionCoreTest test
+./mvnw -Dit.test=LegalEditorialReplaceIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestImportIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
+./mvnw test
+sh -n scripts/legal-manifest-editor.sh
 git diff --check
 git status --short
 ~~~
 
-Commit:
+Commits locales del corte:
 
-    feat(legal): aplica cutover editorial
+1. `f0875a7` — `fix(legal): delimita cutover editorial uno a uno` (6A);
+2. `99e1504` — `feat(legal): expone plan de cutover editorial` (6B);
+3. `ca28171` — `refactor(legal): separa mutacion y postestado editorial` (6C);
+4. `3570490` — `feat(legal): aplica cutover editorial uno a uno` (6D);
+5. `fix(legal): acredita cutover editorial uno a uno` (6E, commit de cierre).
+
+### Evidencia de cierre
+
+- `plan-replace` y `apply-replace` quedaron expuestos con contrato v3, guard previo a JDBC,
+  transacción común, writer DML separado, verificador SELECT-only, replay exacto y completion-state
+  que distingue commit confirmado, no persistido y `UNKNOWN`.
+- La recuperación de un gap real reveló y cerró una omisión del planner: miembros source ya
+  `RETIRADA`/`REEMPLAZADA` se transportan con su cadena histórica exacta, sin generar DML ni ampliar
+  el alcance uno a uno. Historia corrupta o lote histórico ajeno bloquean fail-closed.
+- Java 21 (Corretto 21.0.10): puerta focal de 1.628 tests y suite completa de 2.615 tests, todas
+  verdes. La matriz PostgreSQL 16/Flyway V27 ejecutó 62 integraciones sin fallos: 13 REPLACE, 11
+  PROMOTE/rollback, nueve readiness, siete privilegios, dos de aislamiento, siete de import, tres
+  de aislamiento CLI y diez de proceso CLI.
+- Las integraciones REPLACE acreditan rol restringido real, mezcla documental/de requisitos,
+  target `NOT_READY→READY`, replay sin DML ni avance de secuencias, bloqueos sin healing, cinco
+  rollbacks tardíos y commit incierto sin falso éxito. Snapshots sellados y las superficies de
+  aceptación/idempotencia permanecen inmutables.
+- `LegalManifestCliProcessIT` cubre jar empaquetado, dispatch, aislamiento y regresiones; no se
+  presenta como E2E exitoso completo de `apply-replace`. Concurrencia multithread, capacidad y la
+  matriz completa de procesos siguen en Corte 10.
+- Revisiones adversariales finales sin P0–P2, launcher y diff limpios, frontend sin cambios
+  versionados y ausencia de push/deploy. Corte 6 no cierra la Fase 2.3C ni habilita por sí solo la
+  producción pública.
 
 ## Corte 7 — Reemplazos split y merge
 
@@ -956,7 +987,7 @@ Modificar:
 ### Pruebas y puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialReplaceServiceTest test
+./mvnw -Dtest=LegalEditorialApplyServiceReplaceTest test
 ./mvnw -Dit.test=LegalEditorialSplitMergeIT,LegalEditorialReplaceIT,LegalConcurrencyIT verify
 git diff --check
 git status --short
@@ -1270,7 +1301,11 @@ Commit backend:
 | 3 | feat(legal): planifica acciones editoriales |
 | 4 | feat(legal): promociona primera publicacion |
 | 5 | feat(legal): expone promocion editorial aislada |
-| 6 | feat(legal): aplica cutover editorial |
+| 6A | fix(legal): delimita cutover editorial uno a uno |
+| 6B | feat(legal): expone plan de cutover editorial |
+| 6C | refactor(legal): separa mutacion y postestado editorial |
+| 6D | feat(legal): aplica cutover editorial uno a uno |
+| 6E | fix(legal): acredita cutover editorial uno a uno |
 | 7 | feat(legal): soporta reemplazos split y merge |
 | 8 | feat(legal): retira contenido de forma fail closed |
 | 9 | fix(legal): reconcilia commits editoriales ambiguos |

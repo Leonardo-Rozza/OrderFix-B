@@ -450,6 +450,180 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void replacementRecoversARetiredSourceGapAndCarriesItsExactHistory() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        String retirementReason = "Hueco fail-closed autorizado";
+        Instant activatedAt = APPLIED_AT.minusSeconds(172_800);
+        Instant retiredAt = APPLIED_AT.minusSeconds(86_400);
+        DocumentScopedRef documentAddition = new DocumentScopedRef(
+                ADDED_DOCUMENT_ID,
+                "d".repeat(64),
+                List.of(ContextoLegal.REGISTRO));
+        ValidatedEditorialPlan token = replacementToken(List.of(documentAddition), List.of());
+
+        LegalEditorialPlannerCore.DocumentEvidence retiredDocument =
+                new LegalEditorialPlannerCore.DocumentEvidence(
+                        DOCUMENT_ID,
+                        DOCUMENT_LINE_ID,
+                        SOURCE_PUBLICATION_ID,
+                        "c".repeat(64),
+                        activatedAt.minusSeconds(60),
+                        EstadoVersionLegal.RETIRADA,
+                        retiredAt,
+                        retirementReason,
+                        null,
+                        TipoDocumentoLegal.TERMINOS_SERVICIO,
+                        LocaleLegal.ES_AR,
+                        List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence addedDocument = evidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                List.of(ContextoLegal.REGISTRO));
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> sourceDocumentHistory = List.of(
+                transition(1, DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                        EstadoVersionLegal.PUBLICADA, activatedAt),
+                transition(2, DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                        EstadoVersionLegal.VIGENTE, activatedAt),
+                new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                        3,
+                        DOCUMENT_ID,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.RETIRADA,
+                        retirementReason,
+                        null,
+                        retiredAt));
+        LegalEditorialPlannerCore.PlannerSnapshot source =
+                new LegalEditorialPlannerCore.PlannerSnapshot(
+                        List.of(ADDED_DOCUMENT_ID),
+                        List.of(),
+                        List.of(DOCUMENT_ID),
+                        List.of(),
+                        Map.of(
+                                DOCUMENT_ID, retiredDocument,
+                                ADDED_DOCUMENT_ID, addedDocument),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        sourceDocumentHistory,
+                        List.of(),
+                        Map.of());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(source);
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(2, 3, 0, 0, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        LegalEditorialExecutionPlan execution = result.executionPlan().orElseThrow();
+        assertThat(execution.expectedPostState().documentStates())
+                .extracting(
+                        LegalEditorialExecutionPlan.ExpectedDocumentState::documentVersionId,
+                        LegalEditorialExecutionPlan.ExpectedDocumentState::state)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(
+                                DOCUMENT_ID, EstadoVersionLegal.RETIRADA),
+                        org.assertj.core.groups.Tuple.tuple(
+                                ADDED_DOCUMENT_ID, EstadoVersionLegal.VIGENTE));
+        assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                .hasSize(3)
+                .extracting(LegalEditorialExecutionPlan.DocumentTransition::documentVersionId)
+                .containsOnly(DOCUMENT_ID);
+        assertThat(execution.mutationCommands().documentTransitions()).hasSize(2);
+        assertThat(execution.mutationCommands().documentSlotInserts()).hasSize(1);
+    }
+
+    @Test
+    void replacementRejectsAnUnclassifiedTerminalSourceWithAnIncompleteHistory() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        DocumentScopedRef addition = new DocumentScopedRef(
+                ADDED_DOCUMENT_ID,
+                "d".repeat(64),
+                List.of(ContextoLegal.REGISTRO));
+        ValidatedEditorialPlan token = replacementToken(List.of(addition), List.of());
+        LegalEditorialPlannerCore.DocumentEvidence retiredDocument =
+                new LegalEditorialPlannerCore.DocumentEvidence(
+                        DOCUMENT_ID,
+                        DOCUMENT_LINE_ID,
+                        SOURCE_PUBLICATION_ID,
+                        "c".repeat(64),
+                        APPLIED_AT.minusSeconds(120),
+                        EstadoVersionLegal.RETIRADA,
+                        APPLIED_AT,
+                        "Hueco fail-closed autorizado",
+                        null,
+                        TipoDocumentoLegal.TERMINOS_SERVICIO,
+                        LocaleLegal.ES_AR,
+                        List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence addedDocument = evidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.PlannerSnapshot snapshot =
+                new LegalEditorialPlannerCore.PlannerSnapshot(
+                        List.of(ADDED_DOCUMENT_ID),
+                        List.of(),
+                        List.of(DOCUMENT_ID),
+                        List.of(),
+                        Map.of(
+                                DOCUMENT_ID, retiredDocument,
+                                ADDED_DOCUMENT_ID, addedDocument),
+                        Map.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(
+                                transition(1, DOCUMENT_ID, EstadoVersionLegal.BORRADOR,
+                                        EstadoVersionLegal.PUBLICADA, APPLIED_AT),
+                                transition(2, DOCUMENT_ID, EstadoVersionLegal.PUBLICADA,
+                                        EstadoVersionLegal.VIGENTE, APPLIED_AT)),
+                        List.of(),
+                        Map.of());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(snapshot);
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(2, 2, 0, 0, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
     void freshReplacementSeparatesHistoricalAndCurrentBatchesInAChain() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
         ValidatedEditorialPlan token = replacementToken(
