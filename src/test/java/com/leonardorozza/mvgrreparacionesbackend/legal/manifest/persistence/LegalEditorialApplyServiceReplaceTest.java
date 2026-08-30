@@ -1,9 +1,11 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -14,7 +16,6 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.lang.reflect.Modifier;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -25,7 +26,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -34,12 +34,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class LegalEditorialApplyServiceTest {
+class LegalEditorialApplyServiceReplaceTest {
 
     private static final Instant OBSERVED_AT =
-            Instant.parse("2026-08-28T18:00:00.123456Z");
+            Instant.parse("2026-08-30T10:00:00.123456Z");
     private static final UUID PUBLICATION_ID =
-            UUID.fromString("2baa77da-06fc-45f2-88c9-7d662d84dcb1");
+            UUID.fromString("776dccf8-b28c-4a37-a5e6-ad75069c899a");
 
     @AfterEach
     void clearSynchronization() {
@@ -47,320 +47,221 @@ class LegalEditorialApplyServiceTest {
     }
 
     @Test
-    void constructorIsTheOnlyAssemblyPathAndRequiresTheExactEditorialPreflights() {
+    void unsupportedScopeIsBlockedBeforeGateTimestampOrAnyJdbcParticipant() {
         Harness harness = new Harness();
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
+        when(harness.scopeGuard.validate(editorialPlan)).thenReturn(
+                LegalManifestValidation.failure(LegalManifestIssue.at(
+                        LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                        "documentReplacementBatches")));
 
-        harness.service();
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertThat(LegalEditorialApplyService.class.getDeclaredConstructors())
-                .singleElement()
-                .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(11);
-                    assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
-                });
-        verify(harness.gate).requireExactEditorialPreflights(
-                harness.jdbc,
-                harness.schemaVerifier,
-                harness.privilegeVerifier);
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.persisted()).isFalse();
+        assertThat(result.outcome())
+                .isEqualTo(LegalEditorialApplyResult.Outcome.BLOCKED);
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID);
+        verify(harness.gate, never()).usesJdbc(any());
+        verify(harness.gate, never()).executeMutable(any());
+        verify(harness.jdbc, never()).queryForObject(anyString(), any(Class.class));
+        verify(harness.planner, never()).planReplace(any(), any(), any());
     }
 
     @Test
-    void freshPromotionCommitsOnlyAfterOneTimestampAndAReadyExactPostcondition() {
+    void freshReplaceUsesOnlyItsWriterAndAllowsDifferentReadinessCounts() {
         Harness harness = new Harness();
-        executeAndComplete(
-                harness.gate,
-                TransactionSynchronization.STATUS_COMMITTED,
-                null);
+        executeAndComplete(harness.gate, TransactionSynchronization.STATUS_COMMITTED);
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
         LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        LegalEditorialReadinessResult readiness = ready();
+        assertThat(readiness.observation().orElseThrow().documentVersions())
+                .isNotEqualTo(receipt.documentVersions());
+        assertThat(readiness.observation().orElseThrow().replacementLots())
+                .isNotEqualTo(receipt.replacementBatches());
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
         when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(ready());
+                .thenReturn(readiness);
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
         assertSuccess(result, LegalEditorialApplyResult.Outcome.APPLIED, receipt);
-        verify(harness.gate, times(1)).executeMutable(any());
         verify(harness.jdbc, times(1)).queryForObject(
                 "SELECT transaction_timestamp()",
                 OffsetDateTime.class);
         InOrder order = inOrder(
                 harness.planner,
-                harness.writer,
+                harness.replacementWriter,
                 harness.postStateVerifier,
                 harness.jdbc,
                 harness.readinessCore);
-        order.verify(harness.planner).planPromote(release, OBSERVED_AT);
-        order.verify(harness.writer).write(plan);
+        order.verify(harness.planner).planReplace(release, editorialPlan, OBSERVED_AT);
+        order.verify(harness.replacementWriter).write(plan);
         order.verify(harness.postStateVerifier).verify(plan);
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
         order.verify(harness.readinessCore).evaluate(release, OBSERVED_AT);
+        verify(harness.promotionWriter, never()).write(any());
     }
 
     @Test
-    void foreignReplacementWriterDoesNotParticipateInPromote() {
+    void verifierFailureAfterReplaceDmlRollsBackBeforeConstraintsOrReadiness() {
         Harness harness = new Harness();
-        when(harness.replacementWriter.usesJdbc(harness.jdbc)).thenReturn(false);
-        executeAndComplete(
-                harness.gate,
-                TransactionSynchronization.STATUS_COMMITTED,
-                null);
+        executeAndRollbackOnFailure(harness.gate);
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
-        LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(ready());
-
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
-
-        assertSuccess(result, LegalEditorialApplyResult.Outcome.APPLIED, receipt);
-        verify(harness.writer).usesJdbc(harness.jdbc);
-        verify(harness.writer).write(plan);
-        verify(harness.replacementWriter, never()).usesJdbc(harness.jdbc);
-        verify(harness.replacementWriter, never()).write(any());
-    }
-
-    @Test
-    void exactReplayIsConfirmedWithSelectOnlyAndDoesNotRunThePostMutationReadiness() {
-        Harness harness = new Harness();
-        executeAndComplete(
-                harness.gate,
-                TransactionSynchronization.STATUS_COMMITTED,
-                null);
-        ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialExecutionPlan plan = plan(false);
-        LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
-
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
-
-        assertSuccess(
-                result,
-                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
-                receipt);
-        verify(harness.writer, never()).write(any());
-        verify(harness.postStateVerifier).verify(plan);
-        verify(harness.jdbc, never()).execute(anyString());
-        verify(harness.readinessCore, never()).evaluate(any(), any());
-        verify(harness.jdbc, times(1)).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-    }
-
-    @Test
-    void replayWithANonPromotePlanFailsClosedBeforeVerification() {
-        Harness harness = new Harness();
-        executeAndRollbackOnFailure(harness.gate);
-        ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialExecutionPlan plan = plan(false);
-        when(plan.operationType()).thenReturn(LegalEditorialExecutionPlan.OperationType.REPLACE);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialPlanResult.applicable(plan));
-
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
-
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
-        verify(harness.writer, never()).write(any());
-        verify(harness.postStateVerifier, never()).verify(any());
-        verify(harness.jdbc, never()).execute(anyString());
-        verify(harness.readinessCore, never()).evaluate(any(), any());
-    }
-
-    @Test
-    void plannerBlockerRollsBackAndNeverMutates() {
-        Harness harness = new Harness();
-        executeAndRollbackOnFailure(harness.gate);
-        ValidatedRelease release = mock(ValidatedRelease.class);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialPlanResult.blocked(List.of(
-                        LegalManifestIssue.at(
-                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
-                                "database/state"))));
-
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
-
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.BLOCKED,
-                LegalEditorialApplyResult.Outcome.BLOCKED,
-                LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
-        verify(harness.writer, never()).write(any());
-        verify(harness.postStateVerifier, never()).verify(any());
-        verify(harness.readinessCore, never()).evaluate(any(), any());
-    }
-
-    @Test
-    void notReadyPostconditionRollsBackTheCompleteDelta() {
-        Harness harness = new Harness();
-        executeAndRollbackOnFailure(harness.gate);
-        ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialExecutionPlan plan = plan(true);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialReadinessResult.notReady(
-                        observation(PUBLICATION_ID),
-                        List.of(LegalManifestIssue.at(
-                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
-                                "database/state"))));
-
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
-
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.POSTCONDITION_NOT_READY);
-        verify(harness.writer).write(plan);
-        verify(harness.postStateVerifier).verify(plan);
-    }
-
-    @Test
-    void verifierMismatchAfterDmlNeverForcesConstraintsOrReadiness() {
-        Harness harness = new Harness();
-        executeAndRollbackOnFailure(harness.gate);
-        ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialExecutionPlan plan = plan(true);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenThrow(
                 new LegalEditorialOperationalException(
                         LegalManifestIssueCode.POSTCONDITION_NOT_READY,
                         "database/postcondition"));
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.POSTCONDITION_NOT_READY);
-        verify(harness.writer).write(plan);
+        assertKnownFailure(result, LegalManifestIssueCode.POSTCONDITION_NOT_READY);
+        verify(harness.replacementWriter).write(plan);
         verify(harness.jdbc, never()).execute(anyString());
         verify(harness.readinessCore, never()).evaluate(any(), any());
     }
 
     @Test
-    void deferredConstraintFailureOccursAfterVerificationAndBeforeReadiness() {
+    void deferredConstraintFailureRollsBackReplaceBeforeReadiness() {
         Harness harness = new Harness();
         executeAndRollbackOnFailure(harness.gate);
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
         doThrow(new IllegalStateException("constraint failure"))
                 .when(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
-        InOrder order = inOrder(harness.writer, harness.postStateVerifier, harness.jdbc);
-        order.verify(harness.writer).write(plan);
+        assertKnownFailure(result, LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        InOrder order = inOrder(
+                harness.replacementWriter,
+                harness.postStateVerifier,
+                harness.jdbc);
+        order.verify(harness.replacementWriter).write(plan);
         order.verify(harness.postStateVerifier).verify(plan);
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
         verify(harness.readinessCore, never()).evaluate(any(), any());
     }
 
     @Test
-    void aReceiptWithForeignTargetRollsBackFailClosed() {
+    void notReadyAfterReplaceConstraintsRollsBackTheCompleteDelta() {
         Harness harness = new Harness();
         executeAndRollbackOnFailure(harness.gate);
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
-        LegalEditorialApplyReceipt inconsistent = new LegalEditorialApplyReceipt(
-                LegalEditorialApplyReceipt.OperationType.PROMOTE,
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
+                .thenReturn(LegalEditorialPlanResult.applicable(plan));
+        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
+        when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        ready().observation().orElseThrow(),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
+
+        assertKnownFailure(result, LegalManifestIssueCode.POSTCONDITION_NOT_READY);
+        verify(harness.replacementWriter).write(plan);
+        verify(harness.postStateVerifier).verify(plan);
+        verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
+        verify(harness.readinessCore).evaluate(release, OBSERVED_AT);
+    }
+
+    @Test
+    void foreignReplaceReceiptIdentityRollsBackFailClosed() {
+        Harness harness = new Harness();
+        executeAndRollbackOnFailure(harness.gate);
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
+        LegalEditorialExecutionPlan plan = plan(true);
+        LegalEditorialApplyReceipt foreignReceipt = new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.REPLACE,
                 UUID.fromString("87ca3b08-23f4-4ac8-8611-2ac95a850bb4"),
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 2,
-                2,
-                4,
-                4,
-                3,
                 1,
-                0);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+                5,
+                2,
+                1,
+                1,
+                1);
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(inconsistent);
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(ready());
+        when(harness.postStateVerifier.verify(plan)).thenReturn(foreignReceipt);
+        when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(ready());
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.POSTCONDITION_NOT_READY);
+        assertKnownFailure(result, LegalManifestIssueCode.POSTCONDITION_NOT_READY);
     }
 
     @Test
-    void promoteReadinessCountDriftRollsBackFailClosed() {
+    void exactReplaceReplayIsSelectOnlyAndInvokesNeitherWriter() {
         Harness harness = new Harness();
-        executeAndRollbackOnFailure(harness.gate);
+        executeAndComplete(harness.gate, TransactionSynchronization.STATUS_COMMITTED);
         ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialExecutionPlan plan = plan(true);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
+        LegalEditorialExecutionPlan plan = plan(false);
         LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(LegalEditorialReadinessResult.ready(
-                        new LegalEditorialReadinessObservation(
-                                Optional.of(PUBLICATION_ID),
-                                OBSERVED_AT,
-                                "sha256:" + "1".repeat(64),
-                                9,
-                                8,
-                                17,
-                                15,
-                                7,
-                                6,
-                                5)));
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertKnownFailure(
+        assertSuccess(
                 result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.POSTCONDITION_NOT_READY);
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
+                receipt);
+        verify(harness.promotionWriter, never()).write(any());
+        verify(harness.replacementWriter, never()).write(any());
+        verify(harness.postStateVerifier).verify(plan);
+        verify(harness.jdbc, never()).execute(anyString());
+        verify(harness.readinessCore, never()).evaluate(any(), any());
     }
 
     @Test
-    void unknownCompletionNeverLeaksTheTentativeReceipt() {
+    void unknownReplaceCompletionNeverLeaksTheTentativeReceipt() {
         Harness harness = new Harness();
         executeAndComplete(
                 harness.gate,
                 TransactionSynchronization.STATUS_UNKNOWN,
                 new IllegalStateException("connection outcome unknown"));
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(ready());
+        when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(ready());
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.ERROR);
         assertThat(result.persisted()).isNull();
@@ -374,49 +275,85 @@ class LegalEditorialApplyServiceTest {
     }
 
     @Test
-    void aFailureAfterCommittedCompletionStillReturnsTheConfirmedReceipt() {
+    void failureAfterCommittedReplaceCompletionKeepsTheConfirmedReceipt() {
         Harness harness = new Harness();
         executeAndComplete(
                 harness.gate,
                 TransactionSynchronization.STATUS_COMMITTED,
                 new LinkageError("driver cleanup failed"));
         ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
         LegalEditorialExecutionPlan plan = plan(true);
         LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
-        when(harness.readinessCore.evaluate(release, OBSERVED_AT))
-                .thenReturn(ready());
+        when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(ready());
 
-        LegalEditorialApplyResult result = harness.service().applyPromote(release);
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
         assertSuccess(result, LegalEditorialApplyResult.Outcome.APPLIED, receipt);
     }
 
     @Test
-    void aForeignJdbcParticipantFailsBeforeOpeningTheTransaction() {
+    void aPlannerResultOfAnotherOperationRollsBackBeforeWriterOrVerifier() {
         Harness harness = new Harness();
-        when(harness.postStateVerifier.usesJdbc(harness.jdbc)).thenReturn(false);
+        executeAndRollbackOnFailure(harness.gate);
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
+        LegalEditorialExecutionPlan plan = plan(false);
+        when(plan.operationType())
+                .thenReturn(LegalEditorialExecutionPlan.OperationType.PROMOTE);
+        when(harness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
+                .thenReturn(LegalEditorialPlanResult.applicable(plan));
 
-        LegalEditorialApplyResult result = harness.service()
-                .applyPromote(mock(ValidatedRelease.class));
+        LegalEditorialApplyResult result =
+                harness.service().applyReplace(release, editorialPlan);
 
-        assertKnownFailure(
-                result,
-                LegalManifestStatus.ERROR,
-                LegalEditorialApplyResult.Outcome.ERROR,
-                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        assertThat(result.outcome()).isEqualTo(LegalEditorialApplyResult.Outcome.ERROR);
+        assertThat(result.persisted()).isFalse();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        verify(harness.promotionWriter, never()).write(any());
+        verify(harness.replacementWriter, never()).write(any());
+        verify(harness.postStateVerifier, never()).verify(any());
+    }
+
+    @Test
+    void foreignReplacementWriterFailsBeforeOpeningTheTransaction() {
+        Harness harness = new Harness();
+        when(harness.replacementWriter.usesJdbc(harness.jdbc)).thenReturn(false);
+        ValidatedEditorialPlan editorialPlan = supportedPlan(harness);
+
+        LegalEditorialApplyResult result = harness.service().applyReplace(
+                mock(ValidatedRelease.class),
+                editorialPlan);
+
+        assertThat(result.outcome()).isEqualTo(LegalEditorialApplyResult.Outcome.ERROR);
+        assertThat(result.persisted()).isFalse();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
         verify(harness.gate, never()).executeMutable(any());
         verify(harness.jdbc, never()).queryForObject(anyString(), any(Class.class));
+    }
+
+    private static ValidatedEditorialPlan supportedPlan(Harness harness) {
+        ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
+        when(harness.scopeGuard.validate(editorialPlan))
+                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        return editorialPlan;
     }
 
     private static LegalEditorialExecutionPlan plan(boolean changeRequired) {
         LegalEditorialExecutionPlan plan = mock(LegalEditorialExecutionPlan.class);
         when(plan.changeRequired()).thenReturn(changeRequired);
-        when(plan.operationType()).thenReturn(LegalEditorialExecutionPlan.OperationType.PROMOTE);
+        when(plan.operationType()).thenReturn(
+                LegalEditorialExecutionPlan.OperationType.REPLACE);
         when(plan.target()).thenReturn(new LegalEditorialExecutionPlan.PublicationIdentity(
-                "publication-1",
+                "publication-replace",
                 PUBLICATION_ID,
                 "a".repeat(64)));
         when(plan.observedAt()).thenReturn(OBSERVED_AT);
@@ -425,37 +362,34 @@ class LegalEditorialApplyServiceTest {
         return plan;
     }
 
-    private static LegalEditorialReadinessResult ready() {
-        return LegalEditorialReadinessResult.ready(observation(PUBLICATION_ID));
-    }
-
-    private static LegalEditorialReadinessObservation observation(UUID publicationId) {
-        return new LegalEditorialReadinessObservation(
-                Optional.of(publicationId),
-                OBSERVED_AT,
-                "sha256:" + "0".repeat(64),
-                2,
-                2,
-                4,
-                4,
-                3,
-                1,
-                0);
-    }
-
     private static LegalEditorialApplyReceipt receipt() {
         return new LegalEditorialApplyReceipt(
-                LegalEditorialApplyReceipt.OperationType.PROMOTE,
+                LegalEditorialApplyReceipt.OperationType.REPLACE,
                 PUBLICATION_ID,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 2,
-                2,
-                4,
-                4,
-                3,
                 1,
-                0);
+                5,
+                2,
+                1,
+                1,
+                1);
+    }
+
+    private static LegalEditorialReadinessResult ready() {
+        return LegalEditorialReadinessResult.ready(
+                new LegalEditorialReadinessObservation(
+                        Optional.of(PUBLICATION_ID),
+                        OBSERVED_AT,
+                        "sha256:" + "0".repeat(64),
+                        99,
+                        98,
+                        97,
+                        96,
+                        95,
+                        94,
+                        93));
     }
 
     private static void assertSuccess(
@@ -471,16 +405,21 @@ class LegalEditorialApplyServiceTest {
 
     private static void assertKnownFailure(
             LegalEditorialApplyResult result,
-            LegalManifestStatus status,
-            LegalEditorialApplyResult.Outcome outcome,
             LegalManifestIssueCode issueCode) {
-        assertThat(result.status()).isEqualTo(status);
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.ERROR);
         assertThat(result.persisted()).isFalse();
-        assertThat(result.outcome()).isEqualTo(outcome);
+        assertThat(result.outcome()).isEqualTo(LegalEditorialApplyResult.Outcome.ERROR);
         assertThat(result.receipt()).isEmpty();
         assertThat(result.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(issueCode);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void executeAndComplete(
+            LegalManifestDatabaseGate gate,
+            int completion) {
+        executeAndComplete(gate, completion, null);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -537,7 +476,7 @@ class LegalEditorialApplyServiceTest {
         private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
         private final LegalManifestDatabaseGate gate = mock(LegalManifestDatabaseGate.class);
         private final LegalEditorialPlannerCore planner = mock(LegalEditorialPlannerCore.class);
-        private final LegalEditorialMutationWriter writer =
+        private final LegalEditorialMutationWriter promotionWriter =
                 mock(LegalEditorialMutationWriter.class);
         private final LegalEditorialMutationWriter replacementWriter =
                 mock(LegalEditorialMutationWriter.class);
@@ -545,7 +484,7 @@ class LegalEditorialApplyServiceTest {
                 mock(LegalEditorialPostStateVerifier.class);
         private final LegalEditorialReadinessCore readinessCore =
                 mock(LegalEditorialReadinessCore.class);
-        private final LegalEditorialReplaceScopeGuard replaceScopeGuard =
+        private final LegalEditorialReplaceScopeGuard scopeGuard =
                 mock(LegalEditorialReplaceScopeGuard.class);
         private final LegalEditorialFailureMapper failureMapper =
                 new LegalEditorialFailureMapper();
@@ -557,7 +496,7 @@ class LegalEditorialApplyServiceTest {
         private Harness() {
             when(gate.usesJdbc(jdbc)).thenReturn(true);
             when(planner.usesJdbc(jdbc)).thenReturn(true);
-            when(writer.usesJdbc(jdbc)).thenReturn(true);
+            when(promotionWriter.usesJdbc(jdbc)).thenReturn(true);
             when(replacementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
@@ -573,11 +512,11 @@ class LegalEditorialApplyServiceTest {
                     gate,
                     jdbc,
                     planner,
-                    writer,
+                    promotionWriter,
                     replacementWriter,
                     postStateVerifier,
                     readinessCore,
-                    replaceScopeGuard,
+                    scopeGuard,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);

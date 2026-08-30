@@ -142,8 +142,10 @@ class LegalInitialPromotionFailureIT {
                 production.jdbc(),
                 production.plannerCore(),
                 sabotagedWriter,
+                production.replacementWriter(),
                 production.postStateVerifier(),
                 production.readinessCore(),
+                production.replaceScopeGuard(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),
                 production.privilegeVerifier());
@@ -176,8 +178,10 @@ class LegalInitialPromotionFailureIT {
                 production.jdbc(),
                 sabotagedPlanner,
                 production.promotionCore(),
+                production.replacementWriter(),
                 production.postStateVerifier(),
                 production.readinessCore(),
+                production.replaceScopeGuard(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),
                 production.privilegeVerifier());

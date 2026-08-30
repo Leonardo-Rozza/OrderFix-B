@@ -640,6 +640,15 @@ public final class LegalManifestCli {
                         Objects.requireNonNull(editorialPlan, "editorialPlan"));
                 executionState.resultReceived(result);
             }
+            case APPLY_REPLACE -> {
+                LegalEditorialApplyService service =
+                        context.getBean(LegalEditorialApplyService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialApplyResult result = service.applyReplace(
+                        release,
+                        Objects.requireNonNull(editorialPlan, "editorialPlan"));
+                executionState.resultReceived(result);
+            }
         }
     }
 
@@ -772,13 +781,27 @@ public final class LegalManifestCli {
             };
         }
         if (snapshot.applyResult().isPresent()) {
-            return LegalEditorialReport.forApplyPromote(
-                    Objects.requireNonNull(release, "release"),
-                    snapshot.applyResult().orElseThrow());
+            return switch (snapshot.command()) {
+                case APPLY_PROMOTE -> LegalEditorialReport.forApplyPromote(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.applyResult().orElseThrow());
+                case APPLY_REPLACE -> LegalEditorialReport.forApplyReplace(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.editorialPlan().orElseThrow(),
+                        snapshot.applyResult().orElseThrow());
+                default -> throw new IllegalStateException(
+                        "Un resultado de apply no coincide con el comando editorial");
+            };
         }
         if (snapshot.command() == LegalEditorialArguments.Command.APPLY_PROMOTE
                 && snapshot.persisted() == null) {
             return LegalEditorialReport.forUnknownApply(release);
+        }
+        if (snapshot.command() == LegalEditorialArguments.Command.APPLY_REPLACE
+                && snapshot.persisted() == null) {
+            return LegalEditorialReport.forUnknownApplyReplace(
+                    Objects.requireNonNull(release, "release"),
+                    snapshot.editorialPlan().orElseThrow());
         }
         return LegalEditorialReport.forKnownFailure(
                 snapshot.command(),

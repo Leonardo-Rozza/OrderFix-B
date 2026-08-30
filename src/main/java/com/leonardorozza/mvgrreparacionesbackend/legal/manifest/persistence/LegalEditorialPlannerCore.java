@@ -823,6 +823,15 @@ final class LegalEditorialPlannerCore {
         if (preexistingHistory.isEmpty()) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
+        Optional<List<LegalEditorialExecutionPlan.ReplacementBatch>> preexistingBatches =
+                preexistingReplacementBatches(
+                        snapshot,
+                        batches,
+                        preexistingHistory.orElseThrow(),
+                        phase);
+        if (preexistingBatches.isEmpty()) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         LegalEditorialExecutionPlan.ExpectedPostState postState =
                 new LegalEditorialExecutionPlan.ExpectedPostState(
                         documentStates,
@@ -833,6 +842,7 @@ final class LegalEditorialPlannerCore {
                         preexistingHistory.orElseThrow().requirementTransitions(),
                         finalSlots,
                         finalPointers,
+                        preexistingBatches.orElseThrow(),
                         batches,
                         new LegalEditorialExecutionPlan.V27TriggerEffects(
                                 derivedTransitions,
@@ -1726,6 +1736,75 @@ final class LegalEditorialPlannerCore {
                                 successor.documentVersionId(),
                                 targetPublicationId))
                         .toList());
+    }
+
+    private static Optional<List<LegalEditorialExecutionPlan.ReplacementBatch>>
+            preexistingReplacementBatches(
+                    PlannerSnapshot snapshot,
+                    List<LegalEditorialExecutionPlan.ReplacementBatch> currentBatches,
+                    PreexistingTransitionHistory preexistingHistory,
+                    Phase phase) {
+        Set<UUID> currentBatchIds = currentBatches.stream()
+                .map(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .collect(Collectors.toUnmodifiableSet());
+        Set<UUID> historicalBatchIds = preexistingHistory.documentTransitions().stream()
+                .map(LegalEditorialExecutionPlan.DocumentTransition::replacementBatchId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toUnmodifiableSet());
+        if (historicalBatchIds.stream().anyMatch(currentBatchIds::contains)) {
+            return Optional.empty();
+        }
+        Set<UUID> expectedActualBatchIds = new HashSet<>(historicalBatchIds);
+        if (phase == Phase.POST_STATE) {
+            expectedActualBatchIds.addAll(currentBatchIds);
+        }
+        if (!snapshot.batches().keySet().equals(expectedActualBatchIds)) {
+            return Optional.empty();
+        }
+        List<LegalEditorialExecutionPlan.ReplacementBatch> historical = new ArrayList<>();
+        for (BatchEvidence evidence : historicalBatchIds.stream()
+                .map(snapshot.batches()::get)
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparing(evidence -> evidence.id().toString()))
+                .toList()) {
+            if (!evidence.sealed()
+                    || !historicalBatchMatchesTransitions(
+                            evidence,
+                            preexistingHistory.documentTransitions())) {
+                return Optional.empty();
+            }
+            historical.add(new LegalEditorialExecutionPlan.ReplacementBatch(
+                    evidence.id(),
+                    evidence.createdAt(),
+                    evidence.sealedAt(),
+                    evidence.predecessorIds(),
+                    evidence.successors()));
+        }
+        return Optional.of(List.copyOf(historical));
+    }
+
+    private static boolean historicalBatchMatchesTransitions(
+            BatchEvidence batch,
+            List<LegalEditorialExecutionPlan.DocumentTransition> transitions) {
+        boolean referenced = false;
+        Set<UUID> successorIds = batch.successors().stream()
+                .map(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
+                .collect(Collectors.toUnmodifiableSet());
+        for (LegalEditorialExecutionPlan.DocumentTransition transition : transitions) {
+            if (!batch.id().equals(transition.replacementBatchId())) {
+                continue;
+            }
+            referenced = true;
+            boolean membershipMatches =
+                    transition.newState() == EstadoVersionLegal.VIGENTE
+                            && successorIds.contains(transition.documentVersionId())
+                    || transition.newState() == EstadoVersionLegal.REEMPLAZADA
+                            && batch.predecessorIds().contains(transition.documentVersionId());
+            if (!membershipMatches || !transition.occurredAt().equals(batch.sealedAt())) {
+                return false;
+            }
+        }
+        return referenced;
     }
 
     private static List<LegalEditorialExecutionPlan.ExpectedDocumentSlot> expectedSlots(

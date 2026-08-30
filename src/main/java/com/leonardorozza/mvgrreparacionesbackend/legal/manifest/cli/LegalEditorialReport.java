@@ -89,7 +89,9 @@ public final class LegalEditorialReport {
         Command requiredCommand = Objects.requireNonNull(command, "command");
         LegalManifestValidation<?> required = requireFailure(failure);
         if (editorialPlan != null
-                && (requiredCommand != Command.PLAN_REPLACE || release == null)) {
+                && ((requiredCommand != Command.PLAN_REPLACE
+                && requiredCommand != Command.APPLY_REPLACE)
+                || release == null)) {
             throw invalidMatrix();
         }
         if (required.issues().stream()
@@ -105,7 +107,7 @@ public final class LegalEditorialReport {
                             ? Outcome.BLOCKED
                             : Outcome.ERROR,
                     null);
-            case PLAN_REPLACE -> new Operation(
+            case PLAN_REPLACE, APPLY_REPLACE -> new Operation(
                     OperationType.REPLACE,
                     required.status() == LegalManifestStatus.BLOCKED
                             ? Outcome.BLOCKED
@@ -162,6 +164,29 @@ public final class LegalEditorialReport {
                 null,
                 null,
                 release == null ? null : Counts.releaseOnly(release),
+                IssueSet.from(List.of(issue), 0));
+    }
+
+    /** Builds the conservative replace boundary while retaining confirmed input identity. */
+    public static LegalEditorialReport forUnknownApplyReplace(
+            ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan) {
+        ValidatedRelease requiredRelease = Objects.requireNonNull(release, "release");
+        ValidatedEditorialPlan requiredPlan = Objects.requireNonNull(
+                editorialPlan,
+                "editorialPlan");
+        LegalManifestIssue issue = LegalManifestIssue.at(
+                LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                COMMIT_LOCATION);
+        return new LegalEditorialReport(
+                Command.APPLY_REPLACE,
+                LegalManifestStatus.ERROR,
+                null,
+                Publication.from(requiredRelease, null),
+                new Operation(OperationType.REPLACE, Outcome.UNKNOWN, null),
+                Plan.identity(requiredPlan),
+                null,
+                Counts.releaseOnly(requiredRelease),
                 IssueSet.from(List.of(issue), 0));
     }
 
@@ -294,6 +319,47 @@ public final class LegalEditorialReport {
                 IssueSet.from(requiredResult.issues(), requiredResult.omittedIssueCount()));
     }
 
+    /** Maps one replacement apply result, retaining the confirmed plan identity. */
+    public static LegalEditorialReport forApplyReplace(
+            ValidatedRelease release,
+            ValidatedEditorialPlan editorialPlan,
+            LegalEditorialApplyResult result) {
+        ValidatedRelease requiredRelease = Objects.requireNonNull(release, "release");
+        ValidatedEditorialPlan requiredPlan = Objects.requireNonNull(
+                editorialPlan,
+                "editorialPlan");
+        LegalEditorialApplyResult requiredResult = Objects.requireNonNull(result, "result");
+        Outcome outcome = switch (requiredResult.outcome()) {
+            case APPLIED -> Outcome.APPLIED;
+            case ALREADY_APPLIED -> Outcome.ALREADY_APPLIED;
+            case BLOCKED -> Outcome.BLOCKED;
+            case ERROR -> Outcome.ERROR;
+            case UNKNOWN -> Outcome.UNKNOWN;
+        };
+        LegalEditorialApplyReceipt receipt = requiredResult.receipt().orElse(null);
+        if (receipt != null
+                && receipt.operationType()
+                != LegalEditorialApplyReceipt.OperationType.REPLACE) {
+            throw new IllegalArgumentException(
+                    "apply-replace sólo admite receipts REPLACE");
+        }
+        UUID publicationUuid = receipt == null ? null : receipt.targetPublicationUuid();
+        Instant appliedAt = receipt == null ? null : receipt.appliedAt();
+        Readiness readiness = receipt == null
+                ? null
+                : Readiness.confirmed(receipt.readinessAfter(), receipt.appliedAt());
+        return new LegalEditorialReport(
+                Command.APPLY_REPLACE,
+                requiredResult.status(),
+                requiredResult.persisted(),
+                Publication.from(requiredRelease, publicationUuid),
+                new Operation(OperationType.REPLACE, outcome, appliedAt),
+                Plan.identity(requiredPlan),
+                readiness,
+                Counts.fromApply(requiredRelease, receipt),
+                IssueSet.from(requiredResult.issues(), requiredResult.omittedIssueCount()));
+    }
+
     /** Status consumed by the process boundary for the stable exit code. */
     public LegalManifestStatus status() {
         return status;
@@ -363,6 +429,7 @@ public final class LegalEditorialReport {
             case PLAN_PROMOTE -> requirePlanPromoteMatrix();
             case APPLY_PROMOTE -> requireApplyMatrix();
             case PLAN_REPLACE -> requirePlanReplaceMatrix();
+            case APPLY_REPLACE -> requireApplyReplaceMatrix();
         }
     }
 
@@ -491,6 +558,46 @@ public final class LegalEditorialReport {
                     && noApplyDatabaseMetadata();
             case UNKNOWN -> status == LegalManifestStatus.ERROR
                     && persisted == null
+                    && noApplyDatabaseMetadata()
+                    && issues.size() == 1
+                    && issues.getFirst().code()
+                    == LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN
+                    && COMMIT_LOCATION.equals(issues.getFirst().location())
+                    && omittedIssueCount == 0;
+            default -> false;
+        };
+        if (!valid) {
+            throw invalidMatrix();
+        }
+    }
+
+    private void requireApplyReplaceMatrix() {
+        if (operation == null
+                || operation.operationType() != OperationType.REPLACE
+                || plan != null && (!plan.hasExternalIdentity() || plan.hasObservation())
+                || counts != null && counts.delta() != null) {
+            throw invalidMatrix();
+        }
+        boolean valid = switch (operation.outcome()) {
+            case APPLIED, ALREADY_APPLIED -> status == LegalManifestStatus.PASS
+                    && Boolean.TRUE.equals(persisted)
+                    && plan != null
+                    && publication != null
+                    && publication.publicationUuid() != null
+                    && operation.appliedAt() != null
+                    && readiness != null
+                    && readiness.value() == LegalEditorialReadiness.READY
+                    && counts != null
+                    && counts.state() != null;
+            case BLOCKED -> status == LegalManifestStatus.BLOCKED
+                    && Boolean.FALSE.equals(persisted)
+                    && noApplyDatabaseMetadata();
+            case ERROR -> status == LegalManifestStatus.ERROR
+                    && Boolean.FALSE.equals(persisted)
+                    && noApplyDatabaseMetadata();
+            case UNKNOWN -> status == LegalManifestStatus.ERROR
+                    && persisted == null
+                    && plan != null
                     && noApplyDatabaseMetadata()
                     && issues.size() == 1
                     && issues.getFirst().code()

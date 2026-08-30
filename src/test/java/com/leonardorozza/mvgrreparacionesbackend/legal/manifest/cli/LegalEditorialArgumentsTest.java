@@ -39,19 +39,22 @@ class LegalEditorialArgumentsTest {
             "--confirm-editorial-plan-sha256=" + PLAN_SHA256;
 
     @Test
-    void exposesTheFourCaseSensitiveCommandsAndTheirMutationMode() {
+    void exposesTheFiveCaseSensitiveCommandsAndTheirMutationMode() {
         assertThat(Command.values())
                 .extracting(Command::externalValue)
                 .containsExactly(
                         "readiness",
                         "plan-promote",
                         "apply-promote",
-                        "plan-replace");
+                        "plan-replace",
+                        "apply-replace");
         assertThat(Command.READINESS.mutating()).isFalse();
         assertThat(Command.PLAN_PROMOTE.mutating()).isFalse();
         assertThat(Command.APPLY_PROMOTE.mutating()).isTrue();
         assertThat(Command.PLAN_REPLACE.mutating()).isFalse();
         assertThat(Command.PLAN_REPLACE.requiresEditorialPlan()).isTrue();
+        assertThat(Command.APPLY_REPLACE.mutating()).isTrue();
+        assertThat(Command.APPLY_REPLACE.requiresEditorialPlan()).isTrue();
     }
 
     @ParameterizedTest
@@ -77,13 +80,15 @@ class LegalEditorialArgumentsTest {
 
     @ParameterizedTest
     @MethodSource("validReplaceArgumentOrders")
-    void parsesEveryReplaceArgumentExactlyOnceInAnyOrder(String[] arguments) {
+    void parsesEveryReplaceArgumentExactlyOnceInAnyOrder(
+            Command command,
+            String[] arguments) {
         LegalManifestValidation<LegalEditorialArguments> result =
                 LegalEditorialArguments.parse(arguments);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         LegalEditorialArguments parsed = result.value().orElseThrow();
-        assertThat(parsed.command()).isEqualTo(Command.PLAN_REPLACE);
+        assertThat(parsed.command()).isEqualTo(command);
         assertThat(parsed.manifestPath())
                 .isEqualTo(Path.of("release-valid-v1", "publication-manifest.json"));
         assertThat(parsed.editorialPlanPath())
@@ -193,23 +198,25 @@ class LegalEditorialArgumentsTest {
     void replaceDiagnosticStringRedactsBothPathsIdsAndHashes() {
         String privateManifest = "/private/editor/release/publication-manifest.json";
         String privatePlan = "/private/editor/plan/editorial-plan.json";
-        LegalEditorialArguments arguments = new LegalEditorialArguments(
-                Command.PLAN_REPLACE,
-                Path.of(privateManifest),
-                java.util.Optional.of(Path.of(privatePlan)),
-                new LegalEditorialConfirmation("private-publication", SHA256),
-                java.util.Optional.of(
-                        new LegalEditorialPlanConfirmation(OPERATION_ID, PLAN_SHA256)));
+        for (Command command : List.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE)) {
+            LegalEditorialArguments arguments = new LegalEditorialArguments(
+                    command,
+                    Path.of(privateManifest),
+                    java.util.Optional.of(Path.of(privatePlan)),
+                    new LegalEditorialConfirmation("private-publication", SHA256),
+                    java.util.Optional.of(
+                            new LegalEditorialPlanConfirmation(OPERATION_ID, PLAN_SHA256)));
 
-        assertThat(arguments.toString())
-                .contains("plan-replace", "redacted")
-                .doesNotContain(
-                        privateManifest,
-                        privatePlan,
-                        "private-publication",
-                        OPERATION_ID.toString(),
-                        SHA256,
-                        PLAN_SHA256);
+            assertThat(arguments.toString())
+                    .contains(command.externalValue(), "redacted")
+                    .doesNotContain(
+                            privateManifest,
+                            privatePlan,
+                            "private-publication",
+                            OPERATION_ID.toString(),
+                            SHA256,
+                            PLAN_SHA256);
+        }
     }
 
     private static Stream<Arguments> validArgumentOrders() {
@@ -243,18 +250,21 @@ class LegalEditorialArgumentsTest {
                 CONFIRM_OPERATION,
                 CONFIRM_PLAN_SHA);
         List<Arguments> cases = new ArrayList<>();
-        addPermutations(namedArguments, new ArrayList<>(), cases);
+        for (Command command : List.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE)) {
+            addPermutations(command, namedArguments, new ArrayList<>(), cases);
+        }
         return cases.stream();
     }
 
     private static void addPermutations(
+            Command command,
             List<String> remaining,
             List<String> ordered,
             List<Arguments> cases) {
         if (remaining.isEmpty()) {
-            cases.add(Arguments.of((Object) cliArguments(
-                    Command.PLAN_REPLACE.externalValue(),
-                    ordered.toArray(String[]::new))));
+            cases.add(Arguments.of(
+                    command,
+                    cliArguments(command.externalValue(), ordered.toArray(String[]::new))));
             return;
         }
         for (int index = 0; index < remaining.size(); index++) {
@@ -262,7 +272,7 @@ class LegalEditorialArgumentsTest {
             String next = nextRemaining.remove(index);
             List<String> nextOrdered = new ArrayList<>(ordered);
             nextOrdered.add(next);
-            addPermutations(nextRemaining, nextOrdered, cases);
+            addPermutations(command, nextRemaining, nextOrdered, cases);
         }
     }
 
@@ -272,11 +282,20 @@ class LegalEditorialArgumentsTest {
                 cliArguments("plan-promote"),
                 cliArguments("apply-promote"),
                 cliArguments("plan-replace"),
+                cliArguments("apply-replace"),
                 cliArguments("readiness", "--manifest=", PUBLICATION, CONFIRM_SHA),
                 cliArguments("plan-promote", "--manifest=   ", PUBLICATION, CONFIRM_SHA),
                 cliArguments("apply-promote", "--manifest=\t", PUBLICATION, CONFIRM_SHA),
                 cliArguments(
                         "plan-replace",
+                        "--manifest= ",
+                        EDITORIAL_PLAN,
+                        PUBLICATION,
+                        CONFIRM_SHA,
+                        CONFIRM_OPERATION,
+                        CONFIRM_PLAN_SHA),
+                cliArguments(
+                        "apply-replace",
                         "--manifest= ",
                         EDITORIAL_PLAN,
                         PUBLICATION,
@@ -294,6 +313,7 @@ class LegalEditorialArgumentsTest {
                 cliArguments("plan_promote", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("apply", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("PLAN-REPLACE", MANIFEST, PUBLICATION, CONFIRM_SHA),
+                cliArguments("APPLY-REPLACE", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", null, PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", "--manifest", PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", "--manifest", "publication-manifest.json", PUBLICATION),
@@ -371,13 +391,19 @@ class LegalEditorialArgumentsTest {
     private static Stream<Arguments> missingEditorialPlanArguments() {
         return Stream.<String[]>of(
                 replaceArguments("--editorial-plan="),
-                replaceArguments("--editorial-plan=   "))
+                replaceArguments("--editorial-plan=   "),
+                replaceArguments(Command.APPLY_REPLACE, "--editorial-plan="),
+                replaceArguments(Command.APPLY_REPLACE, "--editorial-plan=   "))
                 .map(arguments -> Arguments.of((Object) arguments));
     }
 
     private static String[] replaceArguments(String replacement) {
+        return replaceArguments(Command.PLAN_REPLACE, replacement);
+    }
+
+    private static String[] replaceArguments(Command command, String replacement) {
         List<String> arguments = new ArrayList<>(List.of(
-                "plan-replace",
+                command.externalValue(),
                 MANIFEST,
                 EDITORIAL_PLAN,
                 PUBLICATION,

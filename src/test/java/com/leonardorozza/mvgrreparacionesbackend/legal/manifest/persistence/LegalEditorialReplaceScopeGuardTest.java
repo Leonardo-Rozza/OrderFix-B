@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentRef;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -70,11 +71,22 @@ class LegalEditorialReplaceScopeGuardTest {
         assertBlockedMapping(result);
     }
 
+    @Test
+    void blocksAValidatedPlanOfAnotherOperationEvenWithoutBatches() {
+        ValidatedEditorialPlan plan = planWithBatches(List.of());
+        when(plan.operationType()).thenReturn(OperationType.RETIRE);
+
+        LegalManifestValidation<ValidatedEditorialPlan> result = guard.validate(plan);
+
+        assertBlockedMapping(result);
+    }
+
     private static ValidatedEditorialPlan planWithBatches(
             List<DocumentReplacementBatch> batches) {
         ValidatedEditorialPlan validatedPlan = mock(ValidatedEditorialPlan.class);
         LegalEditorialPlanV1 plan = mock(LegalEditorialPlanV1.class);
         when(validatedPlan.plan()).thenReturn(plan);
+        when(validatedPlan.operationType()).thenReturn(OperationType.REPLACE);
         when(plan.documentReplacementBatches()).thenReturn(batches);
         return validatedPlan;
     }

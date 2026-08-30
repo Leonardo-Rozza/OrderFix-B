@@ -37,6 +37,8 @@ class LegalEditorialExecutionPlanTest {
     private static final UUID TARGET_PUBLICATION = uuid(2);
     private static final UUID OPERATION_ID = uuid(3);
     private static final UUID BATCH_ID = uuid(4);
+    private static final UUID HISTORICAL_BATCH_ID = uuid(5);
+    private static final UUID SECOND_HISTORICAL_BATCH_ID = uuid(6);
     private static final UUID DOCUMENT_ONE = uuid(10);
     private static final UUID DOCUMENT_TWO = uuid(11);
     private static final UUID DOCUMENT_PREDECESSOR = uuid(12);
@@ -146,6 +148,12 @@ class LegalEditorialExecutionPlanTest {
                 .hasSize(1);
         assertThat(plan.mutationCommands().documentSlotDeletes()).isEmpty();
         assertThat(plan.mutationCommands().documentSlotInserts()).isEmpty();
+        assertThat(plan.expectedPostState().preexistingReplacementBatches())
+                .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .containsExactly(HISTORICAL_BATCH_ID);
+        assertThat(plan.mutationCommands().replacementBatchesToCreateAndSeal())
+                .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                .containsExactly(BATCH_ID);
         assertThat(plan.deltaCounts()).isEqualTo(new LegalEditorialExecutionPlan.DeltaCounts(
                 1, 2, 0, 0, 0, 1, 1, 0, 0, 1));
     }
@@ -770,6 +778,83 @@ class LegalEditorialExecutionPlanTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void historicalBatchesAllowADeepSuccessorToPredecessorChain() {
+        LegalEditorialExecutionPlan.ReplacementBatch first = replacementBatch(
+                SECOND_HISTORICAL_BATCH_ID,
+                DOCUMENT_ONE,
+                DOCUMENT_TWO);
+        LegalEditorialExecutionPlan.ReplacementBatch second = replacementBatch(
+                HISTORICAL_BATCH_ID,
+                DOCUMENT_TWO,
+                DOCUMENT_PREDECESSOR);
+
+        LegalEditorialExecutionPlan.ExpectedPostState postState = postStateWithBatches(
+                List.of(second, first),
+                List.of());
+
+        assertThat(postState.preexistingReplacementBatches())
+                .extracting(
+                        LegalEditorialExecutionPlan.ReplacementBatch::batchId,
+                        batch -> batch.predecessorDocumentVersionIds().getFirst(),
+                        batch -> batch.successors().getFirst().documentVersionId())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                HISTORICAL_BATCH_ID,
+                                DOCUMENT_TWO,
+                                DOCUMENT_PREDECESSOR),
+                        org.assertj.core.groups.Tuple.tuple(
+                                SECOND_HISTORICAL_BATCH_ID,
+                                DOCUMENT_ONE,
+                                DOCUMENT_TWO));
+    }
+
+    @Test
+    void historicalBatchesRejectRepeatedPredecessorOrSuccessorRoles() {
+        LegalEditorialExecutionPlan.ReplacementBatch first = replacementBatch(
+                HISTORICAL_BATCH_ID,
+                DOCUMENT_ONE,
+                DOCUMENT_PREDECESSOR);
+        LegalEditorialExecutionPlan.ReplacementBatch repeatedPredecessor = replacementBatch(
+                SECOND_HISTORICAL_BATCH_ID,
+                DOCUMENT_ONE,
+                DOCUMENT_SUCCESSOR);
+        LegalEditorialExecutionPlan.ReplacementBatch repeatedSuccessor = replacementBatch(
+                SECOND_HISTORICAL_BATCH_ID,
+                DOCUMENT_TWO,
+                DOCUMENT_PREDECESSOR);
+
+        assertThatThrownBy(() -> postStateWithBatches(
+                List.of(first, repeatedPredecessor),
+                List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("predecesora histórica");
+        assertThatThrownBy(() -> postStateWithBatches(
+                List.of(first, repeatedSuccessor),
+                List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sucesora histórica");
+    }
+
+    @Test
+    void replacementBatchIdCannotOverlapHistoricalAndCutoverSets() {
+        LegalEditorialExecutionPlan.ReplacementBatch historical = replacementBatch(
+                HISTORICAL_BATCH_ID,
+                DOCUMENT_ONE,
+                DOCUMENT_PREDECESSOR);
+        LegalEditorialExecutionPlan.ReplacementBatch currentWithSameId = replacementBatch(
+                HISTORICAL_BATCH_ID,
+                DOCUMENT_PREDECESSOR,
+                DOCUMENT_SUCCESSOR);
+
+        assertThatThrownBy(() -> postStateWithBatches(
+                List.of(historical),
+                List.of(currentWithSameId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("preexistente")
+                .hasMessageContaining("delta");
+    }
+
     private static LegalEditorialExecutionPlan promote(boolean changeRequired) {
         List<LegalEditorialExecutionPlan.DocumentTransition> documentTransitions = List.of(
                 transition(DOCUMENT_TWO, EstadoVersionLegal.PUBLICADA, EstadoVersionLegal.VIGENTE, null),
@@ -879,6 +964,15 @@ class LegalEditorialExecutionPlanTest {
                         List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
                                 DOCUMENT_SUCCESSOR,
                                 TARGET_PUBLICATION)));
+        LegalEditorialExecutionPlan.ReplacementBatch historicalBatch =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        HISTORICAL_BATCH_ID,
+                        PREEXISTING_AT,
+                        PREEXISTING_AT,
+                        List.of(DOCUMENT_ONE),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                DOCUMENT_PREDECESSOR,
+                                SOURCE_PUBLICATION)));
         LegalEditorialExecutionPlan.V27TriggerEffects triggerEffects =
                 new LegalEditorialExecutionPlan.V27TriggerEffects(
                         List.of(activateSuccessor, replacePredecessor),
@@ -915,11 +1009,12 @@ class LegalEditorialExecutionPlanTest {
                                         DOCUMENT_PREDECESSOR,
                                         EstadoVersionLegal.PUBLICADA,
                                         EstadoVersionLegal.VIGENTE,
-                                        null,
+                                        HISTORICAL_BATCH_ID,
                                         PREEXISTING_AT)),
                         List.of(),
                         List.of(successorSlot),
                         List.of(),
+                        List.of(historicalBatch),
                         List.of(batch),
                         triggerEffects);
         LegalEditorialExecutionPlan.MutationCommands commands = changeRequired
@@ -1010,6 +1105,37 @@ class LegalEditorialExecutionPlanTest {
                 changeRequired,
                 postState,
                 commands);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedPostState postStateWithBatches(
+            List<LegalEditorialExecutionPlan.ReplacementBatch> historical,
+            List<LegalEditorialExecutionPlan.ReplacementBatch> current) {
+        return new LegalEditorialExecutionPlan.ExpectedPostState(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                historical,
+                current,
+                LegalEditorialExecutionPlan.V27TriggerEffects.empty());
+    }
+
+    private static LegalEditorialExecutionPlan.ReplacementBatch replacementBatch(
+            UUID batchId,
+            UUID predecessorId,
+            UUID successorId) {
+        return new LegalEditorialExecutionPlan.ReplacementBatch(
+                batchId,
+                PREEXISTING_AT,
+                PREEXISTING_AT,
+                List.of(predecessorId),
+                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                        successorId,
+                        SOURCE_PUBLICATION)));
     }
 
     private static LegalEditorialExecutionPlan copy(

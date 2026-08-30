@@ -408,6 +408,69 @@ class LegalManifestCliProcessIT {
     }
 
     @Test
+    void packagedApplyReplaceRequiresTheExplicitMutationFlagBeforeJdbc()
+            throws Exception {
+        Path editorialPlan = Path.of(Objects.requireNonNull(
+                LegalManifestCliProcessIT.class.getResource(
+                        ONE_TO_ONE_REPLACE_PLAN)).toURI());
+        ProcessResult process = executeCli(
+                false,
+                List.of(
+                        "apply-replace",
+                        "--manifest=" + copiedManifest.toAbsolutePath(),
+                        "--editorial-plan=" + editorialPlan.toAbsolutePath(),
+                        "--confirm-publication-id=release-valid-v1",
+                        "--confirm-manifest-sha256=" + GOLDEN_MANIFEST_SHA256,
+                        "--confirm-operation-id=" + ONE_TO_ONE_REPLACE_OPERATION_ID,
+                        "--confirm-editorial-plan-sha256="
+                                + ONE_TO_ONE_REPLACE_PLAN_SHA256),
+                Map.of());
+
+        assertThat(process.exitCode()).isEqualTo(3);
+        assertThat(process.stderr()).isEmpty();
+        assertThat(process.stdout())
+                .endsWith("\n")
+                .doesNotEndWith("\n\n")
+                .doesNotContain(
+                        "\r",
+                        PROCESS_SECRET,
+                        copiedManifest.toAbsolutePath().toString(),
+                        editorialPlan.toAbsolutePath().toString());
+        JsonNode report = JSON.readTree(process.stdout());
+        assertExactFields(report, EDITORIAL_REPORT_FIELDS);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("apply-replace");
+        assertThat(report.path("status").textValue()).isEqualTo("ERROR");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("publication").path("publicationId").textValue())
+                .isEqualTo("release-valid-v1");
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(ONE_TO_ONE_REPLACE_OPERATION_ID);
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(ONE_TO_ONE_REPLACE_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("READY");
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(report.path("issues")).singleElement().satisfies(issue -> {
+            assertThat(issue.path("code").textValue())
+                    .isEqualTo("EDITORIAL_DISABLED");
+            assertThat(issue.path("location").textValue())
+                    .isEqualTo("cli/editorial/environment");
+        });
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+    }
+
+    @Test
     void dryRunGoldenReleasePassesAgainstMigratedPostgreSqlV27AndRollsBack()
             throws Exception {
         Flyway.configure()

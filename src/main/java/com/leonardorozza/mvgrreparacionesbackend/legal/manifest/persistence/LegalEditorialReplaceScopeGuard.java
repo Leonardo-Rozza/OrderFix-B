@@ -5,6 +5,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.DocumentReplacementBatch;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 
 import java.util.List;
 import java.util.Objects;
@@ -22,7 +23,9 @@ public final class LegalEditorialReplaceScopeGuard {
         List<DocumentReplacementBatch> batches = requiredPlan.plan()
                 .documentReplacementBatches();
 
-        if (batches.size() > 1 || hasUnsupportedCardinality(batches)) {
+        if (requiredPlan.operationType() != OperationType.REPLACE
+                || batches.size() > 1
+                || hasUnsupportedCardinality(batches)) {
             return LegalManifestValidation.failure(LegalManifestIssue.at(
                     LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
                     MAPPING_LOCATION));

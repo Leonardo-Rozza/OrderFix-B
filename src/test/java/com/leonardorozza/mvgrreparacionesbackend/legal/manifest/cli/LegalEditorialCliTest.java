@@ -386,6 +386,39 @@ class LegalEditorialCliTest {
     }
 
     @Test
+    void dispatchesApplyReplaceAndEmitsConfirmedV3WithPlanIdentity() throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        LegalEditorialApplyResult result = appliedReplaceResult();
+        when(service.applyReplace(release, editorialPlan)).thenReturn(result);
+        prepareSuccessfulContext(Command.APPLY_REPLACE, LegalEditorialApplyService.class, service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.APPLY_REPLACE), output);
+
+        JsonNode report = assertSuccessfulV3(
+                output,
+                "apply-replace",
+                "APPLIED",
+                "READY");
+        assertThat(exit).isZero();
+        assertThat(report.path("persisted").booleanValue()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("publication").path("publicationUuid").textValue())
+                .isEqualTo(PUBLICATION_UUID.toString());
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(EDITORIAL_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").path("replacementBatches").intValue())
+                .isEqualTo(1);
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        verify(service).applyReplace(release, editorialPlan);
+    }
+
+    @Test
     void rawEditorialConstructorFailureStillUsesTheV3Boundary() throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
@@ -455,6 +488,40 @@ class LegalEditorialCliTest {
         assertThat(report.path("counts").path("state").isNull()).isTrue();
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .doesNotContain("apply-result-canary");
+    }
+
+    @Test
+    void applyReplaceInvocationWithoutTerminalResultIsUnknownAndIdentitySafe()
+            throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        when(service.applyReplace(release, editorialPlan))
+                .thenThrow(new IllegalStateException("apply-replace-result-canary"));
+        prepareSuccessfulContext(Command.APPLY_REPLACE, LegalEditorialApplyService.class, service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.APPLY_REPLACE), output);
+
+        JsonNode report = report(output);
+        assertThat(exit).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("apply-replace");
+        assertThat(report.path("persisted").isNull()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("REPLACE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("UNKNOWN");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(EDITORIAL_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .doesNotContain("apply-replace-result-canary");
     }
 
     @Test
@@ -714,6 +781,23 @@ class LegalEditorialCliTest {
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 11, 6, 34, 12, 11, 8, 0);
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.PASS);
+        when(result.persisted()).thenReturn(Boolean.TRUE);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.APPLIED);
+        when(result.receipt()).thenReturn(Optional.of(receipt));
+        when(result.issues()).thenReturn(List.of());
+        when(result.omittedIssueCount()).thenReturn(0);
+        return result;
+    }
+
+    private static LegalEditorialApplyResult appliedReplaceResult() {
+        LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.REPLACE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.READY,
+                11, 6, 34, 12, 11, 8, 1);
         LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
         when(result.status()).thenReturn(LegalManifestStatus.PASS);
         when(result.persisted()).thenReturn(Boolean.TRUE);

@@ -7,6 +7,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialPlanResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialReadinessResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -15,12 +17,15 @@ import static org.mockito.Mockito.when;
 
 class LegalEditorialCliExecutionStateTest {
 
-    @Test
-    void confirmedApplySurvivesContextCloseAndSerializationFailure() {
+    @ParameterizedTest
+    @EnumSource(
+            value = Command.class,
+            names = {"APPLY_PROMOTE", "APPLY_REPLACE"})
+    void confirmedApplySurvivesContextCloseAndSerializationFailure(Command command) {
         ValidatedRelease release = mock(ValidatedRelease.class);
         LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
         when(result.persisted()).thenReturn(Boolean.TRUE);
-        LegalEditorialCliExecutionState state = fullyOpened(Command.APPLY_PROMOTE, release);
+        LegalEditorialCliExecutionState state = fullyOpened(command, release);
 
         state.resultReceived(result);
         state.contextClosed();
@@ -31,16 +36,21 @@ class LegalEditorialCliExecutionStateTest {
         assertThat(snapshot.phase())
                 .isEqualTo(LegalEditorialCliExecutionState.Phase.REPORT_SERIALIZATION_FAILED);
         assertThat(snapshot.release()).containsSame(release);
+        assertThat(snapshot.editorialPlan().isPresent())
+                .isEqualTo(command == Command.APPLY_REPLACE);
         assertThat(snapshot.applyResult()).containsSame(result);
         assertThat(snapshot.persisted()).isTrue();
         assertThat(snapshot.readinessResult()).isEmpty();
         assertThat(snapshot.planResult()).isEmpty();
     }
 
-    @Test
-    void applyWithoutTerminalResultBecomesUnknownAfterInvocationStarts() {
+    @ParameterizedTest
+    @EnumSource(
+            value = Command.class,
+            names = {"APPLY_PROMOTE", "APPLY_REPLACE"})
+    void applyWithoutTerminalResultBecomesUnknownAfterInvocationStarts(Command command) {
         ValidatedRelease release = mock(ValidatedRelease.class);
-        LegalEditorialCliExecutionState state = fullyOpened(Command.APPLY_PROMOTE, release);
+        LegalEditorialCliExecutionState state = fullyOpened(command, release);
 
         assertThat(state.snapshot().persisted()).isNull();
         state.contextClosed();
@@ -177,6 +187,9 @@ class LegalEditorialCliExecutionStateTest {
         LegalEditorialCliExecutionState state =
                 LegalEditorialCliExecutionState.recognized(command);
         state.releaseValidated(release);
+        if (command.requiresEditorialPlan()) {
+            state.editorialPlanConfirmed(mock(ValidatedEditorialPlan.class));
+        }
         state.contextOpened();
         state.operationInvocationStarted();
         return state;

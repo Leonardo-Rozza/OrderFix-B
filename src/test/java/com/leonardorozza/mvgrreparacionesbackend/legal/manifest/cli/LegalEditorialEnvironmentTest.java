@@ -23,8 +23,10 @@ class LegalEditorialEnvironmentTest {
     private static final String PRIVATE_PASSWORD = "private-editor-password";
 
     @ParameterizedTest
-    @MethodSource("disabledFlagValues")
-    void mutatingCommandRequiresTheExactLowercaseEnableFlagBeforeAnyOtherCheck(String value) {
+    @MethodSource("disabledFlagCases")
+    void mutatingCommandRequiresTheExactLowercaseEnableFlagBeforeAnyOtherCheck(
+            Command command,
+            String value) {
         Map<String, String> environment = baseEnvironment();
         if (value == null) {
             environment.remove(LegalEditorialEnvironment.ENABLED_VARIABLE);
@@ -36,7 +38,7 @@ class LegalEditorialEnvironmentTest {
 
         LegalManifestValidation<LegalEditorialEnvironment> result =
                 LegalEditorialEnvironment.resolve(
-                        Command.APPLY_PROMOTE,
+                        command,
                         environment,
                         forbiddenProperties);
 
@@ -58,11 +60,14 @@ class LegalEditorialEnvironmentTest {
         assertThat(result.value()).isPresent();
     }
 
-    @Test
-    void mutatingCommandPassesWhenTheEnableFlagIsExactlyTrue() {
+    @ParameterizedTest
+    @EnumSource(
+            value = Command.class,
+            names = {"APPLY_PROMOTE", "APPLY_REPLACE"})
+    void mutatingCommandPassesWhenTheEnableFlagIsExactlyTrue(Command command) {
         LegalManifestValidation<LegalEditorialEnvironment> result =
                 LegalEditorialEnvironment.resolve(
-                        Command.APPLY_PROMOTE,
+                        command,
                         enabledEnvironment(),
                         new Properties());
 
@@ -176,8 +181,10 @@ class LegalEditorialEnvironmentTest {
                         PRIVATE_PASSWORD);
     }
 
-    private static Stream<String> disabledFlagValues() {
-        return Stream.of(null, "false", "TRUE", "True", " true", "true ", "1", "");
+    private static Stream<Arguments> disabledFlagCases() {
+        return Stream.of(null, "false", "TRUE", "True", " true", "true ", "1", "")
+                .flatMap(value -> Stream.of(Command.APPLY_PROMOTE, Command.APPLY_REPLACE)
+                        .map(command -> Arguments.of(command, value)));
     }
 
     private static Stream<Arguments> invalidRequiredConfiguration() {

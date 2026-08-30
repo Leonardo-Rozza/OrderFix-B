@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-29
 
-Estado: en ejecución — Subcortes 6A, 6B y 6C completados
+Estado: en ejecución — Subcortes 6A, 6B, 6C y 6D completados
 
 Diseño aprobado:
 
@@ -261,6 +261,8 @@ Commit:
 
 ## Subcorte 6D — Apply REPLACE uno a uno
 
+Estado: completado el 2026-08-30.
+
 ### Objetivo
 
 Ejecutar el delta REPLACE permitido y exponer `apply-replace` con la frontera transaccional común.
@@ -310,6 +312,35 @@ git status --short
 Commit:
 
     feat(legal): aplica cutover editorial uno a uno
+
+### Evidencia de cierre 6D
+
+- El modelo separa lotes históricos del lote delta. Planner y verificador acreditan de forma
+  exacta reemplazos encadenados X→B→C: el lote X→B debe existir y estar sellado con miembros y
+  timestamp exactos, mientras sólo B→C puede aparecer en los comandos del cutover actual.
+- `LegalDocumentReplacementWriter` aplica únicamente DML directo REPLACE. Antes de mutar bloquea
+  publicaciones, líneas y versiones en orden UUID, relee el grafo completo, slots, punteros,
+  snapshots y ausencia del lote nuevo, y revalida el fingerprint fuente en la misma sesión.
+- Los deletes directos de slots ocurren antes de cualquier insert directo para admitir una
+  reasignación de la misma PK dentro del cutover. El writer no duplica transiciones ni slots V27,
+  no escribe lotes históricos y exige cardinalidad exacta; sólo inserts por batch admiten
+  `Statement.SUCCESS_NO_INFO` de pgjdbc, mientras los deletes permanecen estrictamente en uno.
+- `LegalEditorialApplyService.applyReplace` comparte gate, timestamp, transacción, verificador,
+  constraints, readiness y completion-state con PROMOTE. El guard 0..1/1→1 corre antes del gate y
+  JDBC; replay es SELECT-only y `UNKNOWN` nunca conserva un receipt tentativo.
+- El CLI empaquetado expone `apply-replace` con siete tokens exactos, cuatro confirmaciones y flag
+  mutable obligatorio. El reporte v3 cubre `APPLIED`, `ALREADY_APPLIED`, `BLOCKED`, `ERROR` y
+  `UNKNOWN`; en fallos conserva sólo la identidad input-safe y no filtra metadata de DB.
+- Java 21 (Corretto 21.0.10): suite unitaria backend completa de 2.613 tests, sin fallos, errores
+  ni omitidos. El writer REPLACE aporta 9 tests focales, incluidos `SUCCESS_NO_INFO` permitido
+  sólo para inserts y rechazo del mismo resultado en deletes.
+- Puerta `verify`: 22 tests de integración seleccionados sobre PostgreSQL 16/Flyway V27,
+  aislamiento de sesión y procesos CLI empaquetados, todos verdes. También pasaron el empaquetado
+  de ambos JAR y el control de ausencia de propiedades secretas; `sh -n` validó el launcher.
+- Cuatro auditorías independientes cubrieron writer, CLI, semántica y alcance. Las primeras
+  detectaron la compatibilidad pgjdbc y la expectativa de severidad `EDITORIAL_DISABLED`; tras
+  corregirlas, las revisiones finales cerraron sin hallazgos P0–P2. No se modificaron V27, schema,
+  grants, endpoints, JPA, frontend, contenido legal ni despliegue; no hubo push.
 
 ## Subcorte 6E — Acreditación PostgreSQL y cierre
 

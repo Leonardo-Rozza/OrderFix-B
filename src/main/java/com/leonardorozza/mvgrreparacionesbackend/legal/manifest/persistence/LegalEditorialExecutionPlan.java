@@ -191,6 +191,7 @@ record LegalEditorialExecutionPlan(
             List<RequirementTransition> preexistingRequirementTransitions,
             List<ExpectedDocumentSlot> documentSlots,
             List<ExpectedRequiredSetPointer> requiredSetPointers,
+            List<ReplacementBatch> preexistingReplacementBatches,
             List<ReplacementBatch> replacementBatches,
             V27TriggerEffects v27TriggerEffects
     ) {
@@ -228,6 +229,10 @@ record LegalEditorialExecutionPlan(
                     requiredSetPointers,
                     REQUIRED_SET_POINTER_ORDER,
                     "requiredSetPointers");
+            preexistingReplacementBatches = sortedCopy(
+                    preexistingReplacementBatches,
+                    REPLACEMENT_BATCH_ORDER,
+                    "preexistingReplacementBatches");
             replacementBatches = sortedCopy(
                     replacementBatches,
                     REPLACEMENT_BATCH_ORDER,
@@ -283,10 +288,49 @@ record LegalEditorialExecutionPlan(
                     ExpectedRequiredSetPointer::key,
                     "requiredSetPointers contiene una PK duplicada");
             rejectDuplicateKeys(
+                    preexistingReplacementBatches,
+                    ReplacementBatch::batchId,
+                    "preexistingReplacementBatches contiene un UUID duplicado");
+            rejectDuplicateKeys(
                     replacementBatches,
                     ReplacementBatch::batchId,
                     "replacementBatches contiene un UUID duplicado");
+            Set<UUID> preexistingBatchIds = preexistingReplacementBatches.stream()
+                    .map(ReplacementBatch::batchId)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            if (replacementBatches.stream()
+                    .map(ReplacementBatch::batchId)
+                    .anyMatch(preexistingBatchIds::contains)) {
+                throw new IllegalArgumentException(
+                        "Un lote no puede ser preexistente y parte del delta");
+            }
+            rejectHistoricalReplacementRoleReuse(preexistingReplacementBatches);
             rejectOverlappingReplacementMembers(replacementBatches);
+        }
+
+        ExpectedPostState(
+                List<ExpectedDocumentState> documentStates,
+                List<ExpectedRequirementState> requirementStates,
+                List<DocumentTransition> documentTransitions,
+                List<RequirementTransition> requirementTransitions,
+                List<DocumentTransition> preexistingDocumentTransitions,
+                List<RequirementTransition> preexistingRequirementTransitions,
+                List<ExpectedDocumentSlot> documentSlots,
+                List<ExpectedRequiredSetPointer> requiredSetPointers,
+                List<ReplacementBatch> replacementBatches,
+                V27TriggerEffects v27TriggerEffects) {
+            this(
+                    documentStates,
+                    requirementStates,
+                    documentTransitions,
+                    requirementTransitions,
+                    preexistingDocumentTransitions,
+                    preexistingRequirementTransitions,
+                    documentSlots,
+                    requiredSetPointers,
+                    List.of(),
+                    replacementBatches,
+                    v27TriggerEffects);
         }
 
         static ExpectedPostState empty() {
@@ -755,6 +799,7 @@ record LegalEditorialExecutionPlan(
                         || acknowledgeFailClosedGap
                         || !expectedPostState.preexistingDocumentTransitions().isEmpty()
                         || !expectedPostState.preexistingRequirementTransitions().isEmpty()
+                        || !expectedPostState.preexistingReplacementBatches().isEmpty()
                         || !expectedPostState.replacementBatches().isEmpty()
                         || !expectedPostState.v27TriggerEffects().isEmpty()
                         || !mutationCommands.replacementBatchesToCreateAndSeal().isEmpty()
@@ -795,6 +840,7 @@ record LegalEditorialExecutionPlan(
                         || !containsRetirement
                         || !expectedPostState.documentSlots().isEmpty()
                         || !expectedPostState.requiredSetPointers().isEmpty()
+                        || !expectedPostState.preexistingReplacementBatches().isEmpty()
                         || !expectedPostState.replacementBatches().isEmpty()
                         || !expectedPostState.v27TriggerEffects().isEmpty()
                         || !mutationCommands.documentSlotInserts().isEmpty()
@@ -1161,6 +1207,26 @@ record LegalEditorialExecutionPlan(
                 if (!seen.add(successor.documentVersionId())) {
                     throw new IllegalArgumentException(
                             "Una versión documental participa en más de un lote");
+                }
+            }
+        }
+    }
+
+    private static void rejectHistoricalReplacementRoleReuse(
+            List<ReplacementBatch> batches) {
+        Set<UUID> predecessors = new HashSet<>();
+        Set<UUID> successors = new HashSet<>();
+        for (ReplacementBatch batch : batches) {
+            for (UUID predecessor : batch.predecessorDocumentVersionIds()) {
+                if (!predecessors.add(predecessor)) {
+                    throw new IllegalArgumentException(
+                            "Una predecesora histórica participa en más de un lote");
+                }
+            }
+            for (ReplacementSuccessor successor : batch.successors()) {
+                if (!successors.add(successor.documentVersionId())) {
+                    throw new IllegalArgumentException(
+                            "Una sucesora histórica participa en más de un lote");
                 }
             }
         }

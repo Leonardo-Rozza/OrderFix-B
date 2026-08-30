@@ -391,8 +391,10 @@ class LegalEditorialPrivilegeVerifierIT {
                 jdbc,
                 planner,
                 new LegalInitialPromotionCore(jdbc),
+                new LegalDocumentReplacementWriter(jdbc, readiness),
                 new LegalEditorialPostStateVerifier(jdbc),
                 readiness,
+                new LegalEditorialReplaceScopeGuard(),
                 new LegalEditorialFailureMapper(),
                 schema,
                 privileges);

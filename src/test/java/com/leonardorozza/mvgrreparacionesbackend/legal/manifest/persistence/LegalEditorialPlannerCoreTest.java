@@ -60,6 +60,15 @@ class LegalEditorialPlannerCoreTest {
     private static final UUID SOURCE_PUBLICATION_ID = uuid(6);
     private static final UUID ADDED_DOCUMENT_ID = uuid(7);
     private static final UUID ADDED_DOCUMENT_LINE_ID = uuid(8);
+    private static final UUID HISTORICAL_BATCH_ID = uuid(9);
+    private static final UUID CURRENT_BATCH_ID = uuid(10);
+    private static final UUID HISTORICAL_PREDECESSOR_ID = uuid(11);
+    private static final UUID EXTRA_BATCH_ID = uuid(12);
+    private static final UUID EXTRA_PREDECESSOR_ID = uuid(13);
+    private static final Instant HISTORICAL_ACTIVATION_AT =
+            APPLIED_AT.minusSeconds(86_400);
+    private static final Instant HISTORICAL_BATCH_CREATED_AT =
+            HISTORICAL_ACTIVATION_AT.minusSeconds(60);
 
     @Test
     void coreAndOriginVerifierAreSelectOnlyAndOwnNeitherGateNorClock() throws Exception {
@@ -264,7 +273,10 @@ class LegalEditorialPlannerCoreTest {
         ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
         LegalEditorialPlanV1 plan = mock(LegalEditorialPlanV1.class);
         when(token.plan()).thenReturn(plan);
+        when(token.operationType()).thenReturn(
+                LegalEditorialPlanV1.OperationType.REPLACE);
         when(plan.operationType()).thenReturn(LegalEditorialPlanV1.OperationType.REPLACE);
+        when(plan.documentReplacementBatches()).thenReturn(List.of());
         when(plan.targetPublicationId()).thenReturn(TARGET_EXTERNAL_ID);
         when(plan.targetManifestSha256()).thenReturn(TARGET_SHA);
         when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
@@ -435,6 +447,188 @@ class LegalEditorialPlannerCoreTest {
             assertThat(execution.expectedPostState().replacementBatches()).isEmpty();
         });
         verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void freshReplacementSeparatesHistoricalAndCurrentBatchesInAChain() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                List.of(currentReplacementBatch()));
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                historicalChainSourceSnapshot(Map.of(
+                        HISTORICAL_BATCH_ID,
+                        historicalBatch(HISTORICAL_ACTIVATION_AT))));
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(2, 2, 0, 1, 1),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedPostState().preexistingReplacementBatches())
+                    .singleElement()
+                    .satisfies(batch -> {
+                        assertThat(batch.batchId()).isEqualTo(HISTORICAL_BATCH_ID);
+                        assertThat(batch.createdAt()).isEqualTo(HISTORICAL_BATCH_CREATED_AT);
+                        assertThat(batch.sealedAt()).isEqualTo(HISTORICAL_ACTIVATION_AT);
+                    });
+            assertThat(execution.expectedPostState().replacementBatches())
+                    .singleElement()
+                    .satisfies(batch -> {
+                        assertThat(batch.batchId()).isEqualTo(CURRENT_BATCH_ID);
+                        assertThat(batch.createdAt()).isEqualTo(OBSERVED_AT);
+                        assertThat(batch.sealedAt()).isEqualTo(OBSERVED_AT);
+                    });
+            assertThat(execution.mutationCommands().replacementBatchesToCreateAndSeal())
+                    .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
+                    .containsExactly(CURRENT_BATCH_ID);
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .filteredOn(transition -> HISTORICAL_BATCH_ID.equals(
+                            transition.replacementBatchId()))
+                    .singleElement()
+                    .satisfies(transition -> {
+                        assertThat(transition.documentVersionId()).isEqualTo(DOCUMENT_ID);
+                        assertThat(transition.occurredAt())
+                                .isEqualTo(HISTORICAL_ACTIVATION_AT);
+                    });
+        });
+    }
+
+    @Test
+    void replacementReplayPreservesHistoricalBatchAndKeepsCurrentBatchAsCutoverDelta() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                List.of(currentReplacementBatch()));
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                historicalChainPostSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.ready(observation(2, 5, 0, 1, 2)));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+            assertThat(execution.expectedPostState().preexistingReplacementBatches())
+                    .singleElement()
+                    .satisfies(batch -> {
+                        assertThat(batch.batchId()).isEqualTo(HISTORICAL_BATCH_ID);
+                        assertThat(batch.createdAt()).isEqualTo(HISTORICAL_BATCH_CREATED_AT);
+                        assertThat(batch.sealedAt()).isEqualTo(HISTORICAL_ACTIVATION_AT);
+                    });
+            assertThat(execution.expectedPostState().replacementBatches())
+                    .singleElement()
+                    .satisfies(batch -> {
+                        assertThat(batch.batchId()).isEqualTo(CURRENT_BATCH_ID);
+                        assertThat(batch.createdAt()).isEqualTo(APPLIED_AT);
+                        assertThat(batch.sealedAt()).isEqualTo(APPLIED_AT);
+                    });
+            assertThat(execution.expectedPostState().preexistingDocumentTransitions())
+                    .extracting(LegalEditorialExecutionPlan.DocumentTransition::occurredAt)
+                    .containsOnly(HISTORICAL_ACTIVATION_AT);
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void replacementRejectsAnUnexpectedRelatedBatchFromTheSnapshot() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                List.of(currentReplacementBatch()));
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                historicalChainSourceSnapshot(Map.of(
+                        HISTORICAL_BATCH_ID,
+                        historicalBatch(HISTORICAL_ACTIVATION_AT),
+                        EXTRA_BATCH_ID,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                EXTRA_BATCH_ID,
+                                HISTORICAL_BATCH_CREATED_AT,
+                                HISTORICAL_ACTIVATION_AT,
+                                List.of(EXTRA_PREDECESSOR_ID),
+                                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        DOCUMENT_ID,
+                                        SOURCE_PUBLICATION_ID))))));
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(2, 2, 0, 1, 2),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
+    void replacementRejectsAHistoricalBatchWhoseSealDoesNotMatchItsActivation() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                List.of(currentReplacementBatch()));
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                historicalChainSourceSnapshot(Map.of(
+                        HISTORICAL_BATCH_ID,
+                        historicalBatch(HISTORICAL_ACTIVATION_AT.plusSeconds(1)))));
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(2, 2, 0, 1, 1),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
     }
 
     @Test
@@ -708,9 +902,18 @@ class LegalEditorialPlannerCoreTest {
     private static ValidatedEditorialPlan replacementToken(
             List<DocumentScopedRef> additions,
             List<DocumentScopedRef> reuses) {
+        return replacementToken(additions, reuses, List.of());
+    }
+
+    private static ValidatedEditorialPlan replacementToken(
+            List<DocumentScopedRef> additions,
+            List<DocumentScopedRef> reuses,
+            List<DocumentReplacementBatch> batches) {
         ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
         LegalEditorialPlanV1 plan = mock(LegalEditorialPlanV1.class);
         when(token.plan()).thenReturn(plan);
+        when(token.operationType()).thenReturn(
+                LegalEditorialPlanV1.OperationType.REPLACE);
         when(token.operationId()).thenReturn(OPERATION_ID);
         when(token.editorialPlanSha256()).thenReturn("e".repeat(64));
         when(plan.operationType()).thenReturn(LegalEditorialPlanV1.OperationType.REPLACE);
@@ -723,13 +926,165 @@ class LegalEditorialPlannerCoreTest {
         when(plan.acknowledgeFailClosedGap()).thenReturn(false);
         when(plan.documentAdditions()).thenReturn(additions);
         when(plan.documentReuses()).thenReturn(reuses);
-        when(plan.documentReplacementBatches()).thenReturn(List.of());
+        when(plan.documentReplacementBatches()).thenReturn(batches);
         when(plan.documentRetirements()).thenReturn(List.of());
         when(plan.requirementAdditions()).thenReturn(List.of());
         when(plan.requirementReuses()).thenReturn(List.of());
         when(plan.requirementReplacements()).thenReturn(List.of());
         when(plan.requirementRetirements()).thenReturn(List.of());
         return token;
+    }
+
+    private static DocumentReplacementBatch currentReplacementBatch() {
+        return new DocumentReplacementBatch(
+                CURRENT_BATCH_ID,
+                List.of(ContextoLegal.REGISTRO),
+                List.of(new DocumentRef(DOCUMENT_ID, "c".repeat(64))),
+                List.of(new DocumentRef(ADDED_DOCUMENT_ID, "d".repeat(64))));
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot historicalChainSourceSnapshot(
+            Map<UUID, LegalEditorialPlannerCore.BatchEvidence> batches) {
+        LegalEditorialPlannerCore.DocumentEvidence predecessor = evidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                "c".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                HISTORICAL_ACTIVATION_AT,
+                HISTORICAL_BATCH_ID,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence successor = evidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.BORRADOR,
+                null,
+                null,
+                List.of(ContextoLegal.REGISTRO));
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(ADDED_DOCUMENT_ID),
+                List.of(),
+                List.of(DOCUMENT_ID),
+                List.of(),
+                Map.of(
+                        DOCUMENT_ID, predecessor,
+                        ADDED_DOCUMENT_ID, successor),
+                Map.of(),
+                List.of(),
+                List.of(slot(predecessor, ContextoLegal.REGISTRO, SOURCE_PUBLICATION_ID)),
+                List.of(),
+                List.of(
+                        transition(
+                                1,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                null,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(
+                                2,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT)),
+                List.of(),
+                batches);
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot historicalChainPostSnapshot() {
+        LegalEditorialPlannerCore.DocumentEvidence predecessor = evidence(
+                DOCUMENT_ID,
+                DOCUMENT_LINE_ID,
+                SOURCE_PUBLICATION_ID,
+                "c".repeat(64),
+                EstadoVersionLegal.REEMPLAZADA,
+                APPLIED_AT,
+                CURRENT_BATCH_ID,
+                List.of(ContextoLegal.REGISTRO));
+        LegalEditorialPlannerCore.DocumentEvidence successor = evidence(
+                ADDED_DOCUMENT_ID,
+                ADDED_DOCUMENT_LINE_ID,
+                TARGET_PUBLICATION_ID,
+                "d".repeat(64),
+                EstadoVersionLegal.VIGENTE,
+                APPLIED_AT,
+                CURRENT_BATCH_ID,
+                List.of(ContextoLegal.REGISTRO));
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                List.of(ADDED_DOCUMENT_ID),
+                List.of(),
+                List.of(DOCUMENT_ID),
+                List.of(),
+                Map.of(
+                        DOCUMENT_ID, predecessor,
+                        ADDED_DOCUMENT_ID, successor),
+                Map.of(),
+                List.of(),
+                List.of(slot(successor, ContextoLegal.REGISTRO, TARGET_PUBLICATION_ID)),
+                List.of(),
+                List.of(
+                        transition(
+                                1,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                null,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(
+                                2,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(
+                                3,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.VIGENTE,
+                                EstadoVersionLegal.REEMPLAZADA,
+                                CURRENT_BATCH_ID,
+                                APPLIED_AT),
+                        transition(
+                                4,
+                                ADDED_DOCUMENT_ID,
+                                EstadoVersionLegal.BORRADOR,
+                                EstadoVersionLegal.PUBLICADA,
+                                null,
+                                APPLIED_AT),
+                        transition(
+                                5,
+                                ADDED_DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                CURRENT_BATCH_ID,
+                                APPLIED_AT)),
+                List.of(),
+                Map.of(
+                        HISTORICAL_BATCH_ID,
+                        historicalBatch(HISTORICAL_ACTIVATION_AT),
+                        CURRENT_BATCH_ID,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                CURRENT_BATCH_ID,
+                                APPLIED_AT,
+                                APPLIED_AT,
+                                List.of(DOCUMENT_ID),
+                                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        ADDED_DOCUMENT_ID,
+                                        TARGET_PUBLICATION_ID)))));
+    }
+
+    private static LegalEditorialPlannerCore.BatchEvidence historicalBatch(Instant sealedAt) {
+        return new LegalEditorialPlannerCore.BatchEvidence(
+                HISTORICAL_BATCH_ID,
+                HISTORICAL_BATCH_CREATED_AT,
+                sealedAt,
+                List.of(HISTORICAL_PREDECESSOR_ID),
+                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                        DOCUMENT_ID,
+                        SOURCE_PUBLICATION_ID)));
     }
 
     private static DocumentReplacementBatch batchWithCardinality(
@@ -777,6 +1132,26 @@ class LegalEditorialPlannerCoreTest {
             EstadoVersionLegal state,
             Instant stateChangedAt,
             List<ContextoLegal> contexts) {
+        return evidence(
+                id,
+                lineId,
+                introductionPublicationId,
+                sha256,
+                state,
+                stateChangedAt,
+                null,
+                contexts);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentEvidence evidence(
+            UUID id,
+            UUID lineId,
+            UUID introductionPublicationId,
+            String sha256,
+            EstadoVersionLegal state,
+            Instant stateChangedAt,
+            UUID replacementBatchId,
+            List<ContextoLegal> contexts) {
         return new LegalEditorialPlannerCore.DocumentEvidence(
                 id,
                 lineId,
@@ -786,7 +1161,7 @@ class LegalEditorialPlannerCoreTest {
                 state,
                 stateChangedAt,
                 null,
-                null,
+                replacementBatchId,
                 TipoDocumentoLegal.TERMINOS_SERVICIO,
                 LocaleLegal.ES_AR,
                 contexts);
@@ -812,13 +1187,23 @@ class LegalEditorialPlannerCoreTest {
             EstadoVersionLegal previous,
             EstadoVersionLegal next,
             Instant occurredAt) {
+        return transition(id, documentVersionId, previous, next, null, occurredAt);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentTransitionEvidence transition(
+            long id,
+            UUID documentVersionId,
+            EstadoVersionLegal previous,
+            EstadoVersionLegal next,
+            UUID replacementBatchId,
+            Instant occurredAt) {
         return new LegalEditorialPlannerCore.DocumentTransitionEvidence(
                 id,
                 documentVersionId,
                 previous,
                 next,
                 null,
-                null,
+                replacementBatchId,
                 occurredAt);
     }
 

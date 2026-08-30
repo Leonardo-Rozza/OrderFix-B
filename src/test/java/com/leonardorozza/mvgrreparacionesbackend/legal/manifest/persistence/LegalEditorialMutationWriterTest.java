@@ -18,6 +18,8 @@ class LegalEditorialMutationWriterTest {
                 .containsExactlyInAnyOrder("write", "usesJdbc");
         assertThat(LegalEditorialMutationWriter.class)
                 .isAssignableFrom(LegalInitialPromotionCore.class);
+        assertThat(LegalEditorialMutationWriter.class)
+                .isAssignableFrom(LegalDocumentReplacementWriter.class);
         assertThat(Arrays.stream(LegalEditorialMutationWriter.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("write")))
                 .singleElement()

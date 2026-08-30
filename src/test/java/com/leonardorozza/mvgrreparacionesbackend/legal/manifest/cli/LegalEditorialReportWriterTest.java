@@ -210,6 +210,36 @@ class LegalEditorialReportWriterTest {
     }
 
     @Test
+    void writesUnknownReplaceWithPlanIdentityAndExplicitNullDatabaseMetadata()
+            throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(
+                LegalEditorialReport.forUnknownApplyReplace(
+                        release,
+                        validatedReplacePlan()),
+                output);
+
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json).isEqualTo("{\"reportVersion\":3,\"command\":\"apply-replace\","
+                + "\"status\":\"ERROR\",\"persisted\":null,\"publication\":{"
+                + "\"publicationId\":\"release-valid-v1\",\"schemaVersion\":1,"
+                + "\"manifestSha256\":\"" + GOLDEN_SHA + "\",\"publicationUuid\":null},"
+                + "\"operation\":{\"operationType\":\"REPLACE\",\"outcome\":\"UNKNOWN\","
+                + "\"appliedAt\":null},\"plan\":{\"operationId\":\"" + OPERATION_ID + "\","
+                + "\"editorialPlanSha256\":\"" + PLAN_SHA256 + "\","
+                + "\"changeRequired\":null,\"observedAt\":null,"
+                + "\"expectedReadinessAfter\":\"READY\"},\"readiness\":null,"
+                + "\"counts\":{\"release\":{\"documents\":11,\"requirements\":6,"
+                + "\"scopes\":8},\"state\":null,\"delta\":null},\"issues\":[{"
+                + "\"severity\":\"ERROR\",\"code\":\"COMMIT_OUTCOME_UNKNOWN\","
+                + "\"location\":\"database/commit\","
+                + "\"message\":\"No se pudo determinar si la operación editorial fue "
+                + "confirmada.\"}],\"omittedIssueCount\":0}");
+        assertExactlyOneJsonObject(output.toByteArray());
+    }
+
+    @Test
     void outputNeverLeaksContentPathsSqlOrRuntimeDetails() throws IOException {
         LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
                 LegalEditorialApplyReceipt.OperationType.PROMOTE,

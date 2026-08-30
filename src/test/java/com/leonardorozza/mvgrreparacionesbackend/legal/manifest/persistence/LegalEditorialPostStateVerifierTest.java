@@ -40,12 +40,15 @@ class LegalEditorialPostStateVerifierTest {
     private static final UUID SOURCE_PUBLICATION = uuid(2);
     private static final UUID DOCUMENT = uuid(10);
     private static final UUID SOURCE_DOCUMENT = uuid(11);
+    private static final UUID HISTORICAL_PREDECESSOR = uuid(12);
     private static final UUID DOCUMENT_LINE = uuid(20);
     private static final UUID SOURCE_DOCUMENT_LINE = uuid(21);
     private static final UUID REQUIREMENT = uuid(30);
     private static final UUID REQUIREMENT_LINE = uuid(31);
     private static final UUID REQUIRED_SET = uuid(40);
     private static final UUID UNEXPECTED_BATCH = uuid(50);
+    private static final UUID CURRENT_BATCH = uuid(51);
+    private static final UUID HISTORICAL_BATCH = uuid(52);
 
     @Test
     void exactFreshPromoteBuildsTheReceiptFromTheAccreditedTargetProjection() {
@@ -98,6 +101,13 @@ class LegalEditorialPostStateVerifierTest {
         assertThat(receipt.documentVersions()).isEqualTo(1);
         assertThat(receipt.documentTransitions()).isEqualTo(2);
         assertThat(receipt.documentSlots()).isEqualTo(1);
+        assertThat(receipt.replacementBatches()).isEqualTo(1);
+        verify(harness.reader).snapshot(
+                PUBLICATION,
+                SOURCE_PUBLICATION,
+                Set.of(DOCUMENT, SOURCE_DOCUMENT),
+                Set.of(),
+                Set.of(HISTORICAL_BATCH, CURRENT_BATCH));
     }
 
     @Test
@@ -115,6 +125,30 @@ class LegalEditorialPostStateVerifierTest {
                 exact.activeSlots(),
                 exact.activePointers(),
                 exact.batches()));
+
+        assertPostconditionMismatch(harness, replacementPlan());
+    }
+
+    @Test
+    void failsClosedWhenAHistoricalBatchDiffersFromTheAccreditedChain() {
+        LegalEditorialPlannerCore.PlannerSnapshot exact = replacementSnapshot();
+        Map<UUID, LegalEditorialPlannerCore.BatchEvidence> batches =
+                new LinkedHashMap<>(exact.batches());
+        batches.put(HISTORICAL_BATCH, new LegalEditorialPlannerCore.BatchEvidence(
+                HISTORICAL_BATCH,
+                HISTORICAL_APPLIED_AT,
+                HISTORICAL_APPLIED_AT,
+                List.of(uuid(13)),
+                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                        SOURCE_DOCUMENT,
+                        SOURCE_PUBLICATION))));
+        Harness harness = new Harness(copy(
+                exact,
+                exact.documents(),
+                exact.documentTransitions(),
+                exact.activeSlots(),
+                exact.activePointers(),
+                batches));
 
         assertPostconditionMismatch(harness, replacementPlan());
     }
@@ -359,31 +393,73 @@ class LegalEditorialPostStateVerifierTest {
     }
 
     private static LegalEditorialExecutionPlan.ExpectedPostState replacementExpectedPostState() {
-        List<LegalEditorialExecutionPlan.DocumentTransition> transitions = new ArrayList<>(
-                documentPromotionHistory(DOCUMENT));
-        transitions.add(new LegalEditorialExecutionPlan.DocumentTransition(
+        LegalEditorialExecutionPlan.DocumentTransition replaceSource =
+                new LegalEditorialExecutionPlan.DocumentTransition(
                 SOURCE_DOCUMENT,
                 EstadoVersionLegal.VIGENTE,
-                EstadoVersionLegal.RETIRADA,
-                "retirada acreditada",
+                EstadoVersionLegal.REEMPLAZADA,
                 null,
-                APPLIED_AT));
+                CURRENT_BATCH,
+                APPLIED_AT);
+        List<LegalEditorialExecutionPlan.DocumentTransition> transitions = new ArrayList<>(
+                documentPromotionHistory(DOCUMENT, APPLIED_AT, CURRENT_BATCH));
+        transitions.add(replaceSource);
+        LegalEditorialExecutionPlan.ReplacementBatch historicalBatch =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        HISTORICAL_BATCH,
+                        HISTORICAL_APPLIED_AT,
+                        HISTORICAL_APPLIED_AT,
+                        List.of(HISTORICAL_PREDECESSOR),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                SOURCE_DOCUMENT,
+                                SOURCE_PUBLICATION)));
+        LegalEditorialExecutionPlan.ReplacementBatch currentBatch =
+                new LegalEditorialExecutionPlan.ReplacementBatch(
+                        CURRENT_BATCH,
+                        APPLIED_AT,
+                        APPLIED_AT,
+                        List.of(SOURCE_DOCUMENT),
+                        List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                DOCUMENT,
+                                PUBLICATION)));
         return new LegalEditorialExecutionPlan.ExpectedPostState(
                 List.of(
-                        documentState(DOCUMENT, EstadoVersionLegal.VIGENTE, null),
+                        documentState(
+                                DOCUMENT,
+                                EstadoVersionLegal.VIGENTE,
+                                null,
+                                CURRENT_BATCH),
                         documentState(
                                 SOURCE_DOCUMENT,
-                                EstadoVersionLegal.RETIRADA,
-                                "retirada acreditada")),
+                                EstadoVersionLegal.REEMPLAZADA,
+                                null,
+                                CURRENT_BATCH)),
                 List.of(),
                 transitions,
                 List.of(),
-                documentPromotionHistory(SOURCE_DOCUMENT, HISTORICAL_APPLIED_AT),
+                documentPromotionHistory(
+                        SOURCE_DOCUMENT,
+                        HISTORICAL_APPLIED_AT,
+                        HISTORICAL_BATCH),
                 List.of(),
                 List.of(slot(DOCUMENT, DOCUMENT_LINE)),
                 List.of(),
-                List.of(),
-                LegalEditorialExecutionPlan.V27TriggerEffects.empty());
+                List.of(historicalBatch),
+                List.of(currentBatch),
+                new LegalEditorialExecutionPlan.V27TriggerEffects(
+                        List.of(
+                                transitions.stream()
+                                        .filter(transition -> transition.documentVersionId()
+                                                .equals(DOCUMENT)
+                                                && transition.newState()
+                                                == EstadoVersionLegal.VIGENTE)
+                                        .findFirst()
+                                        .orElseThrow(),
+                                replaceSource),
+                        List.of(new LegalEditorialExecutionPlan.DocumentSlotDelete(
+                                slot(DOCUMENT, DOCUMENT_LINE).key(),
+                                SOURCE_DOCUMENT)),
+                        List.of(slot(DOCUMENT, DOCUMENT_LINE))));
     }
 
     private static LegalEditorialPlannerCore.PlannerSnapshot promotedSnapshot() {
@@ -425,13 +501,19 @@ class LegalEditorialPostStateVerifierTest {
     private static LegalEditorialPlannerCore.PlannerSnapshot replacementSnapshot() {
         Map<UUID, LegalEditorialPlannerCore.DocumentEvidence> documents = new LinkedHashMap<>();
         documents.put(DOCUMENT, documentEvidence(
-                DOCUMENT, DOCUMENT_LINE, PUBLICATION, EstadoVersionLegal.VIGENTE, null));
+                DOCUMENT,
+                DOCUMENT_LINE,
+                PUBLICATION,
+                EstadoVersionLegal.VIGENTE,
+                null,
+                CURRENT_BATCH));
         documents.put(SOURCE_DOCUMENT, documentEvidence(
                 SOURCE_DOCUMENT,
                 SOURCE_DOCUMENT_LINE,
                 SOURCE_PUBLICATION,
-                EstadoVersionLegal.RETIRADA,
-                "retirada acreditada"));
+                EstadoVersionLegal.REEMPLAZADA,
+                null,
+                CURRENT_BATCH));
         return new LegalEditorialPlannerCore.PlannerSnapshot(
                 List.of(DOCUMENT),
                 List.of(),
@@ -450,18 +532,37 @@ class LegalEditorialPostStateVerifierTest {
                         documentTransitionEvidence(1, DOCUMENT,
                                 EstadoVersionLegal.BORRADOR, EstadoVersionLegal.PUBLICADA, null),
                         documentTransitionEvidence(2, DOCUMENT,
-                                EstadoVersionLegal.PUBLICADA, EstadoVersionLegal.VIGENTE, null),
+                                EstadoVersionLegal.PUBLICADA, EstadoVersionLegal.VIGENTE, null,
+                                CURRENT_BATCH, APPLIED_AT),
                         documentTransitionEvidence(3, SOURCE_DOCUMENT,
                                 EstadoVersionLegal.BORRADOR, EstadoVersionLegal.PUBLICADA, null,
                                 HISTORICAL_APPLIED_AT),
                         documentTransitionEvidence(4, SOURCE_DOCUMENT,
                                 EstadoVersionLegal.PUBLICADA, EstadoVersionLegal.VIGENTE, null,
-                                HISTORICAL_APPLIED_AT),
+                                HISTORICAL_BATCH, HISTORICAL_APPLIED_AT),
                         documentTransitionEvidence(5, SOURCE_DOCUMENT,
-                                EstadoVersionLegal.VIGENTE, EstadoVersionLegal.RETIRADA,
-                                "retirada acreditada")),
+                                EstadoVersionLegal.VIGENTE, EstadoVersionLegal.REEMPLAZADA,
+                                null, CURRENT_BATCH, APPLIED_AT)),
                 List.of(),
-                Map.of());
+                Map.of(
+                        HISTORICAL_BATCH,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                HISTORICAL_BATCH,
+                                HISTORICAL_APPLIED_AT,
+                                HISTORICAL_APPLIED_AT,
+                                List.of(HISTORICAL_PREDECESSOR),
+                                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        SOURCE_DOCUMENT,
+                                        SOURCE_PUBLICATION))),
+                        CURRENT_BATCH,
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                CURRENT_BATCH,
+                                APPLIED_AT,
+                                APPLIED_AT,
+                                List.of(SOURCE_DOCUMENT),
+                                List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
+                                        DOCUMENT,
+                                        PUBLICATION)))));
     }
 
     private static LegalEditorialPlannerCore.PlannerSnapshot copy(
@@ -499,12 +600,20 @@ class LegalEditorialPostStateVerifierTest {
             UUID id,
             EstadoVersionLegal state,
             String reason) {
+        return documentState(id, state, reason, null);
+    }
+
+    private static LegalEditorialExecutionPlan.ExpectedDocumentState documentState(
+            UUID id,
+            EstadoVersionLegal state,
+            String reason,
+            UUID replacementBatchId) {
         return new LegalEditorialExecutionPlan.ExpectedDocumentState(
                 id,
                 state,
                 APPLIED_AT,
                 reason,
-                null);
+                replacementBatchId);
     }
 
     private static LegalEditorialExecutionPlan.ExpectedRequirementState requirementState() {
@@ -548,6 +657,13 @@ class LegalEditorialPostStateVerifierTest {
     private static List<LegalEditorialExecutionPlan.DocumentTransition> documentPromotionHistory(
             UUID documentId,
             Instant occurredAt) {
+        return documentPromotionHistory(documentId, occurredAt, null);
+    }
+
+    private static List<LegalEditorialExecutionPlan.DocumentTransition> documentPromotionHistory(
+            UUID documentId,
+            Instant occurredAt,
+            UUID activationBatchId) {
         return List.of(
                 new LegalEditorialExecutionPlan.DocumentTransition(
                         documentId,
@@ -561,7 +677,7 @@ class LegalEditorialPostStateVerifierTest {
                         EstadoVersionLegal.PUBLICADA,
                         EstadoVersionLegal.VIGENTE,
                         null,
-                        null,
+                        activationBatchId,
                         occurredAt));
     }
 
@@ -588,6 +704,16 @@ class LegalEditorialPostStateVerifierTest {
             UUID introductionPublication,
             EstadoVersionLegal state,
             String reason) {
+        return documentEvidence(id, lineId, introductionPublication, state, reason, null);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentEvidence documentEvidence(
+            UUID id,
+            UUID lineId,
+            UUID introductionPublication,
+            EstadoVersionLegal state,
+            String reason,
+            UUID replacementBatchId) {
         return new LegalEditorialPlannerCore.DocumentEvidence(
                 id,
                 lineId,
@@ -597,7 +723,7 @@ class LegalEditorialPostStateVerifierTest {
                 state,
                 APPLIED_AT,
                 reason,
-                null,
+                replacementBatchId,
                 TipoDocumentoLegal.TERMINOS_SERVICIO,
                 LocaleLegal.ES_AR,
                 List.of(ContextoLegal.REGISTRO));
@@ -635,13 +761,32 @@ class LegalEditorialPostStateVerifierTest {
                     EstadoVersionLegal next,
                     String reason,
                     Instant occurredAt) {
-        return new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+        return documentTransitionEvidence(
                 id,
                 documentId,
                 previous,
                 next,
                 reason,
                 null,
+                occurredAt);
+    }
+
+    private static LegalEditorialPlannerCore.DocumentTransitionEvidence
+            documentTransitionEvidence(
+                    long id,
+                    UUID documentId,
+                    EstadoVersionLegal previous,
+                    EstadoVersionLegal next,
+                    String reason,
+                    UUID replacementBatchId,
+                    Instant occurredAt) {
+        return new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                id,
+                documentId,
+                previous,
+                next,
+                reason,
+                replacementBatchId,
                 occurredAt);
     }
 

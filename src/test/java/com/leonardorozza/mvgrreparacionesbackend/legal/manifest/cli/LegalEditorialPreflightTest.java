@@ -260,8 +260,9 @@ class LegalEditorialPreflightTest {
     }
 
     @ParameterizedTest
-    @EnumSource(PlanConfirmationMismatch.class)
+    @MethodSource("replaceCommandsAndPlanConfirmationMismatches")
     void replacePlanConfirmationMismatchStopsBeforeScopeEnvironmentAndSpring(
+            Command command,
             PlanConfirmationMismatch mismatch) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
@@ -271,7 +272,7 @@ class LegalEditorialPreflightTest {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         int exitCode = cli().runSafely(
-                validArguments(Command.PLAN_REPLACE),
+                validArguments(command),
                 output);
 
         assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
@@ -284,11 +285,14 @@ class LegalEditorialPreflightTest {
                 environmentResolver,
                 contextFactory,
                 context,
-                planService);
+                planService,
+                applyService);
     }
 
     @ParameterizedTest
-    @EnumSource(value = Command.class, names = "PLAN_REPLACE")
+    @EnumSource(
+            value = Command.class,
+            names = {"PLAN_REPLACE", "APPLY_REPLACE"})
     void planValidationFailureWinsBeforeBundleConfirmationScopeAndEnvironment(Command command) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
@@ -308,12 +312,18 @@ class LegalEditorialPreflightTest {
                 .contains("\"plan\":null")
                 .doesNotContain("wrong-must-not-win");
         verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
-        verifyNoInteractions(replaceScopeGuard, environmentResolver, contextFactory, planService);
+        verifyNoInteractions(
+                replaceScopeGuard,
+                environmentResolver,
+                contextFactory,
+                planService,
+                applyService);
     }
 
     @ParameterizedTest
-    @EnumSource(PlanTargetMismatch.class)
+    @MethodSource("replaceCommandsAndTargetMismatches")
     void replaceTargetBindingMismatchStopsBeforeScopeEnvironmentSpringAndJdbc(
+            Command command,
             PlanTargetMismatch mismatch) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
@@ -334,7 +344,7 @@ class LegalEditorialPreflightTest {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         int exitCode = cli().runSafely(
-                validArguments(Command.PLAN_REPLACE),
+                validArguments(command),
                 output);
 
         assertThat(exitCode).isEqualTo(LegalManifestStatus.BLOCKED.exitCode());
@@ -355,11 +365,14 @@ class LegalEditorialPreflightTest {
                 environmentResolver,
                 contextFactory,
                 context,
-                planService);
+                planService,
+                applyService);
     }
 
     @ParameterizedTest
-    @EnumSource(value = Command.class, names = "PLAN_REPLACE")
+    @EnumSource(
+            value = Command.class,
+            names = {"PLAN_REPLACE", "APPLY_REPLACE"})
     void unsupportedReplaceScopeRetainsConfirmedIdentityWithoutResolvingEnvironment(
             Command command) {
         when(validator.validate(manifestPath))
@@ -381,7 +394,12 @@ class LegalEditorialPreflightTest {
                 .contains("\"changeRequired\":null", "\"observedAt\":null")
                 .doesNotContain("publicationUuid\":\"", "jdbc:postgresql");
         verify(replaceScopeGuard).validate(editorialPlan);
-        verifyNoInteractions(environmentResolver, contextFactory, context, planService);
+        verifyNoInteractions(
+                environmentResolver,
+                contextFactory,
+                context,
+                planService,
+                applyService);
     }
 
     private LegalManifestCli cli() {
@@ -427,6 +445,12 @@ class LegalEditorialPreflightTest {
                 when(planService.planReplace(release, editorialPlan))
                         .thenThrow(expectedBoundary);
             }
+            case APPLY_REPLACE -> {
+                when(context.getBean(LegalEditorialApplyService.class))
+                        .thenReturn(applyService);
+                when(applyService.applyReplace(release, editorialPlan))
+                        .thenThrow(expectedBoundary);
+            }
         }
     }
 
@@ -448,6 +472,10 @@ class LegalEditorialPreflightTest {
                 order.verify(context).getBean(LegalEditorialPlanService.class);
                 order.verify(planService).planReplace(release, editorialPlan);
             }
+            case APPLY_REPLACE -> {
+                order.verify(context).getBean(LegalEditorialApplyService.class);
+                order.verify(applyService).applyReplace(release, editorialPlan);
+            }
         }
     }
 
@@ -457,6 +485,7 @@ class LegalEditorialPreflightTest {
             case PLAN_PROMOTE -> planService;
             case APPLY_PROMOTE -> applyService;
             case PLAN_REPLACE -> planService;
+            case APPLY_REPLACE -> applyService;
         };
     }
 
@@ -556,6 +585,18 @@ class LegalEditorialPreflightTest {
     private static Stream<Arguments> commandsAndConfirmationMismatches() {
         return Stream.of(Command.values()).flatMap(command ->
                 Stream.of(ConfirmationMismatch.values()).map(mismatch ->
+                        Arguments.of(command, mismatch)));
+    }
+
+    private static Stream<Arguments> replaceCommandsAndPlanConfirmationMismatches() {
+        return Stream.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE).flatMap(command ->
+                Stream.of(PlanConfirmationMismatch.values()).map(mismatch ->
+                        Arguments.of(command, mismatch)));
+    }
+
+    private static Stream<Arguments> replaceCommandsAndTargetMismatches() {
+        return Stream.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE).flatMap(command ->
+                Stream.of(PlanTargetMismatch.values()).map(mismatch ->
                         Arguments.of(command, mismatch)));
     }
 

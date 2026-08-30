@@ -234,6 +234,95 @@ class LegalEditorialReportTest {
     }
 
     @Test
+    void applyReplaceClosesAppliedReplayBlockedErrorAndUnknownWithPlanIdentity() {
+        ValidatedEditorialPlan editorialPlan = validatedReplacePlan();
+        LegalEditorialReport applied = LegalEditorialReport.forApplyReplace(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.APPLIED,
+                        replaceReceipt(),
+                        List.of()));
+        LegalEditorialReport replay = LegalEditorialReport.forApplyReplace(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
+                        replaceReceipt(),
+                        List.of()));
+        LegalEditorialReport blocked = LegalEditorialReport.forApplyReplace(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.BLOCKED,
+                        Boolean.FALSE,
+                        LegalEditorialApplyResult.Outcome.BLOCKED,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        LegalEditorialReport error = LegalEditorialReport.forApplyReplace(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.ERROR,
+                        Boolean.FALSE,
+                        LegalEditorialApplyResult.Outcome.ERROR,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.POSTCONDITION_NOT_READY,
+                                "database/postcondition"))));
+        LegalEditorialReport unknown = LegalEditorialReport.forApplyReplace(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.ERROR,
+                        null,
+                        LegalEditorialApplyResult.Outcome.UNKNOWN,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                                "database/commit"))));
+
+        assertThat(applied.command()).isEqualTo("apply-replace");
+        assertThat(applied.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.REPLACE);
+        assertThat(applied.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.APPLIED);
+        assertThat(applied.persisted()).isTrue();
+        assertThat(applied.publication().publicationUuid()).isEqualTo(PUBLICATION_UUID);
+        assertThat(applied.operation().appliedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(applied.readiness().value()).isEqualTo(LegalEditorialReadiness.READY);
+        assertThat(applied.counts().state())
+                .isEqualTo(new LegalEditorialReport.StateCounts(11, 6, 34, 12, 11, 8, 1));
+        assertThat(replay.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.ALREADY_APPLIED);
+        assertThat(replay.persisted()).isTrue();
+        for (LegalEditorialReport report : List.of(
+                applied,
+                replay,
+                blocked,
+                error,
+                unknown)) {
+            assertThat(report.plan().operationId()).isEqualTo(OPERATION_ID);
+            assertThat(report.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+            assertThat(report.plan().changeRequired()).isNull();
+            assertThat(report.plan().observedAt()).isNull();
+            assertThat(report.counts().delta()).isNull();
+        }
+        assertThat(blocked.persisted()).isFalse();
+        assertThat(error.persisted()).isFalse();
+        assertThat(unknown.persisted()).isNull();
+        assertNoDatabaseMetadata(blocked);
+        assertNoDatabaseMetadata(error);
+        assertNoDatabaseMetadata(unknown);
+    }
+
+    @Test
     void conservativeUnknownBoundaryNeverInventsDatabaseMetadata() {
         LegalEditorialReport withRelease = LegalEditorialReport.forUnknownApply(release);
         LegalEditorialReport beforeRelease = LegalEditorialReport.forUnknownApply(null);
@@ -250,7 +339,31 @@ class LegalEditorialReportTest {
     }
 
     @Test
-    void knownPreflightFailuresRemainTypedForAllFourCommands() {
+    void conservativeUnknownReplaceBoundaryRetainsOnlyConfirmedInputIdentity() {
+        LegalEditorialReport unknown = LegalEditorialReport.forUnknownApplyReplace(
+                release,
+                validatedReplacePlan());
+
+        assertThat(unknown.command()).isEqualTo("apply-replace");
+        assertThat(unknown.status()).isEqualTo(LegalManifestStatus.ERROR);
+        assertThat(unknown.persisted()).isNull();
+        assertThat(unknown.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.REPLACE);
+        assertThat(unknown.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.UNKNOWN);
+        assertThat(unknown.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(unknown.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(unknown.plan().changeRequired()).isNull();
+        assertThat(unknown.plan().observedAt()).isNull();
+        assertThat(unknown.issues()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+            assertThat(issue.location()).isEqualTo("database/commit");
+        });
+        assertNoDatabaseMetadata(unknown);
+    }
+
+    @Test
+    void knownPreflightFailuresRemainTypedForAllFiveCommands() {
         LegalManifestIssue blockedIssue = issue(
                 LegalManifestIssueCode.CLI_ARGUMENTS_INVALID,
                 "cli/editorial/arguments");
@@ -263,6 +376,11 @@ class LegalEditorialReportTest {
         LegalEditorialReport replaceBeforeConfirmation =
                 LegalEditorialReport.forKnownFailure(
                         Command.PLAN_REPLACE,
+                        null,
+                        blockedIssue);
+        LegalEditorialReport applyReplaceBeforeConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.APPLY_REPLACE,
                         null,
                         blockedIssue);
 
@@ -280,7 +398,8 @@ class LegalEditorialReportTest {
                 readiness,
                 plan,
                 apply,
-                replaceBeforeConfirmation)) {
+                replaceBeforeConfirmation,
+                applyReplaceBeforeConfirmation)) {
             assertThat(failure.publication()).isNull();
             assertThat(failure.counts()).isNull();
         }
@@ -300,6 +419,20 @@ class LegalEditorialReportTest {
         assertThat(replaceAfterConfirmation.plan().changeRequired()).isNull();
         assertThat(replaceAfterConfirmation.plan().observedAt()).isNull();
         assertNoDatabaseMetadata(replaceAfterConfirmation);
+
+        LegalEditorialReport applyReplaceAfterConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.APPLY_REPLACE,
+                        release,
+                        editorialPlan,
+                        issue(
+                                LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID,
+                                "documentReplacementBatches"));
+        assertThat(applyReplaceAfterConfirmation.plan().operationId())
+                .isEqualTo(OPERATION_ID);
+        assertThat(applyReplaceAfterConfirmation.plan().editorialPlanSha256())
+                .isEqualTo(PLAN_SHA256);
+        assertNoDatabaseMetadata(applyReplaceAfterConfirmation);
 
         LegalEditorialReport operational = LegalEditorialReport.forKnownFailure(
                 Command.APPLY_PROMOTE,
@@ -347,6 +480,17 @@ class LegalEditorialReportTest {
                         Boolean.TRUE,
                         LegalEditorialApplyResult.Outcome.APPLIED,
                         replaceReceipt,
+                        List.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> LegalEditorialReport.forApplyReplace(
+                release,
+                validatedReplacePlan(),
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.APPLIED,
+                        receipt(),
                         List.of())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -446,6 +590,15 @@ class LegalEditorialReportTest {
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 11, 6, 34, 12, 11, 8, 0);
+    }
+
+    private static LegalEditorialApplyReceipt replaceReceipt() {
+        return new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.REPLACE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.READY,
+                11, 6, 34, 12, 11, 8, 1);
     }
 
     private static LegalEditorialReport.StateCounts stateCounts() {

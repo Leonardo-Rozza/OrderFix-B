@@ -63,7 +63,7 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void editorialPlanConfirmed(ValidatedEditorialPlan validatedPlan) {
-        requireCommand(Command.PLAN_REPLACE);
+        requireReplaceCommand();
         requirePhase(Phase.RELEASE_VALIDATED);
         editorialPlan = Objects.requireNonNull(validatedPlan, "editorialPlan");
         phase = Phase.EDITORIAL_PLAN_CONFIRMED;
@@ -92,7 +92,7 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void resultReceived(LegalEditorialApplyResult result) {
-        requireCommand(Command.APPLY_PROMOTE);
+        requireApplyCommand();
         requireInvocation();
         applyResult = Objects.requireNonNull(result, "result");
         phase = Phase.RESULT_RECEIVED;
@@ -136,6 +136,18 @@ final class LegalEditorialCliExecutionState {
 
     private void requireCommand(Command expected) {
         if (command != expected) {
+            throw invalidTransition();
+        }
+    }
+
+    private void requireReplaceCommand() {
+        if (command != Command.PLAN_REPLACE && command != Command.APPLY_REPLACE) {
+            throw invalidTransition();
+        }
+    }
+
+    private void requireApplyCommand() {
+        if (command != Command.APPLY_PROMOTE && command != Command.APPLY_REPLACE) {
             throw invalidTransition();
         }
     }

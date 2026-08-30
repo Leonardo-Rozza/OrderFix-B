@@ -4,6 +4,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditor
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssue;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -21,29 +23,41 @@ public final class LegalEditorialApplyService {
     private final LegalManifestDatabaseGate databaseGate;
     private final JdbcTemplate jdbc;
     private final LegalEditorialPlannerCore planner;
-    private final LegalEditorialMutationWriter mutationWriter;
+    private final LegalEditorialMutationWriter promotionWriter;
+    private final LegalEditorialMutationWriter replacementWriter;
     private final LegalEditorialPostStateVerifier postStateVerifier;
     private final LegalEditorialReadinessCore readinessCore;
+    private final LegalEditorialReplaceScopeGuard replaceScopeGuard;
     private final LegalEditorialFailureMapper failureMapper;
 
     LegalEditorialApplyService(
             LegalManifestDatabaseGate databaseGate,
             JdbcTemplate jdbc,
             LegalEditorialPlannerCore planner,
-            LegalEditorialMutationWriter mutationWriter,
+            LegalEditorialMutationWriter promotionWriter,
+            LegalEditorialMutationWriter replacementWriter,
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
+            LegalEditorialReplaceScopeGuard replaceScopeGuard,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier) {
         this.databaseGate = Objects.requireNonNull(databaseGate, "databaseGate");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.planner = Objects.requireNonNull(planner, "planner");
-        this.mutationWriter = Objects.requireNonNull(mutationWriter, "mutationWriter");
+        this.promotionWriter = Objects.requireNonNull(
+                promotionWriter,
+                "promotionWriter");
+        this.replacementWriter = Objects.requireNonNull(
+                replacementWriter,
+                "replacementWriter");
         this.postStateVerifier = Objects.requireNonNull(
                 postStateVerifier,
                 "postStateVerifier");
         this.readinessCore = Objects.requireNonNull(readinessCore, "readinessCore");
+        this.replaceScopeGuard = Objects.requireNonNull(
+                replaceScopeGuard,
+                "replaceScopeGuard");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
         this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
@@ -54,18 +68,47 @@ public final class LegalEditorialApplyService {
     /** Applies or confirms the first promotion of one validator-issued sealed release. */
     public LegalEditorialApplyResult applyPromote(ValidatedRelease target) {
         Objects.requireNonNull(target, "target");
+        return apply(
+                target,
+                promotionWriter,
+                observedAt -> requirePromotePlan(requireApplicable(
+                        planner.planPromote(target, observedAt))));
+    }
+
+    /** Applies or confirms one complete replacement bound to an accredited immutable plan. */
+    public LegalEditorialApplyResult applyReplace(
+            ValidatedRelease target,
+            ValidatedEditorialPlan editorialPlan) {
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(editorialPlan, "editorialPlan");
+        LegalManifestValidation<ValidatedEditorialPlan> supportedScope =
+                replaceScopeGuard.validate(editorialPlan);
+        if (!supportedScope.passed()) {
+            return LegalEditorialApplyResult.blocked(supportedScope.issues());
+        }
+        ValidatedEditorialPlan supportedPlan = supportedScope.value().orElseThrow();
+        return apply(
+                target,
+                replacementWriter,
+                observedAt -> requireReplacePlan(requireApplicable(
+                        planner.planReplace(target, supportedPlan, observedAt))));
+    }
+
+    private LegalEditorialApplyResult apply(
+            ValidatedRelease target,
+            LegalEditorialMutationWriter writer,
+            PlanOperation operation) {
         LegalTransactionCompletionState<ConfirmedApply> transactionState =
                 new LegalTransactionCompletionState<>();
         try {
-            requireSharedJdbcSession();
+            requireSharedJdbcSession(writer);
             databaseGate.executeMutable(status -> {
                 transactionState.callbackStarted();
                 Instant observedAt = readTransactionTimestamp();
-                LegalEditorialExecutionPlan plan = requirePromotePlan(requireApplicable(
-                        planner.planPromote(target, observedAt)));
+                LegalEditorialExecutionPlan plan = operation.plan(observedAt);
 
                 ConfirmedApply confirmed = plan.changeRequired()
-                        ? applyFresh(target, plan, observedAt)
+                        ? applyFresh(target, plan, observedAt, writer)
                         : confirmReplay(plan);
                 transactionState.receiptDelivered(confirmed);
                 return confirmed;
@@ -86,8 +129,9 @@ public final class LegalEditorialApplyService {
     private ConfirmedApply applyFresh(
             ValidatedRelease target,
             LegalEditorialExecutionPlan plan,
-            Instant observedAt) {
-        mutationWriter.write(plan);
+            Instant observedAt,
+            LegalEditorialMutationWriter writer) {
+        writer.write(plan);
         LegalEditorialApplyReceipt receipt = postStateVerifier.verify(plan);
         jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
         LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, observedAt);
@@ -118,6 +162,16 @@ public final class LegalEditorialApplyService {
     private static LegalEditorialExecutionPlan requirePromotePlan(
             LegalEditorialExecutionPlan plan) {
         if (plan.operationType() != LegalEditorialExecutionPlan.OperationType.PROMOTE) {
+            throw new LegalEditorialOperationalException(
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
+                    OBSERVATION_LOCATION);
+        }
+        return plan;
+    }
+
+    private static LegalEditorialExecutionPlan requireReplacePlan(
+            LegalEditorialExecutionPlan plan) {
+        if (plan.operationType() != LegalEditorialExecutionPlan.OperationType.REPLACE) {
             throw new LegalEditorialOperationalException(
                     LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
                     OBSERVATION_LOCATION);
@@ -157,10 +211,10 @@ public final class LegalEditorialApplyService {
         return Objects.requireNonNull(timestamp, "transaction_timestamp").toInstant();
     }
 
-    private void requireSharedJdbcSession() {
+    private void requireSharedJdbcSession(LegalEditorialMutationWriter writer) {
         if (!databaseGate.usesJdbc(jdbc)
                 || !planner.usesJdbc(jdbc)
-                || !mutationWriter.usesJdbc(jdbc)
+                || !writer.usesJdbc(jdbc)
                 || !postStateVerifier.usesJdbc(jdbc)
                 || !readinessCore.usesJdbc(jdbc)) {
             throw new LegalEditorialOperationalException(
@@ -250,5 +304,10 @@ public final class LegalEditorialApplyService {
                         "Un receipt transaccional requiere un éxito confirmado");
             }
         }
+    }
+
+    @FunctionalInterface
+    private interface PlanOperation {
+        LegalEditorialExecutionPlan plan(Instant observedAt);
     }
 }

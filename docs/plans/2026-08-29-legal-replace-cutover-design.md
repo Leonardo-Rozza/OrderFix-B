@@ -197,18 +197,22 @@ postestado exacto.
 10. Publicar versiones documentales y de requisito nuevas.
 11. Eliminar todos los punteros actuales observados, en orden de PK y mediante clave más
     `conjunto_id` esperado, exigiendo cardinalidad exacta.
-12. Activar adiciones documentales e insertar sus slots.
-13. Si existe lote, insertar `ABIERTO`, predecesora y sucesora y sellarlo.
-14. No duplicar transiciones ni slots producidos por el trigger del sello.
-15. Borrar slots de documentos salientes y llevarlos a `RETIRADA` con su motivo.
-16. Aplicar transiciones de requisitos nuevos, reemplazados y retirados.
-17. Rebind de cada documento reutilizado mediante `DELETE` más `INSERT` con el target.
-18. Insertar únicamente los punteros target hacia snapshots sellados existentes.
-19. Verificar el postestado exacto y construir el receipt todavía antes de forzar constraints.
-20. Ejecutar `SET CONSTRAINTS ALL IMMEDIATE`.
-21. Después de constraints, ejecutar únicamente `ReadinessCore` en la misma sesión y con el
+12. Liberar antes de cualquier insert todos los slots afectados por DML directo —retiros y
+    rebinds— mediante clave más versión esperada. Esto evita colisiones de PK cuando un slot
+    retirado se reasigna a una adición dentro del mismo cutover; el slot de una predecesora V27
+    no se borra directamente.
+13. Activar adiciones documentales e insertar sus slots.
+14. Si existe lote, insertar `ABIERTO`, predecesora y sucesora y sellarlo.
+15. No duplicar transiciones ni slots producidos por el trigger del sello.
+16. Llevar los documentos salientes ya liberados a `RETIRADA` con su motivo.
+17. Aplicar transiciones de requisitos nuevos, reemplazados y retirados.
+18. Completar el rebind de cada documento reutilizado insertando su slot con el target.
+19. Insertar únicamente los punteros target hacia snapshots sellados existentes.
+20. Verificar el postestado exacto y construir el receipt todavía antes de forzar constraints.
+21. Ejecutar `SET CONSTRAINTS ALL IMMEDIATE`.
+22. Después de constraints, ejecutar únicamente `ReadinessCore` en la misma sesión y con el
     timestamp ya leído.
-22. Confirmar sólo cuando el target queda exactamente `READY`.
+23. Confirmar sólo cuando el target queda exactamente `READY`.
 
 Después de forzar constraints no se permite más DML.
 

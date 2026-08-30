@@ -64,7 +64,9 @@ final class LegalEditorialPostStateVerifier {
         LegalEditorialExecutionPlan.ExpectedPostState expected = required.expectedPostState();
         Set<UUID> declaredDocumentIds = documentStateIds(expected);
         Set<UUID> declaredRequirementIds = requirementStateIds(expected);
-        Set<UUID> declaredBatchIds = expected.replacementBatches().stream()
+        Set<UUID> declaredBatchIds = java.util.stream.Stream.concat(
+                        expected.preexistingReplacementBatches().stream(),
+                        expected.replacementBatches().stream())
                 .map(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         UUID sourcePublicationId = required.source()
@@ -335,7 +337,9 @@ final class LegalEditorialPostStateVerifier {
 
     private static List<BatchProjection> expectedBatches(
             LegalEditorialExecutionPlan.ExpectedPostState expected) {
-        return expected.replacementBatches().stream()
+        return java.util.stream.Stream.concat(
+                        expected.preexistingReplacementBatches().stream(),
+                        expected.replacementBatches().stream())
                 .map(batch -> new BatchProjection(
                         batch.batchId(),
                         batch.createdAt(),
