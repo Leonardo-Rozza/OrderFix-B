@@ -121,6 +121,10 @@ inmutable de publicación, membresía, versiones y snapshots. Las proyecciones m
 usan sólo después de comprobar que cada clave esperada existe una vez, no hay extras y sus valores
 son coherentes. Recién entonces se transportan al postestado sus timestamps existentes.
 
+Para los punteros, la evidencia autoritativa de cada scope incluye miembros del conjunto sellado y
+versiones documentales referenciadas. Así la unión afectada se deriva igual antes y después del
+retiro aunque los punteros eliminados ya no estén presentes.
+
 No se construye el esperado copiando ciegamente `activeSlots` o `activePointers`: si una
 proyección sobreviviente falta, la planificación se bloquea. De otro modo un replay podría omitir
 del esperado la misma corrupción que debería detectar.
@@ -166,6 +170,13 @@ UUID o SHA confirmado que no coincida se bloquea antes de JDBC.
 
 No se persisten el `operationId`, el SHA del plan ni el receipt. Su unicidad histórica pertenece a
 la disciplina operativa externa hasta que una migración posterior diseñe y apruebe un ledger.
+
+Esta frontera impone una limitación epistémica explícita: un apply fresco sí demuestra que los
+timestamps de proyecciones sobrevivientes no cambiaron dentro de su transacción. Un replay
+posterior detecta claves faltantes o extra y valores derivables incoherentes, pero no puede probar
+por sí solo que alguien no alteró únicamente un timestamp mutable sobreviviente después del
+commit. Acreditar esa historia exigiría persistir evidencia en una migración posterior; no se
+sobrepromete en V27.
 
 Un plan diferente que prediga otro postestado no se trata como replay: la terminalidad de las
 versiones o la diferencia de fingerprint lo bloquea sin DML.
