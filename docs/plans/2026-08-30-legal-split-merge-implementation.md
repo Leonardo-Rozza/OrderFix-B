@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — diseño aprobado; Subcortes 7A, 7B y 7C completados, 7D pendiente
+Estado: en ejecución — diseño aprobado; Subcortes 7A a 7D completados, 7E pendiente
 
 Diseño aprobado:
 
@@ -255,7 +255,7 @@ Commit:
 
 ## Subcorte 7D — Replay, corrupción y rollback multibatch
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -289,6 +289,36 @@ git status --short
 Commit:
 
     test(legal): acredita atomicidad multibatch
+
+### Evidencia de cierre 7D
+
+- El replay compuesto se ejecuta primero con el mismo plan y después con otro `operationId` y SHA
+  de plan, pero con idénticos lotes y miembros. Ambos intentos devuelven `ALREADY_APPLIED`, el
+  mismo receipt y `appliedAt`; las 19 tablas editoriales y las 10 secuencias permanecen idénticas
+  después de cada llamada.
+- Ocho fixtures PostgreSQL independientes corrompen lote, miembro, transición o slot, tanto por
+  exceso como por ausencia. La siembra usa `session_replication_role=replica` sólo desde el owner
+  test-only e IDs explícitos para no consumir secuencias. Todos los replays terminan
+  `BLOCKED/SOURCE_FINGERPRINT_MISMATCH` en `database/source`, sin healing ni DML; batch, miembro e
+  historia conservan readiness `READY`, mientras los slots corruptos quedan `NOT_READY`.
+- La inyección JDBC test-only comparte el datasource y la transacción del rol editorial
+  restringido con schema y privilege verifiers reales. Deja completar el primer sello y acredita
+  dentro de esa transacción sus tres efectos V27; antes del segundo observa el lote aún `ABIERTO`,
+  sus predecesores `VIGENTE`, sus sucesoras `PUBLICADA` y cero transiciones de reemplazo, y recién
+  entonces falla.
+- El fallo entre sellos devuelve `ERROR`, `persisted=false` y
+  `EDITORIAL_OBSERVATION_FAILED` en `database/observation`. Tras el rollback, las 19 tablas vuelven
+  fila por fila al baseline, no queda ningún lote y el target continúa `NOT_READY`. PostgreSQL
+  conserva únicamente los huecos exactos esperados: 3 IDs de anteriores, 3 de sucesoras, 6 de
+  transiciones documentales y 6 de requisitos; las otras seis secuencias no cambian. El cálculo
+  cubre también un baseline con `is_called=false`.
+- Java 21 (Corretto 21.0.10): puerta unitaria focal de 39 tests y suite completa de 2.629 tests,
+  todas con 0 fallos, 0 errores y 0 omitidos. PostgreSQL 16.14/Flyway V27 ejecutó 33 integraciones
+  focales —7 de concurrencia, 13 de REPLACE y 13 de split/merge— sin fallos; el control de secretos
+  del JAR pasó y `git diff --check` quedó limpio.
+- No se modificaron producción, soporte compartido, V27/V28, schemas, grants, rol, CLI, reportes,
+  endpoints, JPA ni frontend; tampoco hubo push o deploy. La matriz amplia y el cierre documental
+  definitivo permanecen deliberadamente para 7E.
 
 ## Subcorte 7E — Regresiones y cierre
 

@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.ConfinedEdi
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.junit.jupiter.Container;
@@ -42,12 +45,16 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.assertEditorialConfirmed;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.assertEditorialKnownFailure;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.applyHarness;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.cleanLegalState;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.copyRelease;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.editorialSequenceStates;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.harness;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.migrate;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.promoteToReady;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.restrictedApplyHarness;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.withReplicaRole;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** PostgreSQL accreditation for fresh split, merge and disjoint multibatch cutovers. */
@@ -220,7 +227,219 @@ class LegalEditorialSplitMergeIT {
     @Test
     void disjointSplitAndMergeCommitTogetherWithExactPostStateUnderRestrictedRole()
             throws Exception {
-        ImportedRelease source = readyRelease("multibatch-source-v1", (manifestPath, manifest) ->
+        CompositeScenario scenario = compositeScenario("multibatch-fresh");
+        PlanFixture fixture = replacementPlan(
+                scenario.source(),
+                scenario.target(),
+                "disjoint-multibatch",
+                scenario.batchSpecs());
+
+        assertThat(Integer.signum(scenario.ids().splitMemberMinimum().compareTo(
+                        scenario.ids().mergeMemberMinimum())))
+                .isEqualTo(-Integer.signum(scenario.ids().splitBatchId().toString().compareTo(
+                        scenario.ids().mergeBatchId().toString())));
+        assertThat(fixture.batches())
+                .extracting(batch -> minimumMember(batch).toString())
+                .isSorted();
+        assertThat(fixture.batches())
+                .extracting(batch -> batch.predecessors().size()
+                        + "->" + batch.successors().size())
+                .containsExactlyInAnyOrder("1->2", "2->1");
+        assertFreshApply(
+                scenario.source(),
+                scenario.target(),
+                fixture,
+                new ExpectedReceipt(12, 6, 24, 12, 21, 8, 2));
+    }
+
+    @Test
+    void exactCompositePostStateReplaysAcrossExternalPlanIdentitiesWithoutDml()
+            throws Exception {
+        CompositeScenario scenario = compositeScenario("multibatch-replay");
+        PlanFixture firstPlan = replacementPlan(
+                scenario.source(),
+                scenario.target(),
+                "multibatch-replay-one",
+                scenario.batchSpecs());
+        PlanFixture secondPlan = replacementPlan(
+                scenario.source(),
+                scenario.target(),
+                "multibatch-replay-two",
+                scenario.batchSpecs());
+        assertThat(secondPlan.plan().operationId()).isNotEqualTo(firstPlan.plan().operationId());
+        assertThat(secondPlan.plan().editorialPlanSha256())
+                .isNotEqualTo(firstPlan.plan().editorialPlanSha256());
+        assertThat(secondPlan.batchIds()).isEqualTo(firstPlan.batchIds());
+        assertThat(secondPlan.batches()).isEqualTo(firstPlan.batches());
+
+        LegalEditorialApplyReceipt appliedReceipt = assertFreshApply(
+                scenario.source(),
+                scenario.target(),
+                firstPlan,
+                new ExpectedReceipt(12, 6, 24, 12, 21, 8, 2));
+        Map<String, String> rowsAfterApply = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesAfterApply =
+                editorialSequenceStates(owner);
+        assertThat(rowsAfterApply).hasSize(LegalV27EditorialInventory.EDITORIAL_TABLES.size());
+        assertThat(sequencesAfterApply).hasSize(10);
+
+        LegalEditorialApplyResult exactReplay = apply.service().applyReplace(
+                scenario.target().release(), firstPlan.plan());
+
+        assertEditorialConfirmed(
+                exactReplay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(exactReplay.receipt()).contains(appliedReceipt);
+        assertThat(exactReplay.appliedAt()).contains(appliedReceipt.appliedAt());
+        assertThat(editorialTableRows()).isEqualTo(rowsAfterApply);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesAfterApply);
+
+        LegalEditorialApplyResult foreignIdentityReplay = apply.service().applyReplace(
+                scenario.target().release(), secondPlan.plan());
+
+        assertEditorialConfirmed(
+                foreignIdentityReplay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(foreignIdentityReplay.receipt()).contains(appliedReceipt);
+        assertThat(foreignIdentityReplay.appliedAt()).contains(appliedReceipt.appliedAt());
+        assertThat(editorialTableRows()).isEqualTo(rowsAfterApply);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesAfterApply);
+        restrictedPrivileges.verify();
+    }
+
+    @ParameterizedTest(name = "corrupcion compuesta {0}")
+    @EnumSource(PostStateCorruption.class)
+    void everyExtraOrMissingCompositePostStateBlocksWithoutHealing(
+            PostStateCorruption corruption) throws Exception {
+        String seed = corruption.name().toLowerCase(java.util.Locale.ROOT);
+        CompositeScenario scenario = compositeScenario("multibatch-corruption-" + seed);
+        PlanFixture fixture = replacementPlan(
+                scenario.source(),
+                scenario.target(),
+                "multibatch-corruption-" + seed,
+                scenario.batchSpecs());
+        assertFreshApply(
+                scenario.source(),
+                scenario.target(),
+                fixture,
+                new ExpectedReceipt(12, 6, 24, 12, 21, 8, 2));
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeCorruption =
+                editorialSequenceStates(owner);
+
+        seedCorruption(corruption, scenario.target(), fixture);
+
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBeforeCorruption);
+        assertThat(apply.readinessCore().evaluate(
+                scenario.target().release(), databaseNow()).readiness())
+                .isEqualTo(corruption.expectedReadiness());
+        Map<String, String> corruptedRows = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> corruptedSequences =
+                editorialSequenceStates(owner);
+        assertThat(corruptedRows).hasSize(LegalV27EditorialInventory.EDITORIAL_TABLES.size());
+        assertThat(corruptedSequences).hasSize(10);
+
+        LegalEditorialApplyResult blocked = apply.service().applyReplace(
+                scenario.target().release(), fixture.plan());
+
+        assertEditorialKnownFailure(
+                blocked,
+                LegalManifestStatus.BLOCKED,
+                LegalManifestIssueCode.SOURCE_FINGERPRINT_MISMATCH);
+        assertThat(blocked.issues()).singleElement().satisfies(issue ->
+                assertThat(issue.location()).isEqualTo("database/source"));
+        assertThat(editorialTableRows()).isEqualTo(corruptedRows);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(corruptedSequences);
+        assertThat(apply.jdbc().queryForObject(
+                "SELECT current_user", String.class)).isEqualTo(EDITORIAL_ROLE);
+        restrictedPrivileges.verify();
+    }
+
+    @Test
+    void failureBeforeSecondSealRollsBackTheFirstBatchV27EffectsAndWholeCutover()
+            throws Exception {
+        CompositeScenario scenario = compositeScenario(
+                "multibatch-rollback-between-seals",
+                true);
+        PlanFixture fixture = replacementPlan(
+                scenario.source(),
+                scenario.target(),
+                "multibatch-rollback-between-seals",
+                scenario.batchSpecs());
+        assertThat(fixture.batches()).hasSize(2);
+        assertThat(fixture.batches()).allSatisfy(batch ->
+                assertThat(batch.predecessors().size() + batch.successors().size())
+                        .isEqualTo(3));
+        assertThat(fixture.batches().stream()
+                .mapToInt(batch -> batch.predecessors().size())
+                .sum()).isEqualTo(3);
+        assertThat(fixture.batches().stream()
+                .mapToInt(batch -> batch.successors().size())
+                .sum()).isEqualTo(3);
+        assertThat(fixture.plan().plan().documentAdditions()).isEmpty();
+        assertThat(fixture.requirementSuccessors()).hasSize(6);
+
+        FailBeforeSecondSealJdbcTemplate failingJdbc =
+                new FailBeforeSecondSealJdbcTemplate(
+                        apply.dataSource(),
+                        fixture.batches());
+        LegalEditorialSchemaVerifier schemaVerifier = new LegalEditorialSchemaVerifier(
+                failingJdbc,
+                LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalEditorialPrivilegeVerifier privilegeVerifier =
+                new LegalEditorialPrivilegeVerifier(
+                        failingJdbc,
+                        EDITORIAL_ROLE,
+                        LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalManifestPersistenceITSupport.ApplyHarness failingApply = applyHarness(
+                failingJdbc,
+                LegalDatabaseBudgets.production(),
+                schemaVerifier,
+                privilegeVerifier);
+        assertThat(failingApply.jdbc()).isSameAs(failingJdbc);
+        assertThat(failingApply.jdbc().queryForObject(
+                "SELECT current_user", String.class)).isEqualTo(EDITORIAL_ROLE);
+        assertThat(failingApply.readinessCore().evaluate(
+                scenario.target().release(), databaseNow()).readiness())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        Map<String, String> rowsBeforeAttempt = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeAttempt =
+                editorialSequenceStates(owner);
+        assertThat(rowsBeforeAttempt).hasSize(
+                LegalV27EditorialInventory.EDITORIAL_TABLES.size());
+        assertThat(sequencesBeforeAttempt).hasSize(10);
+
+        LegalEditorialApplyResult result = failingApply.service().applyReplace(
+                scenario.target().release(), fixture.plan());
+
+        assertEditorialKnownFailure(
+                result,
+                LegalManifestStatus.ERROR,
+                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        assertThat(result.issues()).singleElement().satisfies(issue ->
+                assertThat(issue.location()).isEqualTo("database/observation"));
+        failingJdbc.assertFailureObservedBetweenSeals();
+        assertThat(editorialTableRows()).isEqualTo(rowsBeforeAttempt);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_documento_reemplazo_lotes",
+                Long.class)).isZero();
+        assertThat(apply.readinessCore().evaluate(
+                scenario.target().release(), databaseNow()).readiness())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertExactRollbackSequenceGaps(
+                sequencesBeforeAttempt,
+                editorialSequenceStates(owner));
+        privilegeVerifier.verify();
+        restrictedPrivileges.verify();
+    }
+
+    private CompositeScenario compositeScenario(String seed) throws Exception {
+        return compositeScenario(seed, false);
+    }
+
+    private CompositeScenario compositeScenario(
+            String seed,
+            boolean replaceEveryRequirement) throws Exception {
+        ImportedRelease source = readyRelease(seed + "-source-v1", (manifestPath, manifest) ->
                 replaceDocument(
                         manifestPath,
                         manifest,
@@ -239,7 +458,7 @@ class LegalEditorialSplitMergeIT {
                                 "REGISTRO", "terminos-registro-uso-source",
                                 "CONTRATACION_PRO", "terminos-pro-source"),
                         "multibatch-source-v2"));
-        ImportedRelease target = importedRelease("multibatch-target-v1", (manifestPath, manifest) -> {
+        ImportedRelease target = importedRelease(seed + "-target-v1", (manifestPath, manifest) -> {
             replaceDocument(
                     manifestPath,
                     manifest,
@@ -262,6 +481,12 @@ class LegalEditorialSplitMergeIT {
                     manifest,
                     Set.of("terminos"),
                     "multibatch-target-v3");
+            if (replaceEveryRequirement) {
+                manifest.withArray("requirements").forEach(requirement ->
+                        ((ObjectNode) requirement).put(
+                                "version",
+                                "multibatch-rollback-v4"));
+            }
         });
 
         BatchKeys splitKeys = new BatchKeys(
@@ -292,31 +517,118 @@ class LegalEditorialSplitMergeIT {
         List<BatchSpec> batchIdOrder = List.of(split, merge).stream()
                 .sorted(Comparator.comparing(batch -> batch.batchId().toString()))
                 .toList();
-        PlanFixture fixture = replacementPlan(
-                source,
-                target,
-                "disjoint-multibatch",
-                batchIdOrder);
-
-        assertThat(Integer.signum(ids.splitMemberMinimum().compareTo(
-                        ids.mergeMemberMinimum())))
-                .isEqualTo(-Integer.signum(ids.splitBatchId().toString().compareTo(
-                        ids.mergeBatchId().toString())));
-        assertThat(fixture.batches())
-                .extracting(batch -> minimumMember(batch).toString())
-                .isSorted();
-        assertThat(fixture.batches())
-                .extracting(batch -> batch.predecessors().size()
-                        + "->" + batch.successors().size())
-                .containsExactlyInAnyOrder("1->2", "2->1");
-        assertFreshApply(
-                source,
-                target,
-                fixture,
-                new ExpectedReceipt(12, 6, 24, 12, 21, 8, 2));
+        return new CompositeScenario(source, target, batchIdOrder, ids);
     }
 
-    private void assertFreshApply(
+    private static void seedCorruption(
+            PostStateCorruption corruption,
+            ImportedRelease target,
+            PlanFixture fixture) {
+        ResolvedBatch split = fixture.batches().stream()
+                .filter(batch -> batch.predecessors().size() == 1
+                        && batch.successors().size() == 2)
+                .findFirst()
+                .orElseThrow();
+        ResolvedBatch merge = fixture.batches().stream()
+                .filter(batch -> batch.predecessors().size() == 2
+                        && batch.successors().size() == 1)
+                .findFirst()
+                .orElseThrow();
+        withReplicaRole(owner, () -> {
+            int affected = switch (corruption) {
+                case BATCH_EXTRA -> insertRelatedExtraBatch(split, target.publicationId());
+                case BATCH_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_reemplazo_lotes
+                         WHERE id = ?
+                        """, merge.batchId());
+                case MEMBER_EXTRA -> owner.update("""
+                        INSERT INTO legal_documento_reemplazo_anteriores
+                            (id, lote_id, documento_version_id)
+                        VALUES (-2, ?, ?)
+                        """, merge.batchId(), split.predecessors().getFirst().id());
+                case MEMBER_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_reemplazo_sucesoras
+                         WHERE lote_id = ?
+                           AND documento_version_id = ?
+                        """, split.batchId(), split.successors().getFirst().id());
+                case TRANSITION_EXTRA -> owner.update("""
+                        INSERT INTO legal_documento_transiciones
+                            (id, documento_version_id, estado_anterior, estado_nuevo,
+                             motivo, reemplazo_lote_id, ocurrido_en)
+                        SELECT -transition.id, transition.documento_version_id,
+                               transition.estado_anterior, transition.estado_nuevo,
+                               transition.motivo, transition.reemplazo_lote_id,
+                               transition.ocurrido_en
+                          FROM legal_documento_transiciones transition
+                         WHERE transition.documento_version_id = ?
+                           AND transition.reemplazo_lote_id = ?
+                           AND transition.estado_anterior = 'VIGENTE'
+                           AND transition.estado_nuevo = 'REEMPLAZADA'
+                         ORDER BY transition.id
+                         LIMIT 1
+                        """, split.predecessors().getFirst().id(), split.batchId());
+                case TRANSITION_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_transiciones
+                         WHERE documento_version_id = ?
+                           AND reemplazo_lote_id = ?
+                           AND estado_anterior = 'VIGENTE'
+                           AND estado_nuevo = 'REEMPLAZADA'
+                        """, split.predecessors().getFirst().id(), split.batchId());
+                case SLOT_EXTRA -> insertExtraSlot(target.publicationId());
+                case SLOT_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_vigentes
+                         WHERE documento_version_id = ?
+                           AND contexto = ?
+                        """,
+                        split.successors().getFirst().id(),
+                        split.successors().getFirst().contexts().getFirst());
+            };
+            assertThat(affected).isOne();
+        });
+    }
+
+    private static int insertRelatedExtraBatch(
+            ResolvedBatch split,
+            UUID targetPublicationId) {
+        UUID extraBatchId = stableUuid("corruption:extra-batch:" + targetPublicationId);
+        int headers = owner.update("""
+                INSERT INTO legal_documento_reemplazo_lotes
+                    (id, estado_construccion, creado_en, sellado_en)
+                SELECT ?, 'SELLADO', creado_en, sellado_en
+                  FROM legal_documento_reemplazo_lotes
+                 WHERE id = ?
+                """, extraBatchId, split.batchId());
+        assertThat(headers).isOne();
+        return owner.update("""
+                INSERT INTO legal_documento_reemplazo_anteriores
+                    (id, lote_id, documento_version_id)
+                VALUES (-1, ?, ?)
+                """, extraBatchId, split.predecessors().getFirst().id());
+    }
+
+    private static int insertExtraSlot(UUID targetPublicationId) {
+        assertThat(owner.queryForObject("""
+                SELECT count(*)
+                  FROM legal_documento_vigentes
+                 WHERE tipo = 'TERMINOS_SERVICIO'
+                   AND locale = 'es-AR'
+                   AND contexto = 'ATESTACION_FOTOS'
+                """, Long.class)).isZero();
+        return owner.update("""
+                INSERT INTO legal_documento_vigentes
+                    (tipo, locale, contexto, documento_version_id,
+                     documento_linea_id, publicacion_id, estado_documento)
+                SELECT tipo, locale, 'ATESTACION_FOTOS', documento_version_id,
+                       documento_linea_id, publicacion_id, estado_documento
+                  FROM legal_documento_vigentes
+                 WHERE publicacion_id = ?
+                   AND tipo = 'TERMINOS_SERVICIO'
+                 ORDER BY contexto
+                 LIMIT 1
+                """, targetPublicationId);
+    }
+
+    private LegalEditorialApplyReceipt assertFreshApply(
             ImportedRelease source,
             ImportedRelease target,
             PlanFixture fixture,
@@ -355,6 +667,7 @@ class LegalEditorialSplitMergeIT {
         assertThat(apply.jdbc().queryForObject(
                 "SELECT current_user", String.class)).isEqualTo(EDITORIAL_ROLE);
         restrictedPrivileges.verify();
+        return receipt;
     }
 
     private static void assertReceiptAgainstSql(
@@ -1177,6 +1490,38 @@ class LegalEditorialSplitMergeIT {
                 publicationId)).isEqualTo("SELLADO");
     }
 
+    private static void assertExactRollbackSequenceGaps(
+            Map<String, LegalManifestPersistenceITSupport.SequenceState> before,
+            Map<String, LegalManifestPersistenceITSupport.SequenceState> after) {
+        Map<String, Integer> expectedCalls = Map.of(
+                "legal_documento_reemplazo_anteriores_id_seq", 3,
+                "legal_documento_reemplazo_sucesoras_id_seq", 3,
+                "legal_documento_transiciones_id_seq", 6,
+                "legal_requisito_transiciones_id_seq", 6);
+        assertThat(after.keySet()).containsExactlyInAnyOrderElementsOf(before.keySet());
+        before.forEach((sequence, state) -> assertThat(after.get(sequence))
+                .as("sequence %s", sequence)
+                .isEqualTo(advancedSequence(
+                        state,
+                        expectedCalls.getOrDefault(sequence, 0))));
+    }
+
+    private static LegalManifestPersistenceITSupport.SequenceState advancedSequence(
+            LegalManifestPersistenceITSupport.SequenceState before,
+            int calls) {
+        if (calls == 0) {
+            return before;
+        }
+        long allocatedDelta = calls - (before.called() ? 0L : 1L);
+        return new LegalManifestPersistenceITSupport.SequenceState(
+                Math.addExact(before.lastValue(), allocatedDelta),
+                true);
+    }
+
+    private static Map<String, String> editorialTableRows() {
+        return tableRows(new TreeSet<>(LegalV27EditorialInventory.EDITORIAL_TABLES));
+    }
+
     private static Map<String, String> externalAcceptanceRows() {
         return tableRows(Set.of(
                 "legal_aceptacion_lotes",
@@ -1320,7 +1665,199 @@ class LegalEditorialSplitMergeIT {
         return '"' + identifier.replace("\"", "\"\"") + '"';
     }
 
+    private enum PostStateCorruption {
+        BATCH_EXTRA(LegalEditorialReadiness.READY),
+        BATCH_MISSING(LegalEditorialReadiness.READY),
+        MEMBER_EXTRA(LegalEditorialReadiness.READY),
+        MEMBER_MISSING(LegalEditorialReadiness.READY),
+        TRANSITION_EXTRA(LegalEditorialReadiness.READY),
+        TRANSITION_MISSING(LegalEditorialReadiness.READY),
+        SLOT_EXTRA(LegalEditorialReadiness.NOT_READY),
+        SLOT_MISSING(LegalEditorialReadiness.NOT_READY);
+
+        private final LegalEditorialReadiness expectedReadiness;
+
+        PostStateCorruption(LegalEditorialReadiness expectedReadiness) {
+            this.expectedReadiness = expectedReadiness;
+        }
+
+        LegalEditorialReadiness expectedReadiness() {
+            return expectedReadiness;
+        }
+    }
+
+    private static final class FailBeforeSecondSealJdbcTemplate extends JdbcTemplate {
+
+        private static final String SEAL_SQL = normalized("""
+                UPDATE legal_documento_reemplazo_lotes
+                   SET estado_construccion = 'SELLADO', sellado_en = ?
+                 WHERE id = ?
+                   AND estado_construccion = 'ABIERTO'
+                   AND sellado_en IS NULL
+                """);
+
+        private final List<ResolvedBatch> canonicalBatches;
+        private int sealAttempts;
+        private boolean firstBatchEffectsObserved;
+
+        private FailBeforeSecondSealJdbcTemplate(
+                DataSource dataSource,
+                List<ResolvedBatch> canonicalBatches) {
+            super(Objects.requireNonNull(dataSource, "dataSource"));
+            this.canonicalBatches = List.copyOf(canonicalBatches);
+            if (this.canonicalBatches.size() != 2) {
+                throw new IllegalArgumentException(
+                        "El fallo entre sellos requiere exactamente dos lotes");
+            }
+        }
+
+        @Override
+        public int update(String sql, Object... args) {
+            if (!SEAL_SQL.equals(normalized(sql))) {
+                return super.update(sql, args);
+            }
+            sealAttempts++;
+            assertThat(sealAttempts).isBetween(1, canonicalBatches.size());
+            assertThat(args).hasSize(2);
+            assertThat(args[1]).isEqualTo(canonicalBatches.get(sealAttempts - 1).batchId());
+            if (sealAttempts == 1) {
+                int count = super.update(sql, args);
+                assertThat(count).isOne();
+                return count;
+            }
+
+            assertFirstBatchEffectsAndSecondBatchAbsence();
+            firstBatchEffectsObserved = true;
+            throw new IllegalStateException(
+                    "fallo test-only antes del segundo sello canonico");
+        }
+
+        private void assertFirstBatchEffectsAndSecondBatchAbsence() {
+            ResolvedBatch first = canonicalBatches.get(0);
+            ResolvedBatch second = canonicalBatches.get(1);
+            assertThat(queryForObject(
+                    "SELECT current_user",
+                    String.class)).isEqualTo(EDITORIAL_ROLE);
+            assertThat(queryForObject("""
+                    SELECT estado_construccion
+                      FROM legal_documento_reemplazo_lotes
+                     WHERE id = ?
+                    """, String.class, first.batchId())).isEqualTo("SELLADO");
+            assertThat(queryForObject("""
+                    SELECT sellado_en IS NOT NULL
+                      FROM legal_documento_reemplazo_lotes
+                     WHERE id = ?
+                    """, Boolean.class, first.batchId())).isTrue();
+            assertThat(queryForObject("""
+                    SELECT estado_construccion
+                      FROM legal_documento_reemplazo_lotes
+                     WHERE id = ?
+                    """, String.class, second.batchId())).isEqualTo("ABIERTO");
+            assertThat(queryForObject("""
+                    SELECT sellado_en IS NULL
+                      FROM legal_documento_reemplazo_lotes
+                     WHERE id = ?
+                    """, Boolean.class, second.batchId())).isTrue();
+
+            assertExactMembership(first);
+            assertExactMembership(second);
+            assertThat(replacementTransitionCount(first.batchId()))
+                    .isEqualTo(first.predecessors().size() + first.successors().size());
+            assertThat(replacementTransitionCount(second.batchId())).isZero();
+
+            first.predecessors().forEach(predecessor -> {
+                assertThat(documentState(predecessor.id())).isEqualTo(
+                        new CurrentDocumentState("REEMPLAZADA", first.batchId()));
+                assertThat(slotCount(predecessor.id())).isZero();
+            });
+            first.successors().forEach(successor -> {
+                assertThat(documentState(successor.id())).isEqualTo(
+                        new CurrentDocumentState("VIGENTE", first.batchId()));
+                assertThat(slotCount(successor.id())).isEqualTo(successor.contexts().size());
+            });
+            second.predecessors().forEach(predecessor -> {
+                assertThat(documentState(predecessor.id())).isEqualTo(
+                        new CurrentDocumentState("VIGENTE", null));
+                assertThat(slotCount(predecessor.id())).isEqualTo(predecessor.contexts().size());
+            });
+            second.successors().forEach(successor -> {
+                assertThat(documentState(successor.id())).isEqualTo(
+                        new CurrentDocumentState("PUBLICADA", null));
+                assertThat(slotCount(successor.id())).isZero();
+            });
+            assertThat(queryForObject(
+                    "SELECT count(*) FROM legal_requisito_conjuntos_actuales",
+                    Long.class)).isZero();
+        }
+
+        private void assertExactMembership(ResolvedBatch batch) {
+            assertThat(queryForObject("""
+                    SELECT count(*)
+                      FROM legal_documento_reemplazo_anteriores
+                     WHERE lote_id = ?
+                    """, Long.class, batch.batchId()))
+                    .isEqualTo((long) batch.predecessors().size());
+            assertThat(queryForObject("""
+                    SELECT count(*)
+                      FROM legal_documento_reemplazo_sucesoras
+                     WHERE lote_id = ?
+                    """, Long.class, batch.batchId()))
+                    .isEqualTo((long) batch.successors().size());
+        }
+
+        private long replacementTransitionCount(UUID batchId) {
+            return Objects.requireNonNull(queryForObject("""
+                    SELECT count(*)
+                      FROM legal_documento_transiciones
+                     WHERE reemplazo_lote_id = ?
+                    """, Long.class, batchId));
+        }
+
+        private CurrentDocumentState documentState(UUID documentVersionId) {
+            return queryForObject("""
+                    SELECT estado, reemplazo_lote_id
+                      FROM legal_documento_versiones
+                     WHERE id = ?
+                    """, (resultSet, rowNumber) -> new CurrentDocumentState(
+                    resultSet.getString("estado"),
+                    resultSet.getObject("reemplazo_lote_id", UUID.class)),
+                    documentVersionId);
+        }
+
+        private long slotCount(UUID documentVersionId) {
+            return Objects.requireNonNull(queryForObject("""
+                    SELECT count(*)
+                      FROM legal_documento_vigentes
+                     WHERE documento_version_id = ?
+                    """, Long.class, documentVersionId));
+        }
+
+        private void assertFailureObservedBetweenSeals() {
+            assertThat(sealAttempts).isEqualTo(2);
+            assertThat(firstBatchEffectsObserved).isTrue();
+        }
+
+        private static String normalized(String sql) {
+            return sql.toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("\\s+", " ")
+                    .trim();
+        }
+    }
+
+    private record CurrentDocumentState(String state, UUID replacementBatchId) { }
+
     private record ImportedRelease(ValidatedRelease release, UUID publicationId) { }
+
+    private record CompositeScenario(
+            ImportedRelease source,
+            ImportedRelease target,
+            List<BatchSpec> batchSpecs,
+            AdversarialBatchIds ids) {
+
+        private CompositeScenario {
+            batchSpecs = List.copyOf(batchSpecs);
+        }
+    }
 
     private record DocumentSpec(
             String key,

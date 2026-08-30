@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario el 2026-08-30; implementación en ejecución, Subcortes 7A, 7B y
-7C completados
+Estado: aprobado por el usuario el 2026-08-30; implementación en ejecución, Subcortes 7A a 7D
+completados y 7E pendiente
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -30,22 +30,24 @@ La implementación será evolutiva y dentro de los componentes actuales. No se c
 `LegalReplacementBatchExecutor` salvo que una prueba demuestre una frontera que el writer actual no
 pueda expresar de forma segura.
 
-## Estado actual acreditado
+## Estado de partida al aprobar el diseño
 
-El schema v1, `LegalEditorialPlanValidator`, `LegalEditorialPlannerCore`,
-`LegalEditorialExecutionPlan`, `LegalEditorialPostStateVerifier` y V27 ya representan múltiples
-lotes y miembros. El writer ya inserta todas las cabeceras y membresías antes de sellar lote por
-lote.
+Al aprobar este diseño, el schema v1, `LegalEditorialPlanValidator`,
+`LegalEditorialPlannerCore`, `LegalEditorialExecutionPlan`, `LegalEditorialPostStateVerifier` y V27
+ya representaban múltiples lotes y miembros. El writer ya insertaba todas las cabeceras y
+membresías antes de sellar lote por lote.
 
-Las dos fronteras que todavía conservan el límite del Corte 6 son:
+Las dos fronteras que todavía conservaban el límite del Corte 6 eran:
 
-1. `LegalEditorialReplaceScopeGuard`, que sólo acepta cero lotes o uno `1→1`;
-2. la defensa interna de `LegalDocumentReplacementWriter`, que repite ese límite.
+1. `LegalEditorialReplaceScopeGuard`, que sólo aceptaba cero lotes o uno `1→1`;
+2. la defensa interna de `LegalDocumentReplacementWriter`, que repetía ese límite.
 
-Existe además un drift de orden: `LegalEditorialExecutionPlan` vuelve a ordenar lotes por `batchId`
-aunque el validator los normaliza por el UUID mínimo de sus miembros.
+Existía además un drift de orden: `LegalEditorialExecutionPlan` volvía a ordenar lotes por
+`batchId` aunque el validator los normalizaba por el UUID mínimo de sus miembros.
 
-No existe hoy una integración PostgreSQL positiva de `1→N`, `N→1` o múltiples lotes disjuntos.
+No existía entonces una integración PostgreSQL positiva de `1→N`, `N→1` o múltiples lotes
+disjuntos. Los Subcortes 7A a 7D cerraron esas fronteras y su evidencia se registra en el plan de
+implementación enlazado arriba.
 
 ## Alternativas evaluadas
 

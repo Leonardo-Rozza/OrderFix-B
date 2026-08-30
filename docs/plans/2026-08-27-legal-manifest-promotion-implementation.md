@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1, 2, 3, 4, 5 y 6
-completados; Corte 7 en ejecución con Subcortes 7A, 7B y 7C completados; Cortes 8 a 11 pendientes
+completados; Corte 7 en ejecución con Subcortes 7A a 7D completados; Cortes 8 a 11 pendientes
 
 Diseño aprobado:
 
@@ -947,8 +947,7 @@ Commits locales del corte:
 
 ## Corte 7 — Reemplazos split y merge
 
-Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A, 7B y 7C completados y 7D
-pendiente.
+Estado: en ejecución; diseño aprobado el 2026-08-30, Subcortes 7A a 7D completados y 7E pendiente.
 
 Diseño específico aprobado:
 
@@ -1003,6 +1002,12 @@ Modificar:
 git diff --check
 git status --short
 ~~~
+
+Al cierre del Subcorte 7D, PostgreSQL 16.14/Flyway V27 acredita replay multibatch sin DML,
+corrupción extra/faltante sin healing y rollback integral por un fallo observado exactamente entre
+dos sellos. La puerta quedó en 2.629 tests unitarios y 33 integraciones focales, todas verdes; no se
+modificaron V27/V28, privilegios, contratos externos ni frontend. La regresión ampliada y el cierre
+definitivo del Corte 7 permanecen en 7E.
 
 Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
