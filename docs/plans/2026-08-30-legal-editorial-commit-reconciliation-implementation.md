@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C completados el
-2026-08-31; 9D1, 9D2, 9E y 9F pendientes
+Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C/9D1 completados el
+2026-08-31; 9D2, 9E y 9F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -280,7 +280,7 @@ Commit:
 
 ## Subcorte 9D1 — Evidencia PostgreSQL concluyente
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -320,6 +320,35 @@ git status --short
 Commit:
 
     test(legal): acredita commits editoriales reconciliados
+
+### Evidencia de cierre 9D1
+
+- El IT nuevo nació rojo antes de incorporar sus fixtures. Quedaron cinco escenarios reales sobre
+  PostgreSQL: ACK de commit perdido con receipt completo reconstruido, rollback sin ACK con error
+  allowlisteado, fallback de blocker, fallback de issue ajeno y session kill concluyente. Los
+  tres IT existentes mantienen además el routing positivo de PROMOTE, REPLACE y RETIRE.
+- El caso positivo contrasta operación, publicación, `appliedAt`, readiness y los siete conteos
+  del receipt contra una observación independiente de PostgreSQL. Los snapshots JSONB ordenados
+  de las 19 tablas editoriales y las secuencias prueban que los replays no reescriben filas ni
+  repiten DML; el primer commit real es el único que cambia esas secuencias.
+- Rollback sin ACK y session kill ocurren después de `planConstructed`, antes del writer
+  productivo, y terminan `ERROR/persisted=false` sólo porque un replan real acredita
+  `SOURCE_EXACT`. El issue `SCHEMA_DRIFT` original se conserva; blocker e issue fuera del
+  allowlist se normalizan a `EDITORIAL_OBSERVATION_FAILED`. No se filtran receipt ni metadata
+  tentativos.
+- Cada intento concluyente observa exactamente dos leases cerrados y dos adquisiciones exitosas
+  del mismo advisory lock: primero la transacción mutable y luego otra `REQUIRES_NEW`,
+  `READ_COMMITTED`, read-only. El reconciliador real entra una sola vez con la transacción previa
+  completamente desvinculada; en session kill usa además un PID PostgreSQL distinto.
+- El retry manual posterior a no persistencia termina APPLIED una vez y su replay
+  ALREADY_APPLIED conserva las 19 tablas y secuencias exactas. No hay retry automático, healing,
+  segundo writer ni DML desde el reconciliador.
+- La puerta exacta y fresca con Amazon Corretto 21.0.10 cerró 4.231/4.231 unitarias y 42/42
+  integraciones sobre PostgreSQL 16.14 con las 27 migraciones. Los dos JAR se empaquetaron y
+  Failsafe terminó sin fallos, errores ni omitidos.
+- Sólo se agregó el IT autorizado y se actualizaron estos documentos de seguimiento. No se
+  modificaron producción, import, V27/V28, migrations, resources, schemas, grants, API,
+  controllers, JPA, frontend, CLI, reportes ni contratos públicos. No hubo push ni deploy.
 
 ## Subcorte 9D2 — Incertidumbre PostgreSQL restante
 
