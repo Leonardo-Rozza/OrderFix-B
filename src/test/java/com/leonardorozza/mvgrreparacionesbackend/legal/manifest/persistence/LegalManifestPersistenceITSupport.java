@@ -87,11 +87,27 @@ final class LegalManifestPersistenceITSupport {
     static HikariDataSource pooledDataSource(
             PostgreSQLContainer postgres,
             String applicationName) {
+        return pooledDataSource(
+                postgres,
+                applicationName,
+                postgres.getUsername(),
+                postgres.getPassword());
+    }
+
+    static HikariDataSource pooledDataSource(
+            PostgreSQLContainer postgres,
+            String applicationName,
+            String username,
+            String password) {
+        Objects.requireNonNull(postgres, "postgres");
+        Objects.requireNonNull(applicationName, "applicationName");
+        Objects.requireNonNull(username, "username");
+        Objects.requireNonNull(password, "password");
         HikariConfig configuration = new HikariConfig();
         configuration.setPoolName(applicationName + "-pool");
         configuration.setJdbcUrl(namedJdbcUrl(postgres, applicationName));
-        configuration.setUsername(postgres.getUsername());
-        configuration.setPassword(postgres.getPassword());
+        configuration.setUsername(username);
+        configuration.setPassword(password);
         configuration.setDriverClassName(postgres.getDriverClassName());
         configuration.setMinimumIdle(0);
         configuration.setMaximumPoolSize(6);
@@ -153,10 +169,85 @@ final class LegalManifestPersistenceITSupport {
                 dryRunService);
     }
 
+    static Harness restrictedHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets,
+            String username) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        manager.setRollbackOnCommitFailure(false);
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.setName("legal-manifest-restricted-it");
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(budgets.transactionTimeoutSeconds());
+        transaction.setReadOnly(false);
+
+        LegalRequiredSetRevisionCalculator calculator =
+                new LegalRequiredSetRevisionCalculator();
+        LegalManifestGraphWriter writer = new LegalManifestGraphWriter(jdbc, calculator);
+        LegalManifestReplayVerifier replayVerifier =
+                new LegalManifestReplayVerifier(jdbc, calculator);
+        LegalV27ImportSchemaVerifier schemaVerifier =
+                new LegalV27ImportSchemaVerifier(jdbc, LegalV27ImportInventory.DEFAULT_SCHEMA);
+        LegalImportPrivilegeVerifier privilegeVerifier =
+                new LegalImportPrivilegeVerifier(
+                        jdbc,
+                        Objects.requireNonNull(username, "username"),
+                        LegalV27ImportInventory.DEFAULT_SCHEMA);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                budgets,
+                List.of(schemaVerifier, privilegeVerifier));
+        LegalManifestImportService importService = new LegalManifestImportService(
+                gate,
+                jdbc,
+                writer,
+                replayVerifier,
+                new LegalImportFailureMapper(),
+                schemaVerifier,
+                privilegeVerifier);
+        LegalManifestDryRunService dryRunService = new LegalManifestDryRunService(
+                gate,
+                jdbc,
+                writer,
+                new LegalDatabaseFailureMapper());
+        return new Harness(
+                dataSource,
+                jdbc,
+                transaction,
+                gate,
+                writer,
+                replayVerifier,
+                importService,
+                dryRunService);
+    }
+
     static ReadinessHarness readinessHarness(
             DataSource dataSource,
             LegalDatabaseBudgets budgets) {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(jdbc, "public");
+        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
+                LegalEditorialPrivilegeVerifier.class);
+        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
+        return readinessHarness(
+                jdbc,
+                budgets,
+                schemaVerifier,
+                privilegeVerifier);
+    }
+
+    private static ReadinessHarness readinessHarness(
+            JdbcTemplate jdbc,
+            LegalDatabaseBudgets budgets,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
+        DataSource dataSource = Objects.requireNonNull(
+                jdbc.getDataSource(),
+                "jdbc dataSource");
         DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
         manager.setRollbackOnCommitFailure(false);
         TransactionTemplate transaction = new TransactionTemplate(manager);
@@ -168,11 +259,6 @@ final class LegalManifestPersistenceITSupport {
 
         LegalRequiredSetRevisionCalculator revisionCalculator =
                 new LegalRequiredSetRevisionCalculator();
-        LegalEditorialSchemaVerifier schemaVerifier =
-                new LegalEditorialSchemaVerifier(jdbc, "public");
-        LegalEditorialPrivilegeVerifier privilegeVerifier = mock(
-                LegalEditorialPrivilegeVerifier.class);
-        when(privilegeVerifier.usesJdbc(jdbc)).thenReturn(true);
         LegalManifestOriginGraphVerifier originVerifier =
                 new LegalManifestOriginGraphVerifier(jdbc, revisionCalculator);
         LegalEditorialReadinessCore core = new LegalEditorialReadinessCore(
@@ -207,7 +293,31 @@ final class LegalManifestPersistenceITSupport {
     static PlannerHarness plannerHarness(
             DataSource dataSource,
             LegalDatabaseBudgets budgets) {
-        ReadinessHarness readiness = readinessHarness(dataSource, budgets);
+        return plannerHarness(readinessHarness(dataSource, budgets));
+    }
+
+    static PlannerHarness restrictedPlannerHarness(
+            DataSource dataSource,
+            LegalDatabaseBudgets budgets,
+            String username) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalEditorialSchemaVerifier schemaVerifier =
+                new LegalEditorialSchemaVerifier(
+                        jdbc,
+                        LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalEditorialPrivilegeVerifier privilegeVerifier =
+                new LegalEditorialPrivilegeVerifier(
+                        jdbc,
+                        Objects.requireNonNull(username, "username"),
+                        LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        return plannerHarness(readinessHarness(
+                jdbc,
+                budgets,
+                schemaVerifier,
+                privilegeVerifier));
+    }
+
+    private static PlannerHarness plannerHarness(ReadinessHarness readiness) {
         LegalEditorialPlannerCore plannerCore = new LegalEditorialPlannerCore(
                 readiness.jdbc(),
                 readiness.core(),
