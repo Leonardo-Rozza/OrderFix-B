@@ -196,7 +196,9 @@ La matriz mínima del JAR real incluye:
 - rechazo explícito al intentar aplicar con credenciales del importador;
 - regresión del rechazo a rol owner, rol demasiado amplio o con herencia indebida;
 - rechazo de UPDATE directo y de escrituras no-op fuera de las funciones allowlisteadas;
-- imposibilidad del proceso de mutar snapshots o iniciar tráfico HTTP;
+- imposibilidad del proceso de mutar snapshots o las tablas de aceptación/idempotencia HTTP;
+  el aislamiento acredita además que no existe stack web ni cliente HTTP de aplicación, sin
+  afirmar una observación universal del tráfico del sistema operativo;
 - rechazo de las cuatro `-Dspring.datasource.*` hostiles;
 - launcher editorial real limpiando los tres canales de opciones JVM;
 - stdout cerrado y, cuando el harness determinista lo permita, truncado parcialmente;
