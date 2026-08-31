@@ -53,6 +53,7 @@ final class LegalEditorialPlannerCore {
     static final int MAX_RELEVANT_REQUIREMENTS = 2_048;
     static final int MAX_RELEVANT_TRANSITIONS = 8_192;
     static final int MAX_RELEVANT_BATCHES = 512;
+    static final int MAX_RELEVANT_BATCH_MEMBERS = MAX_RELEVANT_TRANSITIONS;
 
     private static final String PUBLICATION_LOCATION = "database/publication";
     private static final String STATE_LOCATION = "database/state";
@@ -1376,7 +1377,7 @@ final class LegalEditorialPlannerCore {
         }
         BatchEvidence actual = snapshot.batches().get(batch.replacementBatchId());
         if (actual == null
-                || !actual.sealed()
+                || !actual.hasExactCausality()
                 || !Set.copyOf(actual.predecessorIds()).equals(batch.predecessors().stream()
                         .map(DocumentRef::documentVersionId)
                         .collect(Collectors.toUnmodifiableSet()))
@@ -1927,10 +1928,7 @@ final class LegalEditorialPlannerCore {
                 .filter(Objects::nonNull)
                 .sorted(Comparator.comparing(evidence -> evidence.id().toString()))
                 .toList()) {
-            if (!evidence.sealed()
-                    || !historicalBatchMatchesTransitions(
-                            evidence,
-                            preexistingHistory.documentTransitions())) {
+            if (!evidence.hasExactCausality()) {
                 return Optional.empty();
             }
             historical.add(new LegalEditorialExecutionPlan.ReplacementBatch(
@@ -1941,30 +1939,6 @@ final class LegalEditorialPlannerCore {
                     evidence.successors()));
         }
         return Optional.of(List.copyOf(historical));
-    }
-
-    private static boolean historicalBatchMatchesTransitions(
-            BatchEvidence batch,
-            List<LegalEditorialExecutionPlan.DocumentTransition> transitions) {
-        boolean referenced = false;
-        Set<UUID> successorIds = batch.successors().stream()
-                .map(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
-                .collect(Collectors.toUnmodifiableSet());
-        for (LegalEditorialExecutionPlan.DocumentTransition transition : transitions) {
-            if (!batch.id().equals(transition.replacementBatchId())) {
-                continue;
-            }
-            referenced = true;
-            boolean membershipMatches =
-                    transition.newState() == EstadoVersionLegal.VIGENTE
-                            && successorIds.contains(transition.documentVersionId())
-                    || transition.newState() == EstadoVersionLegal.REEMPLAZADA
-                            && batch.predecessorIds().contains(transition.documentVersionId());
-            if (!membershipMatches || !transition.occurredAt().equals(batch.sealedAt())) {
-                return false;
-            }
-        }
-        return referenced;
     }
 
     private static List<LegalEditorialExecutionPlan.ExpectedDocumentSlot> expectedSlots(
@@ -2924,15 +2898,74 @@ final class LegalEditorialPlannerCore {
             Instant createdAt,
             Instant sealedAt,
             List<UUID> predecessorIds,
-            List<LegalEditorialExecutionPlan.ReplacementSuccessor> successors
+            List<LegalEditorialExecutionPlan.ReplacementSuccessor> successors,
+            List<DocumentTransitionEvidence> causalTransitions
     ) {
         BatchEvidence {
-            predecessorIds = List.copyOf(predecessorIds);
-            successors = List.copyOf(successors);
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(createdAt, "createdAt");
+            predecessorIds = List.copyOf(Objects.requireNonNull(
+                    predecessorIds, "predecessorIds"));
+            successors = List.copyOf(Objects.requireNonNull(successors, "successors"));
+            causalTransitions = List.copyOf(Objects.requireNonNull(
+                    causalTransitions, "causalTransitions"));
+        }
+
+        BatchEvidence(
+                UUID id,
+                Instant createdAt,
+                Instant sealedAt,
+                List<UUID> predecessorIds,
+                List<LegalEditorialExecutionPlan.ReplacementSuccessor> successors) {
+            this(id, createdAt, sealedAt, predecessorIds, successors, List.of());
         }
 
         boolean sealed() {
             return sealedAt != null;
+        }
+
+        boolean hasExactCausality() {
+            if (!sealed() || predecessorIds.isEmpty() || successors.isEmpty()) {
+                return false;
+            }
+            Set<UUID> expectedPredecessors = new LinkedHashSet<>(predecessorIds);
+            Set<UUID> expectedSuccessors = successors.stream()
+                    .map(LegalEditorialExecutionPlan.ReplacementSuccessor::documentVersionId)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (expectedPredecessors.size() != predecessorIds.size()
+                    || expectedSuccessors.size() != successors.size()
+                    || expectedPredecessors.stream().anyMatch(expectedSuccessors::contains)
+                    || causalTransitions.size()
+                            != predecessorIds.size() + successors.size()) {
+                return false;
+            }
+            Set<UUID> causalPredecessors = new LinkedHashSet<>();
+            Set<UUID> causalSuccessors = new LinkedHashSet<>();
+            for (DocumentTransitionEvidence transition : causalTransitions) {
+                if (!id.equals(transition.replacementBatchId())
+                        || transition.reason() != null
+                        || !sealedAt.equals(transition.occurredAt())) {
+                    return false;
+                }
+                UUID versionId = transition.versionId();
+                if (expectedPredecessors.contains(versionId)
+                        && transition.previousState() == EstadoVersionLegal.VIGENTE
+                        && transition.newState() == EstadoVersionLegal.REEMPLAZADA) {
+                    if (!causalPredecessors.add(versionId)) {
+                        return false;
+                    }
+                } else if (expectedSuccessors.contains(versionId)
+                        && transition.previousState() == EstadoVersionLegal.PUBLICADA
+                        && transition.newState() == EstadoVersionLegal.VIGENTE) {
+                    if (!causalSuccessors.add(versionId)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            return causalPredecessors.equals(expectedPredecessors)
+                    && causalSuccessors.equals(expectedSuccessors);
         }
     }
 
@@ -3048,7 +3081,12 @@ final class LegalEditorialPlannerCore {
                     readDocumentTransitions(documentIds);
             List<RequirementTransitionEvidence> requirementTransitions =
                     readRequirementTransitions(requirementIds);
-            Map<UUID, BatchEvidence> batches = readBatches(documentIds, declaredBatchIds);
+            Set<UUID> observedBatchIds = documentTransitions.stream()
+                    .map(DocumentTransitionEvidence::replacementBatchId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            observedBatchIds.addAll(declaredBatchIds);
+            Map<UUID, BatchEvidence> batches = readBatches(documentIds, observedBatchIds);
             return new PlannerSnapshot(
                     targetDocumentIds,
                     targetRequirementIds,
@@ -3420,8 +3458,9 @@ final class LegalEditorialPlannerCore {
 
         private Map<UUID, BatchEvidence> readBatches(
                 Set<UUID> documentIds,
-                Set<UUID> declaredBatchIds) {
-            Set<UUID> batchIds = new LinkedHashSet<>(declaredBatchIds);
+                Set<UUID> seededBatchIds) {
+            Set<UUID> batchIds = new LinkedHashSet<>(seededBatchIds);
+            requireMaximum(batchIds.size(), MAX_RELEVANT_BATCHES);
             if (!documentIds.isEmpty()) {
                 List<UUID> related = bounded(jdbc.query("""
                         SELECT DISTINCT lote_id
@@ -3441,6 +3480,7 @@ final class LegalEditorialPlannerCore {
                         MAX_RELEVANT_BATCHES);
                 batchIds.addAll(related);
             }
+            requireMaximum(batchIds.size(), MAX_RELEVANT_BATCHES);
             if (batchIds.isEmpty()) {
                 return Map.of();
             }
@@ -3455,26 +3495,52 @@ final class LegalEditorialPlannerCore {
                     requiredInstant(resultSet.getObject("creado_en", OffsetDateTime.class)),
                     instant(resultSet.getObject("sellado_en", OffsetDateTime.class))),
                     new ArrayList<>(batchIds).toArray());
-            List<BatchPredecessor> predecessors = jdbc.query("""
+            List<BatchPredecessor> predecessors = bounded(jdbc.query("""
                     SELECT lote_id, documento_version_id
                       FROM legal_documento_reemplazo_anteriores
                      WHERE lote_id IN (%s)
                      ORDER BY lote_id, documento_version_id
+                     LIMIT ?
                     """.formatted(placeholders), (resultSet, rowNumber) -> new BatchPredecessor(
                     resultSet.getObject("lote_id", UUID.class),
                     resultSet.getObject("documento_version_id", UUID.class)),
-                    new ArrayList<>(batchIds).toArray());
-            List<BatchSuccessor> successors = jdbc.query("""
+                    append(new ArrayList<>(batchIds), MAX_RELEVANT_BATCH_MEMBERS + 1)),
+                    MAX_RELEVANT_BATCH_MEMBERS);
+            List<BatchSuccessor> successors = bounded(jdbc.query("""
                     SELECT lote_id, documento_version_id, publicacion_id
                       FROM legal_documento_reemplazo_sucesoras
                      WHERE lote_id IN (%s)
                      ORDER BY lote_id, documento_version_id
+                     LIMIT ?
                     """.formatted(placeholders), (resultSet, rowNumber) -> new BatchSuccessor(
                     resultSet.getObject("lote_id", UUID.class),
                     new LegalEditorialExecutionPlan.ReplacementSuccessor(
                             resultSet.getObject("documento_version_id", UUID.class),
                             resultSet.getObject("publicacion_id", UUID.class))),
-                    new ArrayList<>(batchIds).toArray());
+                    append(new ArrayList<>(batchIds), MAX_RELEVANT_BATCH_MEMBERS + 1)),
+                    MAX_RELEVANT_BATCH_MEMBERS);
+            requireMaximum(
+                    predecessors.size() + successors.size(),
+                    MAX_RELEVANT_BATCH_MEMBERS);
+            List<DocumentTransitionEvidence> causalTransitions = bounded(jdbc.query("""
+                    SELECT id, documento_version_id, estado_anterior, estado_nuevo,
+                           motivo, reemplazo_lote_id, ocurrido_en
+                      FROM legal_documento_transiciones
+                     WHERE reemplazo_lote_id IN (%s)
+                     ORDER BY reemplazo_lote_id, documento_version_id, ocurrido_en, id
+                     LIMIT ?
+                    """.formatted(placeholders),
+                    (resultSet, rowNumber) -> new DocumentTransitionEvidence(
+                            resultSet.getLong("id"),
+                            resultSet.getObject("documento_version_id", UUID.class),
+                            EstadoVersionLegal.valueOf(resultSet.getString("estado_anterior")),
+                            EstadoVersionLegal.valueOf(resultSet.getString("estado_nuevo")),
+                            resultSet.getString("motivo"),
+                            resultSet.getObject("reemplazo_lote_id", UUID.class),
+                            requiredInstant(resultSet.getObject(
+                                    "ocurrido_en", OffsetDateTime.class))),
+                    append(new ArrayList<>(batchIds), MAX_RELEVANT_TRANSITIONS + 1)),
+                    MAX_RELEVANT_TRANSITIONS);
             Map<UUID, List<UUID>> predecessorsByBatch = predecessors.stream().collect(
                     Collectors.groupingBy(
                             BatchPredecessor::batchId,
@@ -3485,10 +3551,16 @@ final class LegalEditorialPlannerCore {
                             BatchSuccessor::batchId,
                             LinkedHashMap::new,
                             Collectors.mapping(BatchSuccessor::successor, Collectors.toList())));
+            Map<UUID, List<DocumentTransitionEvidence>> transitionsByBatch =
+                    causalTransitions.stream().collect(Collectors.groupingBy(
+                            DocumentTransitionEvidence::replacementBatchId,
+                            LinkedHashMap::new,
+                            Collectors.toList()));
             return bases.stream().map(base -> new BatchEvidence(
                     base.id(), base.createdAt(), base.sealedAt(),
                     predecessorsByBatch.getOrDefault(base.id(), List.of()),
-                    successorsByBatch.getOrDefault(base.id(), List.of())))
+                    successorsByBatch.getOrDefault(base.id(), List.of()),
+                    transitionsByBatch.getOrDefault(base.id(), List.of())))
                     .collect(Collectors.toUnmodifiableMap(BatchEvidence::id, Function.identity()));
         }
 

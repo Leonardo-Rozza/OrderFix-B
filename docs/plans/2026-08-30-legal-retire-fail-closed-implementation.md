@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcortes 8A, 8B, 8C y 8D completados el 2026-08-30; Subcorte 8E pendiente
+Estado: en ejecución — Subcortes 8A, 8B, 8C, 8D y 8E completados el 2026-08-30;
+Subcorte 8F pendiente
 
 Diseño aprobado:
 
@@ -372,7 +373,7 @@ Las tres primeras fixtures frescas parten sin lotes de reemplazo y confirman
 y luego aplica `RETIRE` sobre `account-closure`: las snapshots de
 `legal_documento_reemplazo_lotes`, `legal_documento_reemplazo_anteriores` y
 `legal_documento_reemplazo_sucesoras`, junto con las versiones y transiciones históricas, se
-preservan exactamente. 8E conserva replay, corrupción extra o faltante, ausencia de healing,
+preservan exactamente. 8E acredita replay, corrupción extra o faltante, ausencia de healing,
 fallo tardío, rollback fila por fila y completion `UNKNOWN`.
 
 ### Evidencia de cierre
@@ -415,7 +416,7 @@ Commit:
 
 ## Subcorte 8E — Replay, corrupción y rollback
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -425,8 +426,9 @@ fallo tardío.
 ### Modificar
 
 - `LegalEditorialRetireIT`;
-- soporte test-only de inyección JDBC sólo si es necesario;
-- tests unitarios de writer/verifier/service únicamente si una integración revela una brecha.
+- `LegalEditorialPlannerCoreTest`;
+- `LegalEditorialPlannerCore`, porque la integración reveló una brecha real de causalidad histórica;
+- este documento.
 
 ### Escenarios
 
@@ -443,18 +445,65 @@ fallo tardío.
   transaccionales;
 - regresión de post-verifier, constraints, readiness y completion-state.
 
+### Alcance acreditado
+
+- replay exacto y replay del mismo postestado con otro `operationId`/SHA terminan
+  `ALREADY_APPLIED`, recuperan el mismo receipt/`appliedAt` histórico y cada intento por separado
+  deja sin cambios las 19 tablas editoriales y las 10 secuencias;
+- un plan alternativo y un fingerprint incorrecto terminan
+  `BLOCKED/SOURCE_FINGERPRINT_MISMATCH` antes de DML;
+- las 10 corrupciones extra/faltante de slot, puntero, transición, membresía y lote quedan
+  bloqueadas sin healing ni avance de secuencias;
+- la revisión adversarial reprodujo un falso replay: el planner sólo comprobaba
+  transición-visible→membresía y podía absorber un predecessor histórico fuera del scope. El
+  reader ahora siembra lotes desde las transiciones observadas y materializa, por `lote_id`, su
+  causalidad separada del historial operativo;
+- `BatchEvidence` exige una biyección exacta y acotada entre predecessors/successors y
+  transiciones: cardinalidad y UUID únicos, roles no superpuestos, aristas
+  `VIGENTE→REEMPLAZADA`/`PUBLICADA→VIGENTE`, motivo nulo e instante igual al sello. Los miembros
+  combinados y las transiciones causales tienen presupuesto fail-closed de 8.192 filas;
+- PostgreSQL acredita tanto el predecessor histórico faltante como un miembro extra real en una
+  publicación draft fuera del scope actual;
+- la alteración aislada de `updatedAt` en un puntero sobreviviente permanece como frontera
+  epistémica explícita de V27: replay puede devolver `ALREADY_APPLIED` y no repara esa fila;
+- el fallo después del último batch DML mixto devuelve
+  `ERROR/EDITORIAL_OBSERVATION_FAILED`, revierte exactamente las 19 tablas partiendo de snapshots
+  no vacías —incluidas las tres tablas de REPLACE— y sólo deja los huecos `+1/+1` de las
+  secuencias de transición realmente ejecutadas;
+- una pérdida de acuse de commit devuelve `UNKNOWN` sin evidencia tentativa. El retry converge a
+  `ALREADY_APPLIED`, no ejecuta DML y recupera exactamente el `appliedAt` persistido;
+- la consulta causal por `reemplazo_lote_id` no tiene índice dedicado en V27. Es un riesgo de
+  capacidad no bloqueante reservado para Corte 10: el presupuesto/timeout falla cerrado y este
+  subcorte no altera migraciones.
+
+### Evidencia de cierre
+
+- puerta focal: 75 tests verdes (`PlannerCore=33`, `PostStateVerifier=20`, `RetireService=9`,
+  `RetirementWriter=13`);
+- ciclo completo: 2.679 tests unitarios verdes;
+- PostgreSQL 16.14/Flyway V27: `RetireIT=20`, `DatabaseIsolationIT=2` y `ReadinessIT=9`, total
+  31/31;
+- regresión compartida: `ReplaceIT=13` y `SplitMergeIT=13`, total 26/26;
+- planner/promoción: `EditorialPlannerIT=10`, `InitialPromotionIT=7` y
+  `InitialPromotionFailureIT=4`, total 21/21;
+- dos revisiones independientes finales sin hallazgos P1/P2;
+- `git diff --check` limpio;
+- sin cambios en V27/V28, grants, roles, inventario, API, CLI o frontend; sin push ni deploy.
+
 ### Puerta
 
 ~~~bash
-./mvnw -Dtest=LegalEditorialRetirementWriterTest,LegalEditorialRetireServiceTest,LegalEditorialPostStateVerifierTest test
+./mvnw -Dtest=LegalEditorialPlannerCoreTest,LegalEditorialRetirementWriterTest,LegalEditorialRetireServiceTest,LegalEditorialPostStateVerifierTest test
 ./mvnw -Dit.test=LegalEditorialRetireIT,LegalEditorialDatabaseIsolationIT,LegalEditorialReadinessIT verify
+./mvnw -Dit.test=LegalEditorialReplaceIT,LegalEditorialSplitMergeIT verify
+./mvnw -Dit.test=LegalEditorialPlannerIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT verify
 git diff --check
 git status --short
 ~~~
 
 Commit:
 
-    test(legal): acredita replay y rollback de retiro
+    fix(legal): acredita replay y rollback de retiro
 
 ## Subcorte 8F — CLI y reporte v3
 

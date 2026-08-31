@@ -774,6 +774,143 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void retirementReplayRejectsEveryHistoricalBatchMemberWithoutTransitionCausality() {
+        LegalEditorialPlannerCore.PlannerSnapshot post = partialRetirementPostSnapshot();
+        LegalEditorialPlannerCore.BatchEvidence historical =
+                post.batches().get(HISTORICAL_BATCH_ID);
+        List<Map.Entry<String, LegalEditorialPlannerCore.BatchEvidence>> corruptions = List.of(
+                Map.entry("predecessor historico faltante",
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                historical.id(),
+                                historical.createdAt(),
+                                historical.sealedAt(),
+                                List.of(),
+                                historical.successors(),
+                                historical.causalTransitions())),
+                Map.entry("predecessor historico extra",
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                historical.id(),
+                                historical.createdAt(),
+                                historical.sealedAt(),
+                                List.of(HISTORICAL_PREDECESSOR_ID, EXTRA_PREDECESSOR_ID),
+                                historical.successors(),
+                                historical.causalTransitions())),
+                Map.entry("predecessor visible extra",
+                        new LegalEditorialPlannerCore.BatchEvidence(
+                                historical.id(),
+                                historical.createdAt(),
+                                historical.sealedAt(),
+                                List.of(HISTORICAL_PREDECESSOR_ID, DOCUMENT_ID),
+                                historical.successors(),
+                                historical.causalTransitions())));
+
+        for (Map.Entry<String, LegalEditorialPlannerCore.BatchEvidence> corruption
+                : corruptions) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    copyRetirementBatches(
+                            post,
+                            Map.of(HISTORICAL_BATCH_ID, corruption.getValue())));
+            stubRetirementFingerprint(harness);
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    mixedRetirementToken(),
+                    OBSERVED_AT);
+
+            assertThat(result.status()).as(corruption.getKey())
+                    .isEqualTo(LegalManifestStatus.BLOCKED);
+            assertThat(result.executionPlan()).as(corruption.getKey()).isEmpty();
+            assertThat(result.issues()).as(corruption.getKey())
+                    .extracting(LegalManifestIssue::code)
+                    .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
+    }
+
+    @Test
+    void retirementReplayRejectsDuplicateHistoricalBatchCausality() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        LegalEditorialPlannerCore.PlannerSnapshot post = partialRetirementPostSnapshot();
+        LegalEditorialPlannerCore.BatchEvidence historical =
+                post.batches().get(HISTORICAL_BATCH_ID);
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> transitions =
+                new java.util.ArrayList<>(historical.causalTransitions());
+        transitions.add(new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                101,
+                HISTORICAL_PREDECESSOR_ID,
+                EstadoVersionLegal.VIGENTE,
+                EstadoVersionLegal.REEMPLAZADA,
+                null,
+                HISTORICAL_BATCH_ID,
+                HISTORICAL_ACTIVATION_AT));
+        LegalEditorialPlannerCore.BatchEvidence corrupted =
+                new LegalEditorialPlannerCore.BatchEvidence(
+                        historical.id(),
+                        historical.createdAt(),
+                        historical.sealedAt(),
+                        historical.predecessorIds(),
+                        historical.successors(),
+                        transitions);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                copyRetirementBatches(post, Map.of(HISTORICAL_BATCH_ID, corrupted)));
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
+    void retirementReplayRejectsAHistoricalBatchTransitionWithoutMembership() {
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        LegalEditorialPlannerCore.PlannerSnapshot post = partialRetirementPostSnapshot();
+        LegalEditorialPlannerCore.BatchEvidence historical =
+                post.batches().get(HISTORICAL_BATCH_ID);
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> transitions =
+                new java.util.ArrayList<>(historical.causalTransitions());
+        transitions.add(new LegalEditorialPlannerCore.DocumentTransitionEvidence(
+                102,
+                EXTRA_PREDECESSOR_ID,
+                EstadoVersionLegal.VIGENTE,
+                EstadoVersionLegal.REEMPLAZADA,
+                null,
+                HISTORICAL_BATCH_ID,
+                HISTORICAL_ACTIVATION_AT));
+        LegalEditorialPlannerCore.BatchEvidence corrupted =
+                new LegalEditorialPlannerCore.BatchEvidence(
+                        historical.id(),
+                        historical.createdAt(),
+                        historical.sealedAt(),
+                        historical.predecessorIds(),
+                        historical.successors(),
+                        transitions);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                copyRetirementBatches(post, Map.of(HISTORICAL_BATCH_ID, corrupted)));
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                OBSERVED_AT);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
     void retirementReplayBlocksMissingOrDriftingSurvivorProjections() {
         for (RetirementProjectionCorruption corruption : retirementProjectionCorruptions()) {
             Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
@@ -1858,7 +1995,23 @@ class LegalEditorialPlannerCoreTest {
                 List.of(HISTORICAL_PREDECESSOR_ID),
                 List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
                         RETIREMENT_SURVIVOR_DOCUMENT_ID,
-                        TARGET_PUBLICATION_ID)));
+                        TARGET_PUBLICATION_ID)),
+                List.of(retirementDocumentTransition(
+                        100,
+                        HISTORICAL_PREDECESSOR_ID,
+                        EstadoVersionLegal.VIGENTE,
+                        EstadoVersionLegal.REEMPLAZADA,
+                        null,
+                        HISTORICAL_BATCH_ID,
+                        HISTORICAL_ACTIVATION_AT),
+                        retirementDocumentTransition(
+                                5,
+                                RETIREMENT_SURVIVOR_DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                null,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT)));
     }
 
     private static LegalEditorialPlannerCore.DocumentEvidence retirementDocumentEvidence(
@@ -2051,6 +2204,24 @@ class LegalEditorialPlannerCoreTest {
                 source.documentTransitions(),
                 source.requirementTransitions(),
                 source.batches());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot copyRetirementBatches(
+            LegalEditorialPlannerCore.PlannerSnapshot source,
+            Map<UUID, LegalEditorialPlannerCore.BatchEvidence> batches) {
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                source.documents(),
+                source.requirements(),
+                source.targetScopes(),
+                source.activeSlots(),
+                source.activePointers(),
+                source.documentTransitions(),
+                source.requirementTransitions(),
+                batches);
     }
 
     private static ValidatedEditorialPlan replacementToken(
@@ -2348,7 +2519,11 @@ class LegalEditorialPlannerCoreTest {
                                                 TARGET_PUBLICATION_ID),
                                         new LegalEditorialExecutionPlan.ReplacementSuccessor(
                                                 SPLIT_SUCCESSOR_CLOSURE_ID,
-                                                TARGET_PUBLICATION_ID))),
+                                                TARGET_PUBLICATION_ID)),
+                                compositeReplacementHistory().stream()
+                                        .filter(transition -> SPLIT_BATCH_ID.equals(
+                                                transition.replacementBatchId()))
+                                        .toList()),
                         MERGE_BATCH_ID,
                         new LegalEditorialPlannerCore.BatchEvidence(
                                 MERGE_BATCH_ID,
@@ -2359,7 +2534,11 @@ class LegalEditorialPlannerCoreTest {
                                         MERGE_PREDECESSOR_PRO_ID),
                                 List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
                                         MERGE_SUCCESSOR_ID,
-                                        TARGET_PUBLICATION_ID)))));
+                                        TARGET_PUBLICATION_ID)),
+                                compositeReplacementHistory().stream()
+                                        .filter(transition -> MERGE_BATCH_ID.equals(
+                                                transition.replacementBatchId()))
+                                        .toList())));
     }
 
     private static List<LegalEditorialPlannerCore.DocumentTransitionEvidence>
@@ -2930,7 +3109,22 @@ class LegalEditorialPlannerCoreTest {
                                 List.of(DOCUMENT_ID),
                                 List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
                                         ADDED_DOCUMENT_ID,
-                                        TARGET_PUBLICATION_ID)))));
+                                        TARGET_PUBLICATION_ID)),
+                                List.of(
+                                        transition(
+                                                3,
+                                                DOCUMENT_ID,
+                                                EstadoVersionLegal.VIGENTE,
+                                                EstadoVersionLegal.REEMPLAZADA,
+                                                CURRENT_BATCH_ID,
+                                                APPLIED_AT),
+                                        transition(
+                                                5,
+                                                ADDED_DOCUMENT_ID,
+                                                EstadoVersionLegal.PUBLICADA,
+                                                EstadoVersionLegal.VIGENTE,
+                                                CURRENT_BATCH_ID,
+                                                APPLIED_AT)))));
     }
 
     private static LegalEditorialPlannerCore.BatchEvidence historicalBatch(Instant sealedAt) {
@@ -2941,7 +3135,22 @@ class LegalEditorialPlannerCoreTest {
                 List.of(HISTORICAL_PREDECESSOR_ID),
                 List.of(new LegalEditorialExecutionPlan.ReplacementSuccessor(
                         DOCUMENT_ID,
-                        SOURCE_PUBLICATION_ID)));
+                        SOURCE_PUBLICATION_ID)),
+                List.of(
+                        transition(
+                                90,
+                                HISTORICAL_PREDECESSOR_ID,
+                                EstadoVersionLegal.VIGENTE,
+                                EstadoVersionLegal.REEMPLAZADA,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT),
+                        transition(
+                                2,
+                                DOCUMENT_ID,
+                                EstadoVersionLegal.PUBLICADA,
+                                EstadoVersionLegal.VIGENTE,
+                                HISTORICAL_BATCH_ID,
+                                HISTORICAL_ACTIVATION_AT)));
     }
 
     private static DocumentReplacementBatch batchWithCardinality(

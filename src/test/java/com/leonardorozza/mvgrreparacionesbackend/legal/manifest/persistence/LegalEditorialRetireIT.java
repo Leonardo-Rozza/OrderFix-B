@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.ConfinedEdi
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator.ValidatedEditorialPlan;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialReadiness;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.junit.jupiter.Container;
@@ -26,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,9 +38,13 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.assertEditorialConfirmed;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.assertEditorialKnownFailure;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.assertEditorialUnknown;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.applyHarness;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.cleanLegalState;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.copyRelease;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.editorialSequenceStates;
@@ -45,6 +53,7 @@ import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persisten
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.migrate;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.promoteToReady;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.restrictedApplyHarness;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.withReplicaRole;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** PostgreSQL accreditation for fresh fail-closed RETIRE applies. */
@@ -232,6 +241,383 @@ class LegalEditorialRetireIT {
                 .isEqualTo(applied.before().replacementHistoryRows());
     }
 
+    @Test
+    void exactPostStateReplaysAcrossDifferentOperationAndPlanShaWithoutDml()
+            throws Exception {
+        ImportedRelease current = readyRelease("retire-replay-v1");
+        DocumentVersion retiredDocument = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        RequirementVersion retiredRequirement = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        ValidatedEditorialPlan firstPlan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "replay-operation-one");
+        ValidatedEditorialPlan secondPlan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "replay-operation-two");
+        assertThat(secondPlan.operationId()).isNotEqualTo(firstPlan.operationId());
+        assertThat(secondPlan.editorialPlanSha256())
+                .isNotEqualTo(firstPlan.editorialPlanSha256());
+
+        LegalEditorialApplyResult first = apply.service().applyRetire(
+                current.release(), firstPlan);
+        assertEditorialConfirmed(first, LegalEditorialApplyResult.Outcome.APPLIED);
+        Map<String, String> rowsAfterApply = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesAfterApply =
+                editorialSequenceStates(owner);
+
+        LegalEditorialApplyResult exactReplay = apply.service().applyRetire(
+                current.release(), firstPlan);
+        assertEditorialConfirmed(
+                exactReplay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(exactReplay.receipt()).isEqualTo(first.receipt());
+        assertThat(exactReplay.appliedAt()).isEqualTo(first.appliedAt());
+        assertThat(editorialTableRows()).isEqualTo(rowsAfterApply);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesAfterApply);
+
+        LegalEditorialApplyResult foreignIdentityReplay = apply.service().applyRetire(
+                current.release(), secondPlan);
+
+        assertEditorialConfirmed(
+                foreignIdentityReplay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(foreignIdentityReplay.receipt()).isEqualTo(first.receipt());
+        assertThat(foreignIdentityReplay.appliedAt()).isEqualTo(first.appliedAt());
+        assertThat(editorialTableRows()).isEqualTo(rowsAfterApply);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesAfterApply);
+    }
+
+    @Test
+    void aDifferentPredictedPostStateBlocksBeforeDmlAfterRetirement()
+            throws Exception {
+        ImportedRelease current = readyRelease("retire-terminal-alternative-v1");
+        DocumentVersion retiredDocument = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        RequirementVersion retiredRequirement = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        RequirementVersion additionalRetirement = requirement(
+                current.publicationId(),
+                "account-closure");
+        ValidatedEditorialPlan appliedPlan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "terminal-applied");
+        ValidatedEditorialPlan alternativePlan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement, additionalRetirement),
+                "terminal-alternative");
+
+        LegalEditorialApplyResult first = apply.service().applyRetire(
+                current.release(), appliedPlan);
+        assertEditorialConfirmed(first, LegalEditorialApplyResult.Outcome.APPLIED);
+        Map<String, String> rowsBeforeAlternative = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState>
+                sequencesBeforeAlternative = editorialSequenceStates(owner);
+
+        LegalEditorialApplyResult blocked = apply.service().applyRetire(
+                current.release(), alternativePlan);
+
+        assertEditorialKnownFailure(
+                blocked,
+                LegalManifestStatus.BLOCKED,
+                LegalManifestIssueCode.SOURCE_FINGERPRINT_MISMATCH);
+        assertThat(editorialTableRows()).isEqualTo(rowsBeforeAlternative);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBeforeAlternative);
+    }
+
+    @Test
+    void wrongFingerprintBlocksReadyStateWithoutRowsOrSequenceAdvances()
+            throws Exception {
+        ImportedRelease current = readyRelease("retire-wrong-fingerprint-v1");
+        DocumentVersion retired = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        ValidatedEditorialPlan plan = retirementPlan(
+                current,
+                List.of(retired),
+                List.of(),
+                "wrong-fingerprint",
+                "sha256:" + "0".repeat(64));
+        assertThat(apply.readinessCore().evaluate(
+                current.release(),
+                databaseNow(apply.jdbc())).readiness())
+                .isEqualTo(LegalEditorialReadiness.READY);
+        Map<String, String> rowsBefore = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBefore =
+                editorialSequenceStates(owner);
+        assertThat(rowsBefore).hasSize(19);
+        assertThat(sequencesBefore).hasSize(10);
+
+        LegalEditorialApplyResult blocked = apply.service().applyRetire(
+                current.release(), plan);
+
+        assertSourceFingerprintBlocked(blocked);
+        assertThat(editorialTableRows()).isEqualTo(rowsBefore);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBefore);
+    }
+
+    @ParameterizedTest(name = "corrupcion de postestado RETIRE {0}")
+    @EnumSource(RetirementPostStateCorruption.class)
+    void everyExtraOrMissingPostStateCorruptionBlocksWithoutHealing(
+            RetirementPostStateCorruption corruption) throws Exception {
+        String seed = corruption.name().toLowerCase(java.util.Locale.ROOT);
+        ImportedRelease source = readyRelease(
+                "ret-cor-" + seed + "-v1");
+        ImportedRelease current = replaceTermsUnderRestrictedRole(
+                source,
+                "ret-cor-" + seed + "-v2");
+        UUID offScopeBatchMember = corruption == RetirementPostStateCorruption.BATCH_MEMBER_EXTRA
+                ? offScopeDraftTermsDocument("ret-cor-" + seed + "-aux-v1")
+                : null;
+        DocumentVersion retiredDocument = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        RequirementVersion retiredRequirement = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        AppliedRetirement applied = applyFreshRetirement(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "corruption-" + seed,
+                1);
+        Map<String, String> rowsBeforeCorruption = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState>
+                sequencesBeforeCorruption = editorialSequenceStates(owner);
+        assertThat(rowsBeforeCorruption).hasSize(19);
+        assertThat(sequencesBeforeCorruption).hasSize(10);
+
+        seedRetirementCorruption(corruption, current, applied, offScopeBatchMember);
+
+        Map<String, String> corruptedRows = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> corruptedSequences =
+                editorialSequenceStates(owner);
+        assertThat(corruptedRows).isNotEqualTo(rowsBeforeCorruption);
+        assertThat(corruptedRows).hasSize(19);
+        assertThat(corruptedSequences).hasSize(10);
+        assertThat(corruptedSequences).isEqualTo(sequencesBeforeCorruption);
+
+        LegalEditorialApplyResult blocked = apply.service().applyRetire(
+                current.release(), applied.plan());
+
+        assertSourceFingerprintBlocked(blocked);
+        assertThat(editorialTableRows()).isEqualTo(corruptedRows);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(corruptedSequences);
+        assertRestrictedSession();
+        restrictedPrivileges.verify();
+    }
+
+    @Test
+    void survivingPointerUpdatedAtDriftIsAnExplicitReplayKnowledgeBoundary()
+            throws Exception {
+        ImportedRelease current = readyRelease("retire-pointer-updated-at-boundary-v1");
+        RequirementVersion retired = requirement(
+                current.publicationId(),
+                "account-closure");
+        AppliedRetirement applied = applyFreshRetirement(
+                current,
+                List.of(),
+                List.of(retired),
+                "pointer-updated-at-boundary",
+                0);
+        RequiredSetPointer survivor = applied.after().requiredSetPointers().values().stream()
+                .findFirst()
+                .orElseThrow();
+        Instant driftedAt = survivor.updatedAt().plusSeconds(1);
+        Map<String, String> rowsBeforeDrift = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeDrift =
+                editorialSequenceStates(owner);
+
+        withReplicaRole(owner, () -> assertThat(owner.update("""
+                UPDATE legal_requisito_conjuntos_actuales
+                   SET actualizado_en = ?
+                 WHERE locale = ?
+                   AND contexto = ?
+                   AND audiencia = ?
+                """,
+                OffsetDateTime.ofInstant(driftedAt, java.time.ZoneOffset.UTC),
+                survivor.key().locale(),
+                survivor.key().context(),
+                survivor.key().audience())).isOne());
+
+        Map<PointerKey, RequiredSetPointer> expectedPointers = new LinkedHashMap<>(
+                applied.after().requiredSetPointers());
+        expectedPointers.put(survivor.key(), new RequiredSetPointer(
+                survivor.key(),
+                survivor.requiredSetId(),
+                survivor.publicationId(),
+                survivor.revision(),
+                driftedAt,
+                survivor.memberRequirementIds(),
+                survivor.referencedDocumentIds()));
+        assertThat(requiredSetPointers()).isEqualTo(expectedPointers);
+        Map<String, String> driftedRows = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> driftedSequences =
+                editorialSequenceStates(owner);
+        assertThat(rowsChangedBetween(rowsBeforeDrift, driftedRows))
+                .containsExactly("legal_requisito_conjuntos_actuales");
+        assertThat(driftedSequences).isEqualTo(sequencesBeforeDrift);
+
+        LegalEditorialApplyResult replay = apply.service().applyRetire(
+                current.release(), applied.plan());
+
+        assertEditorialConfirmed(
+                replay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(replay.receipt()).contains(applied.receipt());
+        assertThat(replay.appliedAt()).contains(applied.receipt().appliedAt());
+        assertThat(requiredSetPointers()).isEqualTo(expectedPointers);
+        assertThat(editorialTableRows()).isEqualTo(driftedRows);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(driftedSequences);
+    }
+
+    @Test
+    void failureAfterLastMixedRetirementBatchRollsBackAllRowsExactly()
+            throws Exception {
+        ImportedRelease source = readyRelease("retire-last-dml-rollback-source-v1");
+        ImportedRelease current = replaceTermsUnderRestrictedRole(
+                source,
+                "retire-last-dml-rollback-v2");
+        DocumentVersion retiredDocument = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        RequirementVersion retiredRequirement = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        ValidatedEditorialPlan plan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "last-dml-rollback");
+        Map<String, String> rowsBeforeAttempt = editorialTableRows();
+        assertThat(rowsBeforeAttempt).hasSize(19);
+        rowsBeforeAttempt.forEach((table, rows) ->
+                assertThat(rows).as(table).isNotEqualTo("[]"));
+        Map<String, String> replacementBeforeAttempt = replacementHistoryRows();
+        replacementBeforeAttempt.forEach((table, rows) ->
+                assertThat(rows).as(table).isNotEqualTo("[]"));
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeAttempt =
+                editorialSequenceStates(owner);
+        FailAfterLastRetirementBatchJdbcTemplate injectedJdbc =
+                new FailAfterLastRetirementBatchJdbcTemplate(apply.dataSource());
+        LegalEditorialSchemaVerifier schemaVerifier = new LegalEditorialSchemaVerifier(
+                injectedJdbc,
+                LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalEditorialPrivilegeVerifier privilegeVerifier =
+                new LegalEditorialPrivilegeVerifier(
+                        injectedJdbc,
+                        EDITORIAL_ROLE,
+                        LegalV27EditorialInventory.DEFAULT_SCHEMA);
+        LegalManifestPersistenceITSupport.ApplyHarness injected = applyHarness(
+                injectedJdbc,
+                LegalDatabaseBudgets.production(),
+                schemaVerifier,
+                privilegeVerifier);
+        assertThat(injected.jdbc().queryForObject("SELECT current_user", String.class))
+                .isEqualTo(EDITORIAL_ROLE);
+
+        LegalEditorialApplyResult result = injected.service().applyRetire(
+                current.release(), plan);
+
+        assertEditorialKnownFailure(
+                result,
+                LegalManifestStatus.ERROR,
+                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        assertThat(injectedJdbc.fired()).isTrue();
+        assertThat(injectedJdbc.dmlOrder()).containsExactly(
+                "required-set-pointer:delete",
+                "document-slot:delete",
+                "requirement-transition:insert",
+                "document-transition:insert");
+        assertThat(editorialTableRows()).isEqualTo(rowsBeforeAttempt);
+        assertThat(replacementHistoryRows()).isEqualTo(replacementBeforeAttempt);
+        assertExactSequenceDelta(
+                sequencesBeforeAttempt,
+                editorialSequenceStates(owner),
+                1,
+                1);
+        assertThat(apply.readinessCore().evaluate(
+                current.release(),
+                databaseNow(apply.jdbc())).readiness())
+                .isEqualTo(LegalEditorialReadiness.READY);
+    }
+
+    @Test
+    void restrictedCommitAcknowledgementLossIsUnknownAndRetryConvergesWithoutDml()
+            throws Exception {
+        ImportedRelease current = readyRelease("retire-commit-unknown-v1");
+        DocumentVersion retiredDocument = document(
+                current.publicationId(),
+                "aviso-clientes-taller");
+        RequirementVersion retiredRequirement = requirement(
+                current.publicationId(),
+                "customer-photo-attestation");
+        ValidatedEditorialPlan plan = retirementPlan(
+                current,
+                List.of(retiredDocument),
+                List.of(retiredRequirement),
+                "commit-unknown");
+        var ambiguousDataSource =
+                new LegalManifestPersistenceITSupport.CommitAcknowledgementLostDataSource(
+                        apply.dataSource());
+        LegalManifestPersistenceITSupport.ApplyHarness ambiguous = restrictedApplyHarness(
+                ambiguousDataSource,
+                LegalDatabaseBudgets.production(),
+                EDITORIAL_ROLE);
+        assertThat(ambiguous.jdbc().queryForObject("SELECT current_user", String.class))
+                .isEqualTo(EDITORIAL_ROLE);
+
+        LegalEditorialApplyResult firstAttempt = ambiguous.service().applyRetire(
+                current.release(), plan);
+
+        assertEditorialUnknown(firstAttempt);
+        assertThat(firstAttempt.operationType()).isEmpty();
+        assertThat(firstAttempt.targetPublicationUuid()).isEmpty();
+        assertThat(firstAttempt.appliedAt()).isEmpty();
+        assertThat(firstAttempt.readinessAfter()).isEmpty();
+        assertThat(firstAttempt.omittedIssueCount()).isZero();
+        assertThat(ambiguousDataSource.armed()).isFalse();
+        assertThat(apply.readinessCore().evaluate(
+                current.release(),
+                databaseNow(apply.jdbc())).readiness())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        Instant committedAppliedAt = documentHistories(List.of(retiredDocument))
+                .get(retiredDocument.id())
+                .getLast()
+                .occurredAt();
+        Map<String, String> rowsBeforeReplay = editorialTableRows();
+        Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeReplay =
+                editorialSequenceStates(owner);
+
+        LegalEditorialApplyResult replay = ambiguous.service().applyRetire(
+                current.release(), plan);
+
+        assertEditorialConfirmed(
+                replay,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(replay.operationType())
+                .contains(LegalEditorialApplyReceipt.OperationType.RETIRE);
+        assertThat(replay.targetPublicationUuid()).contains(current.publicationId());
+        assertThat(replay.readinessAfter()).contains(LegalEditorialReadiness.NOT_READY);
+        assertThat(replay.appliedAt()).contains(committedAppliedAt);
+        assertThat(replay.receipt()).get()
+                .extracting(LegalEditorialApplyReceipt::appliedAt)
+                .isEqualTo(committedAppliedAt);
+        assertThat(editorialTableRows()).isEqualTo(rowsBeforeReplay);
+        assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBeforeReplay);
+    }
+
     private AppliedRetirement applyFreshRetirement(
             ImportedRelease current,
             List<DocumentVersion> retiredDocuments,
@@ -370,10 +756,249 @@ class LegalEditorialRetireIT {
                 before,
                 after,
                 receipt,
+                plan,
                 documentAffectedPointers,
                 requirementAffectedPointers,
                 affectedPointers,
                 Math.toIntExact(affectedSlotCount));
+    }
+
+    private static void seedRetirementCorruption(
+            RetirementPostStateCorruption corruption,
+            ImportedRelease current,
+            AppliedRetirement applied,
+            UUID offScopeBatchMember) {
+        HistoricalReplacementBatch batch = historicalReplacementBatch();
+        withReplicaRole(owner, () -> {
+            int affected = switch (corruption) {
+                case SLOT_EXTRA -> insertDocumentSlot(removedDocumentSlot(applied));
+                case SLOT_MISSING -> deleteDocumentSlot(survivingDocumentSlot(applied));
+                case POINTER_EXTRA -> insertRequiredSetPointer(removedRequiredSetPointer(applied));
+                case POINTER_MISSING -> deleteRequiredSetPointer(
+                        survivingRequiredSetPointer(applied));
+                case TRANSITION_EXTRA -> insertDuplicateRetirementTransition(
+                        retirementTransition(applied));
+                case TRANSITION_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_transiciones
+                         WHERE id = ?
+                        """, retirementTransition(applied).transition().id());
+                case BATCH_MEMBER_EXTRA -> owner.update("""
+                        INSERT INTO legal_documento_reemplazo_anteriores
+                            (id, lote_id, documento_version_id)
+                        VALUES (-8000002, ?, ?)
+                        """,
+                        batch.id(),
+                        Objects.requireNonNull(offScopeBatchMember));
+                case BATCH_MEMBER_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_reemplazo_anteriores
+                         WHERE lote_id = ?
+                           AND documento_version_id = ?
+                        """, batch.id(), batch.predecessorDocumentVersionId());
+                case BATCH_EXTRA -> insertRelatedExtraBatch(batch, current.publicationId());
+                case BATCH_MISSING -> owner.update("""
+                        DELETE FROM legal_documento_reemplazo_lotes
+                         WHERE id = ?
+                        """, batch.id());
+            };
+            assertThat(affected).isOne();
+        });
+    }
+
+    private static int insertDocumentSlot(DocumentSlot slot) {
+        return owner.update("""
+                INSERT INTO legal_documento_vigentes
+                    (tipo, locale, contexto, documento_version_id,
+                     documento_linea_id, publicacion_id, estado_documento)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                slot.key().type(),
+                slot.key().locale(),
+                slot.key().context(),
+                slot.documentVersionId(),
+                slot.documentLineId(),
+                slot.publicationId(),
+                slot.state());
+    }
+
+    private static int deleteDocumentSlot(DocumentSlot slot) {
+        return owner.update("""
+                DELETE FROM legal_documento_vigentes
+                 WHERE tipo = ?
+                   AND locale = ?
+                   AND contexto = ?
+                """,
+                slot.key().type(),
+                slot.key().locale(),
+                slot.key().context());
+    }
+
+    private static int insertRequiredSetPointer(RequiredSetPointer pointer) {
+        return owner.update("""
+                INSERT INTO legal_requisito_conjuntos_actuales
+                    (locale, contexto, audiencia, conjunto_id,
+                     publicacion_id, actualizado_en)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                pointer.key().locale(),
+                pointer.key().context(),
+                pointer.key().audience(),
+                pointer.requiredSetId(),
+                pointer.publicationId(),
+                OffsetDateTime.ofInstant(
+                        pointer.updatedAt(),
+                        java.time.ZoneOffset.UTC));
+    }
+
+    private static int deleteRequiredSetPointer(RequiredSetPointer pointer) {
+        return owner.update("""
+                DELETE FROM legal_requisito_conjuntos_actuales
+                 WHERE locale = ?
+                   AND contexto = ?
+                   AND audiencia = ?
+                """,
+                pointer.key().locale(),
+                pointer.key().context(),
+                pointer.key().audience());
+    }
+
+    private static int insertDuplicateRetirementTransition(
+            RetirementTransition retirement) {
+        DocumentTransition transition = retirement.transition();
+        return owner.update("""
+                INSERT INTO legal_documento_transiciones
+                    (id, documento_version_id, estado_anterior, estado_nuevo,
+                     motivo, reemplazo_lote_id, ocurrido_en)
+                VALUES (-8000001, ?, ?, ?, ?, ?, ?)
+                """,
+                retirement.documentVersionId(),
+                transition.previousState(),
+                transition.newState(),
+                transition.reason(),
+                transition.replacementBatchId(),
+                OffsetDateTime.ofInstant(
+                        transition.occurredAt(),
+                        java.time.ZoneOffset.UTC));
+    }
+
+    private static int insertRelatedExtraBatch(
+            HistoricalReplacementBatch batch,
+            UUID publicationId) {
+        UUID extraBatchId = stableUuid("retire-corruption:extra-batch:" + publicationId);
+        assertThat(owner.update("""
+                INSERT INTO legal_documento_reemplazo_lotes
+                    (id, estado_construccion, creado_en, sellado_en)
+                SELECT ?, estado_construccion, creado_en, sellado_en
+                  FROM legal_documento_reemplazo_lotes
+                 WHERE id = ?
+                """, extraBatchId, batch.id())).isOne();
+        assertThat(owner.update("""
+                INSERT INTO legal_documento_reemplazo_anteriores
+                    (id, lote_id, documento_version_id)
+                VALUES (-8000003, ?, ?)
+                """, extraBatchId, batch.predecessorDocumentVersionId())).isOne();
+        return owner.update("""
+                INSERT INTO legal_documento_reemplazo_sucesoras
+                    (id, lote_id, documento_version_id, publicacion_id)
+                VALUES (-8000004, ?, ?, ?)
+                """,
+                extraBatchId,
+                batch.successorDocumentVersionId(),
+                publicationId);
+    }
+
+    private static HistoricalReplacementBatch historicalReplacementBatch() {
+        List<UUID> batchIds = owner.queryForList("""
+                SELECT id
+                 FROM legal_documento_reemplazo_lotes
+                 ORDER BY id
+                """, UUID.class);
+        assertThat(batchIds).hasSize(1);
+        UUID batchId = batchIds.getFirst();
+        List<UUID> predecessors = owner.queryForList("""
+                SELECT documento_version_id
+                  FROM legal_documento_reemplazo_anteriores
+                 WHERE lote_id = ?
+                 ORDER BY id
+                """, UUID.class, batchId);
+        List<UUID> successors = owner.queryForList("""
+                SELECT documento_version_id
+                  FROM legal_documento_reemplazo_sucesoras
+                 WHERE lote_id = ?
+                 ORDER BY id
+                """, UUID.class, batchId);
+        assertThat(predecessors).hasSize(1);
+        assertThat(successors).hasSize(1);
+        return new HistoricalReplacementBatch(
+                batchId,
+                predecessors.getFirst(),
+                successors.getFirst());
+    }
+
+    private static DocumentSlot removedDocumentSlot(AppliedRetirement applied) {
+        return applied.before().documentSlots().values().stream()
+                .filter(slot -> !applied.after().documentSlots().containsKey(slot.key()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static DocumentSlot survivingDocumentSlot(AppliedRetirement applied) {
+        return applied.after().documentSlots().values().stream()
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static RequiredSetPointer removedRequiredSetPointer(
+            AppliedRetirement applied) {
+        return applied.before().requiredSetPointers().values().stream()
+                .filter(pointer -> !applied.after().requiredSetPointers()
+                        .containsKey(pointer.key()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static RequiredSetPointer survivingRequiredSetPointer(
+            AppliedRetirement applied) {
+        return applied.after().requiredSetPointers().values().stream()
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static RetirementTransition retirementTransition(
+            AppliedRetirement applied) {
+        List<RetirementTransition> candidates = new ArrayList<>();
+        applied.after().documentHistories().forEach((documentVersionId, afterHistory) -> {
+            List<DocumentTransition> beforeHistory = applied.before()
+                    .documentHistories()
+                    .get(documentVersionId);
+            if (afterHistory.size() == beforeHistory.size() + 1
+                    && afterHistory.getLast().newState().equals("RETIRADA")) {
+                candidates.add(new RetirementTransition(
+                        documentVersionId,
+                        afterHistory.getLast()));
+            }
+        });
+        assertThat(candidates).hasSize(1);
+        return candidates.getFirst();
+    }
+
+    private static void assertSourceFingerprintBlocked(
+            LegalEditorialApplyResult result) {
+        assertEditorialKnownFailure(
+                result,
+                LegalManifestStatus.BLOCKED,
+                LegalManifestIssueCode.SOURCE_FINGERPRINT_MISMATCH);
+        assertThat(result.issues()).singleElement().satisfies(issue ->
+                assertThat(issue.location()).isEqualTo("database/source"));
+    }
+
+    private static List<String> rowsChangedBetween(
+            Map<String, String> before,
+            Map<String, String> after) {
+        assertThat(after.keySet()).isEqualTo(before.keySet());
+        return before.keySet().stream()
+                .filter(table -> !Objects.equals(before.get(table), after.get(table)))
+                .sorted()
+                .toList();
     }
 
     private static void seedAcceptanceAggregate(ImportedRelease current) {
@@ -668,6 +1293,21 @@ class LegalEditorialRetireIT {
         String fingerprint = apply.readinessCore()
                 .observeState(externalId, databaseNow(apply.jdbc()))
                 .editorialStateFingerprint();
+        return retirementPlan(
+                current,
+                retiredDocuments,
+                retiredRequirements,
+                operationSeed,
+                fingerprint);
+    }
+
+    private ValidatedEditorialPlan retirementPlan(
+            ImportedRelease current,
+            List<DocumentVersion> retiredDocuments,
+            List<RequirementVersion> retiredRequirements,
+            String operationSeed,
+            String fingerprint) throws Exception {
+        String externalId = current.release().plan().manifest().publicationId();
         UUID operationId = stableUuid("retire:" + operationSeed + ":" + externalId);
         ObjectNode plan = emptyPlan(
                 operationId,
@@ -755,8 +1395,23 @@ class LegalEditorialRetireIT {
     private ImportedRelease replaceTermsUnderRestrictedRole(
             ImportedRelease source,
             String targetExternalId) throws Exception {
-        ImportedRelease target = importedTermsReplacementTarget(targetExternalId);
+        return replaceTermsUnderRestrictedRole(
+                source,
+                targetExternalId,
+                "replace-v2");
+    }
+
+    private ImportedRelease replaceTermsUnderRestrictedRole(
+            ImportedRelease source,
+            String targetExternalId,
+            String replacementVersion) throws Exception {
+        ImportedRelease target = importedTermsReplacementTarget(
+                targetExternalId,
+                replacementVersion);
         ValidatedEditorialPlan plan = oneToOneReplacementPlan(source, target);
+        long expectedReplacementBatches = Math.addExact(
+                rowCount("legal_documento_reemplazo_lotes"),
+                1L);
 
         assertRestrictedSession();
         LegalEditorialApplyResult result = apply.service().applyReplace(
@@ -770,9 +1425,12 @@ class LegalEditorialRetireIT {
         assertThat(receipt.targetPublicationUuid()).isEqualTo(target.publicationId());
         assertThat(receipt.readinessAfter()).isEqualTo(LegalEditorialReadiness.READY);
         assertThat(receipt.replacementBatches()).isOne();
-        assertThat(rowCount("legal_documento_reemplazo_lotes")).isOne();
-        assertThat(rowCount("legal_documento_reemplazo_anteriores")).isOne();
-        assertThat(rowCount("legal_documento_reemplazo_sucesoras")).isOne();
+        assertThat(rowCount("legal_documento_reemplazo_lotes"))
+                .isEqualTo(expectedReplacementBatches);
+        assertThat(rowCount("legal_documento_reemplazo_anteriores"))
+                .isEqualTo(expectedReplacementBatches);
+        assertThat(rowCount("legal_documento_reemplazo_sucesoras"))
+                .isEqualTo(expectedReplacementBatches);
         assertThat(apply.readinessCore().evaluate(
                 target.release(),
                 receipt.appliedAt()).readiness())
@@ -780,8 +1438,9 @@ class LegalEditorialRetireIT {
         return target;
     }
 
-    private ImportedRelease importedTermsReplacementTarget(String externalId)
-            throws Exception {
+    private ImportedRelease importedTermsReplacementTarget(
+            String externalId,
+            String replacementVersion) throws Exception {
         ValidatedRelease release = copyRelease(
                 temporaryDirectory,
                 LegalEditorialRetireIT.class,
@@ -792,7 +1451,7 @@ class LegalEditorialRetireIT {
                                     "effectiveAt",
                                     "2026-01-01T00:00:00-03:00"));
                     manifestDocument(manifest, "terminos")
-                            .put("version", "replace-v2");
+                            .put("version", replacementVersion);
                     manifest.withArray("requirements").forEach(candidate -> {
                         ObjectNode requirement = (ObjectNode) candidate;
                         boolean referencesTerms = java.util.stream.StreamSupport.stream(
@@ -801,7 +1460,7 @@ class LegalEditorialRetireIT {
                                 .anyMatch(reference ->
                                         "terminos".equals(reference.textValue()));
                         if (referencesTerms) {
-                            requirement.put("version", "replace-v2");
+                            requirement.put("version", replacementVersion);
                         }
                     });
                 });
@@ -811,6 +1470,24 @@ class LegalEditorialRetireIT {
                 .orElseThrow()
                 .publicationUuid();
         return new ImportedRelease(release, publicationId);
+    }
+
+    private UUID offScopeDraftTermsDocument(String externalId) throws Exception {
+        ImportedRelease draft = importedTermsReplacementTarget(
+                externalId,
+                "draft-" + externalId);
+        DocumentVersion terms = document(draft.publicationId(), "terminos");
+        assertThat(owner.queryForObject("""
+                SELECT estado
+                  FROM legal_documento_versiones
+                 WHERE id = ?
+                """, String.class, terms.id())).isEqualTo("BORRADOR");
+        assertThat(owner.queryForObject("""
+                SELECT count(*)
+                  FROM legal_documento_vigentes
+                 WHERE documento_version_id = ?
+                """, Long.class, terms.id())).isZero();
+        return terms.id();
     }
 
     private ValidatedEditorialPlan oneToOneReplacementPlan(
@@ -1300,6 +1977,13 @@ class LegalEditorialRetireIT {
         return Map.copyOf(rows);
     }
 
+    private static Map<String, String> editorialTableRows() {
+        Map<String, String> rows = tableRows(
+                new TreeSet<>(LegalV27EditorialInventory.EDITORIAL_TABLES));
+        assertThat(rows).hasSize(19);
+        return rows;
+    }
+
     private static void assertReplacementHistory(
             DatabaseSnapshot snapshot,
             int expectedBatches) {
@@ -1373,6 +2057,60 @@ class LegalEditorialRetireIT {
 
     private static String quoteIdentifier(String identifier) {
         return '"' + identifier.replace("\"", "\"\"") + '"';
+    }
+
+    private static final class FailAfterLastRetirementBatchJdbcTemplate
+            extends JdbcTemplate {
+
+        private final List<String> dmlOrder = new ArrayList<>();
+        private final AtomicBoolean fired = new AtomicBoolean();
+
+        private FailAfterLastRetirementBatchJdbcTemplate(DataSource dataSource) {
+            super(Objects.requireNonNull(dataSource, "dataSource"));
+        }
+
+        @Override
+        public int[] batchUpdate(String sql, List<Object[]> batchArgs) {
+            String signature = retirementDmlSignature(sql);
+            int[] counts = super.batchUpdate(sql, batchArgs);
+            dmlOrder.add(signature);
+            if ("document-transition:insert".equals(signature)
+                    && fired.compareAndSet(false, true)) {
+                throw new IllegalStateException(
+                        "fallo inyectado después del último batch DML RETIRE");
+            }
+            return counts;
+        }
+
+        private static String retirementDmlSignature(String sql) {
+            String normalized = sql.toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("\\s+", " ")
+                    .trim();
+            if (normalized.startsWith(
+                    "delete from legal_requisito_conjuntos_actuales")) {
+                return "required-set-pointer:delete";
+            }
+            if (normalized.startsWith("delete from legal_documento_vigentes")) {
+                return "document-slot:delete";
+            }
+            if (normalized.startsWith(
+                    "insert into legal_requisito_transiciones")) {
+                return "requirement-transition:insert";
+            }
+            if (normalized.startsWith(
+                    "insert into legal_documento_transiciones")) {
+                return "document-transition:insert";
+            }
+            throw new AssertionError("DML RETIRE inesperado: " + normalized);
+        }
+
+        private List<String> dmlOrder() {
+            return List.copyOf(dmlOrder);
+        }
+
+        private boolean fired() {
+            return fired.get();
+        }
     }
 
     private record ImportedRelease(ValidatedRelease release, UUID publicationId) { }
@@ -1472,10 +2210,33 @@ class LegalEditorialRetireIT {
             Map<String, String> acceptanceRows,
             Map<String, String> replacementHistoryRows) { }
 
+    private enum RetirementPostStateCorruption {
+        SLOT_EXTRA,
+        SLOT_MISSING,
+        POINTER_EXTRA,
+        POINTER_MISSING,
+        TRANSITION_EXTRA,
+        TRANSITION_MISSING,
+        BATCH_MEMBER_EXTRA,
+        BATCH_MEMBER_MISSING,
+        BATCH_EXTRA,
+        BATCH_MISSING
+    }
+
+    private record HistoricalReplacementBatch(
+            UUID id,
+            UUID predecessorDocumentVersionId,
+            UUID successorDocumentVersionId) { }
+
+    private record RetirementTransition(
+            UUID documentVersionId,
+            DocumentTransition transition) { }
+
     private record AppliedRetirement(
             DatabaseSnapshot before,
             DatabaseSnapshot after,
             LegalEditorialApplyReceipt receipt,
+            ValidatedEditorialPlan plan,
             Set<PointerKey> documentAffectedPointers,
             Set<PointerKey> requirementAffectedPointers,
             Set<PointerKey> affectedPointers,
