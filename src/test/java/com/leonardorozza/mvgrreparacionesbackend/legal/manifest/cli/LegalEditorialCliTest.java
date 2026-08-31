@@ -26,6 +26,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.Lega
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -81,6 +83,7 @@ class LegalEditorialCliTest {
     private LegalManifestValidator validator;
     private LegalEditorialPlanValidator editorialPlanValidator;
     private LegalEditorialReplaceScopeGuard replaceScopeGuard;
+    private LegalEditorialPlanV1 editorialPlanModel;
     private ValidatedEditorialPlan editorialPlan;
     private LegalManifestReportWriter v1Writer;
     private LegalManifestImportReportWriter v2Writer;
@@ -112,14 +115,15 @@ class LegalEditorialCliTest {
         validator = mock(LegalManifestValidator.class);
         editorialPlanValidator = mock(LegalEditorialPlanValidator.class);
         replaceScopeGuard = mock(LegalEditorialReplaceScopeGuard.class);
-        LegalEditorialPlanV1 planModel = mock(LegalEditorialPlanV1.class);
-        when(planModel.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
-        when(planModel.targetPublicationId())
+        editorialPlanModel = mock(LegalEditorialPlanV1.class);
+        when(editorialPlanModel.expectedReadinessAfter())
+                .thenReturn(LegalEditorialReadiness.READY);
+        when(editorialPlanModel.targetPublicationId())
                 .thenReturn(release.plan().manifest().publicationId());
-        when(planModel.targetManifestSha256())
+        when(editorialPlanModel.targetManifestSha256())
                 .thenReturn(release.plan().manifestSha256());
         editorialPlan = mock(ValidatedEditorialPlan.class);
-        when(editorialPlan.plan()).thenReturn(planModel);
+        when(editorialPlan.plan()).thenReturn(editorialPlanModel);
         when(editorialPlan.operationType()).thenReturn(OperationType.REPLACE);
         when(editorialPlan.operationId()).thenReturn(OPERATION_ID);
         when(editorialPlan.editorialPlanSha256()).thenReturn(EDITORIAL_PLAN_SHA256);
@@ -329,6 +333,37 @@ class LegalEditorialCliTest {
     }
 
     @Test
+    void dispatchesPlanRetireAsReadOnlyNotReadyWithoutUsingTheReplaceGuard()
+            throws IOException {
+        LegalEditorialPlanService service = mock(LegalEditorialPlanService.class);
+        LegalEditorialPlanResult result = applicablePlanResult(
+                LegalEditorialReadiness.NOT_READY);
+        when(service.planRetire(release, editorialPlan)).thenReturn(result);
+        prepareSuccessfulContext(
+                Command.PLAN_RETIRE,
+                LegalEditorialPlanService.class,
+                service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.PLAN_RETIRE), output);
+
+        JsonNode report = assertSuccessfulV3(
+                output,
+                "plan-retire",
+                "APPLICABLE",
+                "NOT_READY");
+        assertThat(exit).isZero();
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("RETIRE");
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("NOT_READY");
+        verifyNoInteractions(replaceScopeGuard);
+        verify(service).planRetire(release, editorialPlan);
+        verify(service, never()).planReplace(release, editorialPlan);
+    }
+
+    @Test
     void replaceEnvironmentFailureRetainsOnlyConfirmedInputIdentity() throws IOException {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
@@ -416,6 +451,39 @@ class LegalEditorialCliTest {
                 .isEqualTo(1);
         assertThat(report.path("counts").path("delta").isNull()).isTrue();
         verify(service).applyReplace(release, editorialPlan);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = LegalEditorialApplyResult.Outcome.class,
+            names = {"APPLIED", "ALREADY_APPLIED"})
+    void dispatchesApplyRetireAndTreatsConfirmedNotReadyAsSuccess(
+            LegalEditorialApplyResult.Outcome outcome) throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        LegalEditorialApplyResult result = appliedRetireResult(outcome);
+        when(service.applyRetire(release, editorialPlan)).thenReturn(result);
+        prepareSuccessfulContext(
+                Command.APPLY_RETIRE,
+                LegalEditorialApplyService.class,
+                service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.APPLY_RETIRE), output);
+
+        JsonNode report = assertSuccessfulV3(
+                output,
+                "apply-retire",
+                outcome.name(),
+                "NOT_READY");
+        assertThat(exit).isZero();
+        assertThat(report.path("persisted").booleanValue()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("RETIRE");
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("NOT_READY");
+        verifyNoInteractions(replaceScopeGuard);
+        verify(service).applyRetire(release, editorialPlan);
+        verify(service, never()).applyReplace(release, editorialPlan);
     }
 
     @Test
@@ -522,6 +590,40 @@ class LegalEditorialCliTest {
         assertThat(report.path("counts").path("delta").isNull()).isTrue();
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .doesNotContain("apply-replace-result-canary");
+    }
+
+    @Test
+    void applyRetireInvocationWithoutTerminalResultIsUnknownAndIdentitySafe()
+            throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        when(service.applyRetire(release, editorialPlan))
+                .thenThrow(new IllegalStateException("apply-retire-result-canary"));
+        prepareSuccessfulContext(Command.APPLY_RETIRE, LegalEditorialApplyService.class, service);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        int exit = cli().runSafely(validArguments(Command.APPLY_RETIRE), output);
+
+        JsonNode report = report(output);
+        assertThat(exit).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo("apply-retire");
+        assertThat(report.path("persisted").isNull()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("RETIRE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("UNKNOWN");
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(EDITORIAL_PLAN_SHA256);
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("NOT_READY");
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .doesNotContain("apply-retire-result-canary");
     }
 
     @Test
@@ -661,8 +763,16 @@ class LegalEditorialCliTest {
         if (command.requiresEditorialPlan()) {
             when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
                     .thenReturn(LegalManifestValidation.pass(editorialPlan));
-            when(replaceScopeGuard.validate(editorialPlan))
-                    .thenReturn(LegalManifestValidation.pass(editorialPlan));
+            OperationType operationType = command.editorialPlanOperationType().orElseThrow();
+            when(editorialPlan.operationType()).thenReturn(operationType);
+            when(editorialPlanModel.expectedReadinessAfter()).thenReturn(
+                    operationType == OperationType.RETIRE
+                            ? LegalEditorialReadiness.NOT_READY
+                            : LegalEditorialReadiness.READY);
+            if (operationType == OperationType.REPLACE) {
+                when(replaceScopeGuard.validate(editorialPlan))
+                        .thenReturn(LegalManifestValidation.pass(editorialPlan));
+            }
         }
         when(editorialEnvironment.apply(command))
                 .thenReturn(LegalManifestValidation.pass(environment));
@@ -759,6 +869,11 @@ class LegalEditorialCliTest {
     }
 
     private static LegalEditorialPlanResult applicablePlanResult() {
+        return applicablePlanResult(LegalEditorialReadiness.READY);
+    }
+
+    private static LegalEditorialPlanResult applicablePlanResult(
+            LegalEditorialReadiness expectedReadiness) {
         LegalEditorialPlanResult result = mock(LegalEditorialPlanResult.class);
         when(result.status()).thenReturn(LegalManifestStatus.PASS);
         when(result.outcome()).thenReturn(LegalEditorialPlanResult.Outcome.APPLICABLE);
@@ -766,7 +881,7 @@ class LegalEditorialCliTest {
         when(result.changeRequired()).thenReturn(Optional.of(true));
         when(result.observedAt()).thenReturn(Optional.of(OBSERVED_AT));
         when(result.expectedReadinessAfter())
-                .thenReturn(Optional.of(LegalEditorialReadiness.READY));
+                .thenReturn(Optional.of(expectedReadiness));
         when(result.deltaCounts()).thenReturn(Optional.of(new LegalEditorialPlanResult.DeltaCounts(
                 22, 0, 12, 0, 11, 0, 0, 0, 8, 0)));
         when(result.issues()).thenReturn(List.of());
@@ -802,6 +917,24 @@ class LegalEditorialCliTest {
         when(result.status()).thenReturn(LegalManifestStatus.PASS);
         when(result.persisted()).thenReturn(Boolean.TRUE);
         when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.APPLIED);
+        when(result.receipt()).thenReturn(Optional.of(receipt));
+        when(result.issues()).thenReturn(List.of());
+        when(result.omittedIssueCount()).thenReturn(0);
+        return result;
+    }
+
+    private static LegalEditorialApplyResult appliedRetireResult(
+            LegalEditorialApplyResult.Outcome outcome) {
+        LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.RETIRE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.NOT_READY,
+                11, 6, 35, 13, 9, 4, 1);
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.PASS);
+        when(result.persisted()).thenReturn(Boolean.TRUE);
+        when(result.outcome()).thenReturn(outcome);
         when(result.receipt()).thenReturn(Optional.of(receipt));
         when(result.issues()).thenReturn(List.of());
         when(result.omittedIssueCount()).thenReturn(0);

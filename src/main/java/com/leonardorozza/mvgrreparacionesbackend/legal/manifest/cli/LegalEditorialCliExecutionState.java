@@ -63,9 +63,16 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void editorialPlanConfirmed(ValidatedEditorialPlan validatedPlan) {
-        requireReplaceCommand();
+        requireEditorialPlanCommand();
         requirePhase(Phase.RELEASE_VALIDATED);
-        editorialPlan = Objects.requireNonNull(validatedPlan, "editorialPlan");
+        ValidatedEditorialPlan requiredPlan = Objects.requireNonNull(
+                validatedPlan,
+                "editorialPlan");
+        if (requiredPlan.operationType()
+                != command.editorialPlanOperationType().orElseThrow()) {
+            throw invalidTransition();
+        }
+        editorialPlan = requiredPlan;
         phase = Phase.EDITORIAL_PLAN_CONFIRMED;
     }
 
@@ -83,9 +90,7 @@ final class LegalEditorialCliExecutionState {
     }
 
     synchronized void resultReceived(LegalEditorialPlanResult result) {
-        if (command != Command.PLAN_PROMOTE && command != Command.PLAN_REPLACE) {
-            throw invalidTransition();
-        }
+        requirePlanCommand();
         requireInvocation();
         planResult = Objects.requireNonNull(result, "result");
         phase = Phase.RESULT_RECEIVED;
@@ -140,14 +145,24 @@ final class LegalEditorialCliExecutionState {
         }
     }
 
-    private void requireReplaceCommand() {
-        if (command != Command.PLAN_REPLACE && command != Command.APPLY_REPLACE) {
+    private void requireEditorialPlanCommand() {
+        if (!command.requiresEditorialPlan()) {
+            throw invalidTransition();
+        }
+    }
+
+    private void requirePlanCommand() {
+        if (command != Command.PLAN_PROMOTE
+                && command != Command.PLAN_REPLACE
+                && command != Command.PLAN_RETIRE) {
             throw invalidTransition();
         }
     }
 
     private void requireApplyCommand() {
-        if (command != Command.APPLY_PROMOTE && command != Command.APPLY_REPLACE) {
+        if (command != Command.APPLY_PROMOTE
+                && command != Command.APPLY_REPLACE
+                && command != Command.APPLY_RETIRE) {
             throw invalidTransition();
         }
     }

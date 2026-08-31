@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** Closed argument contract for the editorial CLI commands exposed through Corte 6D. */
+/** Closed argument contract for the internal editorial CLI commands. */
 public record LegalEditorialArguments(
         Command command,
         Path manifestPath,
@@ -201,13 +201,15 @@ public record LegalEditorialArguments(
         return LegalManifestValidation.failure(LegalManifestIssue.at(code, ISSUE_LOCATION));
     }
 
-    /** Case-sensitive editorial commands exposed through Corte 6D. */
+    /** Case-sensitive editorial commands exposed through the internal tool. */
     public enum Command {
         READINESS("readiness", false, null),
         PLAN_PROMOTE("plan-promote", false, null),
         APPLY_PROMOTE("apply-promote", true, null),
         PLAN_REPLACE("plan-replace", false, OperationType.REPLACE),
-        APPLY_REPLACE("apply-replace", true, OperationType.REPLACE);
+        APPLY_REPLACE("apply-replace", true, OperationType.REPLACE),
+        PLAN_RETIRE("plan-retire", false, OperationType.RETIRE),
+        APPLY_RETIRE("apply-retire", true, OperationType.RETIRE);
 
         private final String externalValue;
         private final boolean mutating;

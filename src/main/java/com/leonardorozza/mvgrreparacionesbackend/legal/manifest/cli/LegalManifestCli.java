@@ -8,6 +8,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalDryRunDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyResult;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalEditorialApplyService;
@@ -544,16 +545,18 @@ public final class LegalManifestCli {
             }
             editorialPlan = planBinding.value().orElseThrow();
 
-            LegalManifestValidation<ValidatedEditorialPlan> supportedScope =
-                    editorialReplaceScopeGuard.validate(editorialPlan);
-            if (!supportedScope.passed()) {
-                return LegalEditorialReport.forKnownFailure(
-                        command,
-                        release,
-                        editorialPlan,
-                        supportedScope);
+            if (command.editorialPlanOperationType().orElseThrow() == OperationType.REPLACE) {
+                LegalManifestValidation<ValidatedEditorialPlan> supportedScope =
+                        editorialReplaceScopeGuard.validate(editorialPlan);
+                if (!supportedScope.passed()) {
+                    return LegalEditorialReport.forKnownFailure(
+                            command,
+                            release,
+                            editorialPlan,
+                            supportedScope);
+                }
+                editorialPlan = supportedScope.value().orElseThrow();
             }
-            editorialPlan = supportedScope.value().orElseThrow();
         }
 
         LegalManifestValidation<LegalEditorialEnvironment> environmentValidation =
@@ -645,6 +648,24 @@ public final class LegalManifestCli {
                         context.getBean(LegalEditorialApplyService.class);
                 executionState.operationInvocationStarted();
                 LegalEditorialApplyResult result = service.applyReplace(
+                        release,
+                        Objects.requireNonNull(editorialPlan, "editorialPlan"));
+                executionState.resultReceived(result);
+            }
+            case PLAN_RETIRE -> {
+                LegalEditorialPlanService service =
+                        context.getBean(LegalEditorialPlanService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialPlanResult result = service.planRetire(
+                        release,
+                        Objects.requireNonNull(editorialPlan, "editorialPlan"));
+                executionState.resultReceived(result);
+            }
+            case APPLY_RETIRE -> {
+                LegalEditorialApplyService service =
+                        context.getBean(LegalEditorialApplyService.class);
+                executionState.operationInvocationStarted();
+                LegalEditorialApplyResult result = service.applyRetire(
                         release,
                         Objects.requireNonNull(editorialPlan, "editorialPlan"));
                 executionState.resultReceived(result);
@@ -776,6 +797,10 @@ public final class LegalManifestCli {
                         Objects.requireNonNull(release, "release"),
                         snapshot.editorialPlan().orElseThrow(),
                         snapshot.planResult().orElseThrow());
+                case PLAN_RETIRE -> LegalEditorialReport.forPlanRetire(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.editorialPlan().orElseThrow(),
+                        snapshot.planResult().orElseThrow());
                 default -> throw new IllegalStateException(
                         "Un resultado de plan no coincide con el comando editorial");
             };
@@ -786,6 +811,10 @@ public final class LegalManifestCli {
                         Objects.requireNonNull(release, "release"),
                         snapshot.applyResult().orElseThrow());
                 case APPLY_REPLACE -> LegalEditorialReport.forApplyReplace(
+                        Objects.requireNonNull(release, "release"),
+                        snapshot.editorialPlan().orElseThrow(),
+                        snapshot.applyResult().orElseThrow());
+                case APPLY_RETIRE -> LegalEditorialReport.forApplyRetire(
                         Objects.requireNonNull(release, "release"),
                         snapshot.editorialPlan().orElseThrow(),
                         snapshot.applyResult().orElseThrow());
@@ -800,6 +829,12 @@ public final class LegalManifestCli {
         if (snapshot.command() == LegalEditorialArguments.Command.APPLY_REPLACE
                 && snapshot.persisted() == null) {
             return LegalEditorialReport.forUnknownApplyReplace(
+                    Objects.requireNonNull(release, "release"),
+                    snapshot.editorialPlan().orElseThrow());
+        }
+        if (snapshot.command() == LegalEditorialArguments.Command.APPLY_RETIRE
+                && snapshot.persisted() == null) {
+            return LegalEditorialReport.forUnknownApplyRetire(
                     Objects.requireNonNull(release, "release"),
                     snapshot.editorialPlan().orElseThrow());
         }

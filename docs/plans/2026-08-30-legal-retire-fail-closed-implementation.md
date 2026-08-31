@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcortes 8A, 8B, 8C, 8D y 8E completados el 2026-08-30;
-Subcorte 8F pendiente
+Estado: en ejecución — Subcortes 8A, 8B, 8C, 8D, 8E y 8F completados el 2026-08-30;
+Subcorte 8G pendiente
 
 Diseño aprobado:
 
@@ -507,7 +507,7 @@ Commit:
 
 ## Subcorte 8F — CLI y reporte v3
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -540,6 +540,53 @@ reporte sanitizado y exit codes coherentes con un éxito deliberadamente `NOT_RE
 9. Mantener exit no cero y metadata sanitizada para `BLOCKED`, `ERROR` y `UNKNOWN`.
 10. Probar proceso empaquetado y ausencia de secretos/rutas en stdout y JAR.
 11. Confirmar que reportes v1/v2 y comandos PROMOTE/REPLACE no cambian.
+
+### Alcance acreditado
+
+- El parser cerrado expone exactamente siete comandos. `plan-retire` y `apply-retire` requieren
+  siete tokens totales: manifest, plan y las cuatro confirmaciones literales existentes. No se
+  incorporaron aliases, defaults, prompts ni una quinta confirmación.
+- La validación completa de bundle, plan `RETIRE`, operación, UUID/SHA confirmados, binding
+  current/target, acknowledgement y readiness esperado ocurre antes de resolver entorno, abrir
+  Spring o tocar JDBC.
+- `plan-retire` continúa read-only. `apply-retire` reutiliza exclusivamente el flag existente
+  `ORDENFIX_LEGAL_EDITOR_ENABLED=true`; cualquier otro valor falla cerrado antes de JDBC.
+- `LegalEditorialReplaceScopeGuard` se ejecuta sólo para `REPLACE`. RETIRE se despacha sin
+  reinterpretación a `planRetire` o `applyRetire`, según el comando exacto.
+- El estado de ejecución conserva evidencia monotónica: un resultado confirmado no se reemplaza
+  por un fallo posterior de cierre/serialización; un apply iniciado sin resultado terminal emite
+  `UNKNOWN` con `persisted=null`; un plan nunca fabrica incertidumbre de persistencia.
+- El reporte v3 admite `operationType=RETIRE` y exige `expectedReadinessAfter=NOT_READY` en plan,
+  apply, replay y fallos con identidad externa. `APPLIED` y `ALREADY_APPLIED` requieren
+  `PASS/persisted=true` y terminan con exit `0` aunque el readiness confirmado sea `NOT_READY`.
+- `BLOCKED`, `ERROR` y `UNKNOWN` mantienen exit no cero. Los fallos sólo conservan identidad de
+  entrada ya confirmada; no exponen rutas, credenciales, variables, SQL, stack traces, UUID de
+  base, timestamps, fingerprints ni conteos tentativos.
+- Los dos comandos RETIRE atraviesan el JAR legal empaquetado: plan acredita el preflight hasta la
+  frontera de entorno y apply acredita el flag operativo antes de JDBC. El launcher no cambió
+  porque transmite argumentos con `"$@"` y no enumera comandos.
+- PROMOTE y REPLACE permanecen cercados por sus matrices `READY`; no se modificaron writers ni
+  formatos v1/v2.
+
+### Evidencia de cierre 8F
+
+- Fase roja: las pruebas de argumentos fallaron primero por ausencia de `PLAN_RETIRE` y
+  `APPLY_RETIRE`; al agregar los tokens, el switch exhaustivo del reporte impidió compilar hasta
+  incorporar la matriz RETIRE completa.
+- Puerta focal: 3.174 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Suite unitaria completa: 4.193 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Puerta empaquetada exacta: `LegalManifestCliIsolationIT=3` y
+  `LegalManifestCliProcessIT=12`, total 15/15, sobre PostgreSQL 16.14/Flyway V27. También quedó
+  verde la inspección automática de secretos en ambos JAR.
+- `sh -n scripts/legal-manifest-editor.sh` y `git diff --check` finalizaron sin observaciones.
+- Dos revisiones adversariales independientes terminaron sin hallazgos P1, P2 ni P3.
+- Riesgo residual bajo y explícito: el proceso empaquetado acredita para RETIRE las fronteras
+  reales de preflight, entorno, flag y redacción, pero no ejecuta desde el JAR un éxito/replay
+  completo. Ese tramo está cubierto por el dispatch CLI, el contexto aislado y las integraciones
+  PostgreSQL del servicio de los subcortes previos; no se presenta como una prueba end-to-end
+  única.
+- No se modificaron V27/V28, schemas, grants, roles, inventarios, API, JPA, frontend, launcher ni
+  configuración pública; no hubo push ni deploy.
 
 ### Puerta
 

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +64,12 @@ class LegalManifestCliProcessIT {
             "00000000-0000-0000-0000-000000000012";
     private static final String ONE_TO_ONE_REPLACE_PLAN_SHA256 =
             "00af762750acea6e03a6bb43896a4411c8f725910cc0933f225113fb39d49bd0";
+    private static final String RETIRE_PLAN =
+            "/legal/editorial/retire-valid-v1/editorial-plan.json";
+    private static final String RETIRE_OPERATION_ID =
+            "00000000-0000-0000-0000-000000000011";
+    private static final String RETIRE_PLAN_SHA256 =
+            "603780426e4e9729375432bc7bed8547ef03cdeb09e88d27abc41774c0a2ea15";
     private static final String NORMAL_START_CLASS =
             "com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication";
     private static final String LEGAL_CLI_START_CLASS =
@@ -146,6 +154,7 @@ class LegalManifestCliProcessIT {
     private Path temporaryDirectory;
 
     private Path copiedManifest;
+    private Path copiedRetirePlan;
 
     @BeforeAll
     static void locateRequiredArtifacts() {
@@ -471,6 +480,48 @@ class LegalManifestCliProcessIT {
     }
 
     @Test
+    void packagedPlanRetireReachesTheEnvironmentBoundaryWithoutReplaceScopeInterception()
+            throws Exception {
+        ProcessResult process = executeCli(
+                false,
+                retireArguments("plan-retire"),
+                Map.of());
+
+        JsonNode report = assertSafeRetireBoundaryReport(
+                process,
+                "plan-retire",
+                "EDITORIAL_DB_CONFIGURATION_INVALID");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("RETIRE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+        assertConfirmedRetirePlanIdentity(report);
+    }
+
+    @Test
+    void packagedApplyRetireRequiresTheExistingMutationFlagBeforeJdbc()
+            throws Exception {
+        ProcessResult process = executeCli(
+                false,
+                retireArguments("apply-retire"),
+                Map.of());
+
+        JsonNode report = assertSafeRetireBoundaryReport(
+                process,
+                "apply-retire",
+                "EDITORIAL_DISABLED");
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo("RETIRE");
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+        assertConfirmedRetirePlanIdentity(report);
+    }
+
+    @Test
     void dryRunGoldenReleasePassesAgainstMigratedPostgreSqlV27AndRollsBack()
             throws Exception {
         Flyway.configure()
@@ -581,6 +632,106 @@ class LegalManifestCliProcessIT {
         } finally {
             readers.shutdownNow();
         }
+    }
+
+    private List<String> retireArguments(String command) throws Exception {
+        prepareRetirePlan();
+        return List.of(
+                command,
+                "--manifest=" + copiedManifest.toAbsolutePath(),
+                "--editorial-plan=" + copiedRetirePlan.toAbsolutePath(),
+                "--confirm-publication-id=release-valid-v1",
+                "--confirm-manifest-sha256=" + GOLDEN_MANIFEST_SHA256,
+                "--confirm-operation-id=" + RETIRE_OPERATION_ID,
+                "--confirm-editorial-plan-sha256=" + RETIRE_PLAN_SHA256);
+    }
+
+    private void prepareRetirePlan() throws Exception {
+        Path sourceRetirePlan = Path.of(Objects.requireNonNull(
+                getClass().getResource(RETIRE_PLAN)).toURI());
+        ObjectNode retirePlan = (ObjectNode) JSON.readTree(sourceRetirePlan.toFile());
+        retirePlan.put("expectedCurrentPublicationId", "release-valid-v1");
+        retirePlan.put("expectedCurrentManifestSha256", GOLDEN_MANIFEST_SHA256);
+        retirePlan.put("targetPublicationId", "release-valid-v1");
+        retirePlan.put("targetManifestSha256", GOLDEN_MANIFEST_SHA256);
+        Path retirePlanDirectory = temporaryDirectory.toRealPath()
+                .resolve("retire-plan-release-valid-v1");
+        Files.createDirectories(retirePlanDirectory);
+        copiedRetirePlan = retirePlanDirectory.resolve("editorial-plan.json");
+        Files.writeString(
+                copiedRetirePlan,
+                JSON.writerWithDefaultPrettyPrinter().writeValueAsString(retirePlan) + '\n',
+                StandardCharsets.UTF_8);
+
+        var validation = new LegalEditorialPlanValidator().validate(copiedRetirePlan);
+        assertThat(validation.passed())
+                .as("issues=%s", validation.issues())
+                .isTrue();
+        var validatedRetirePlan = validation.value().orElseThrow();
+        assertThat(validatedRetirePlan.operationId().toString())
+                .isEqualTo(RETIRE_OPERATION_ID);
+        assertThat(validatedRetirePlan.editorialPlanSha256())
+                .isEqualTo(RETIRE_PLAN_SHA256);
+    }
+
+    private JsonNode assertSafeRetireBoundaryReport(
+            ProcessResult process,
+            String expectedCommand,
+            String expectedIssueCode) throws IOException {
+        assertThat(process.exitCode()).isEqualTo(3);
+        assertThat(process.stdoutLimitExceeded()).isFalse();
+        assertThat(process.stderrLimitExceeded()).isFalse();
+        assertThat(process.stderr()).isEmpty();
+        assertThat(process.stdout())
+                .endsWith("\n")
+                .doesNotEndWith("\n\n")
+                .doesNotContain(
+                        "\r",
+                        PROCESS_SECRET,
+                        copiedManifest.toAbsolutePath().toString(),
+                        copiedRetirePlan.toAbsolutePath().toString(),
+                        temporaryDirectory.toAbsolutePath().toString(),
+                        POSTGRES.getPassword(),
+                        POSTGRES.getJdbcUrl(),
+                        "/private/ordenfix-hostile-logback.xml",
+                        "/private/ordenfix-hostile-import.properties",
+                        "SELECT ",
+                        "Exception",
+                        "stacktrace",
+                        "Spring Boot",
+                        "Started ");
+        String jsonDocument = process.stdout().substring(0, process.stdout().length() - 1);
+        assertThat(jsonDocument).doesNotContain("\n");
+
+        JsonNode report = JSON.readTree(jsonDocument);
+        assertExactFields(report, EDITORIAL_REPORT_FIELDS);
+        assertThat(report.path("reportVersion").intValue()).isEqualTo(3);
+        assertThat(report.path("command").textValue()).isEqualTo(expectedCommand);
+        assertThat(report.path("status").textValue()).isEqualTo("ERROR");
+        assertThat(report.path("publication").path("publicationId").textValue())
+                .isEqualTo("release-valid-v1");
+        assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(report.path("counts").path("state").isNull()).isTrue();
+        assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        assertThat(report.path("issues")).singleElement().satisfies(issue -> {
+            assertThat(issue.path("code").textValue()).isEqualTo(expectedIssueCode);
+            assertThat(issue.path("location").textValue())
+                    .isEqualTo("cli/editorial/environment");
+        });
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+        return report;
+    }
+
+    private void assertConfirmedRetirePlanIdentity(JsonNode report) {
+        assertThat(report.path("plan").path("operationId").textValue())
+                .isEqualTo(RETIRE_OPERATION_ID);
+        assertThat(report.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(RETIRE_PLAN_SHA256);
+        assertThat(report.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(report.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(report.path("plan").path("expectedReadinessAfter").textValue())
+                .isEqualTo("NOT_READY");
     }
 
     private JsonNode assertSafeReport(

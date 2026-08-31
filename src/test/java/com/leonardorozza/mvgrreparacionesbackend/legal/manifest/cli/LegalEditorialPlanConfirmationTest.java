@@ -23,16 +23,20 @@ class LegalEditorialPlanConfirmationTest {
 
     @Test
     void returnsTheSameOpaquePlanOnlyWhenTypeIdAndShaMatchExactly() {
-        ValidatedEditorialPlan plan = plan(OperationType.REPLACE, OPERATION_ID, SHA256);
         LegalEditorialPlanConfirmation confirmation =
                 new LegalEditorialPlanConfirmation(OPERATION_ID, SHA256);
 
-        LegalManifestValidation<ValidatedEditorialPlan> result =
-                confirmation.verify(OperationType.REPLACE, plan);
+        for (OperationType type : java.util.List.of(
+                OperationType.REPLACE,
+                OperationType.RETIRE)) {
+            ValidatedEditorialPlan plan = plan(type, OPERATION_ID, SHA256);
+            LegalManifestValidation<ValidatedEditorialPlan> result =
+                    confirmation.verify(type, plan);
 
-        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
-        assertThat(result.value()).containsSame(plan);
-        assertThat(result.issues()).isEmpty();
+            assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+            assertThat(result.value()).containsSame(plan);
+            assertThat(result.issues()).isEmpty();
+        }
     }
 
     @Test

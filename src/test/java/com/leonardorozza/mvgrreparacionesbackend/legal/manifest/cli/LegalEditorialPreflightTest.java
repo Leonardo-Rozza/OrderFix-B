@@ -210,7 +210,11 @@ class LegalEditorialPreflightTest {
         order.verify(validator).validate(manifestPath);
         if (command.requiresEditorialPlan()) {
             order.verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
-            order.verify(replaceScopeGuard).validate(editorialPlan);
+            if (command.editorialPlanOperationType().orElseThrow() == OperationType.REPLACE) {
+                order.verify(replaceScopeGuard).validate(editorialPlan);
+            } else {
+                verifyNoInteractions(replaceScopeGuard);
+            }
         }
         order.verify(environmentResolver).apply(command);
         verifyNoInteractions(
@@ -255,7 +259,11 @@ class LegalEditorialPreflightTest {
         order.verify(validator).validate(manifestPath);
         if (command.requiresEditorialPlan()) {
             order.verify(editorialPlanValidator).validate(EDITORIAL_PLAN_PATH);
-            order.verify(replaceScopeGuard).validate(editorialPlan);
+            if (command.editorialPlanOperationType().orElseThrow() == OperationType.REPLACE) {
+                order.verify(replaceScopeGuard).validate(editorialPlan);
+            } else {
+                verifyNoInteractions(replaceScopeGuard);
+            }
         }
         order.verify(environmentResolver).apply(command);
         order.verify(contextFactory).apply(environment);
@@ -264,13 +272,13 @@ class LegalEditorialPreflightTest {
     }
 
     @ParameterizedTest
-    @MethodSource("replaceCommandsAndPlanConfirmationMismatches")
-    void replacePlanConfirmationMismatchStopsBeforeScopeEnvironmentAndSpring(
+    @MethodSource("editorialPlanCommandsAndPlanConfirmationMismatches")
+    void editorialPlanConfirmationMismatchStopsBeforeScopeEnvironmentAndSpring(
             Command command,
             PlanConfirmationMismatch mismatch) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
-        ValidatedEditorialPlan mismatched = mismatchedPlan(mismatch);
+        ValidatedEditorialPlan mismatched = mismatchedPlan(command, mismatch);
         when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
                 .thenReturn(LegalManifestValidation.pass(mismatched));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -296,7 +304,7 @@ class LegalEditorialPreflightTest {
     @ParameterizedTest
     @EnumSource(
             value = Command.class,
-            names = {"PLAN_REPLACE", "APPLY_REPLACE"})
+            names = {"PLAN_REPLACE", "APPLY_REPLACE", "PLAN_RETIRE", "APPLY_RETIRE"})
     void planValidationFailureWinsBeforeBundleConfirmationScopeAndEnvironment(Command command) {
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
@@ -325,10 +333,16 @@ class LegalEditorialPreflightTest {
     }
 
     @ParameterizedTest
-    @MethodSource("replaceCommandsAndTargetMismatches")
-    void replaceTargetBindingMismatchStopsBeforeScopeEnvironmentSpringAndJdbc(
+    @MethodSource("editorialPlanCommandsAndTargetMismatches")
+    void editorialPlanTargetBindingMismatchStopsBeforeScopeEnvironmentSpringAndJdbc(
             Command command,
             PlanTargetMismatch mismatch) {
+        OperationType operationType = command.editorialPlanOperationType().orElseThrow();
+        when(editorialPlan.operationType()).thenReturn(operationType);
+        when(editorialPlanModel.expectedReadinessAfter()).thenReturn(
+                operationType == OperationType.RETIRE
+                        ? LegalEditorialReadiness.NOT_READY
+                        : LegalEditorialReadiness.READY);
         when(validator.validate(manifestPath))
                 .thenReturn(LegalManifestValidation.pass(release));
         when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
@@ -474,6 +488,18 @@ class LegalEditorialPreflightTest {
                 when(applyService.applyReplace(release, editorialPlan))
                         .thenThrow(expectedBoundary);
             }
+            case PLAN_RETIRE -> {
+                when(context.getBean(LegalEditorialPlanService.class))
+                        .thenReturn(planService);
+                when(planService.planRetire(release, editorialPlan))
+                        .thenThrow(expectedBoundary);
+            }
+            case APPLY_RETIRE -> {
+                when(context.getBean(LegalEditorialApplyService.class))
+                        .thenReturn(applyService);
+                when(applyService.applyRetire(release, editorialPlan))
+                        .thenThrow(expectedBoundary);
+            }
         }
     }
 
@@ -499,6 +525,14 @@ class LegalEditorialPreflightTest {
                 order.verify(context).getBean(LegalEditorialApplyService.class);
                 order.verify(applyService).applyReplace(release, editorialPlan);
             }
+            case PLAN_RETIRE -> {
+                order.verify(context).getBean(LegalEditorialPlanService.class);
+                order.verify(planService).planRetire(release, editorialPlan);
+            }
+            case APPLY_RETIRE -> {
+                order.verify(context).getBean(LegalEditorialApplyService.class);
+                order.verify(applyService).applyRetire(release, editorialPlan);
+            }
         }
     }
 
@@ -509,6 +543,8 @@ class LegalEditorialPreflightTest {
             case APPLY_PROMOTE -> applyService;
             case PLAN_REPLACE -> planService;
             case APPLY_REPLACE -> applyService;
+            case PLAN_RETIRE -> planService;
+            case APPLY_RETIRE -> applyService;
         };
     }
 
@@ -548,19 +584,35 @@ class LegalEditorialPreflightTest {
         }
         when(editorialPlanValidator.validate(EDITORIAL_PLAN_PATH))
                 .thenReturn(LegalManifestValidation.pass(editorialPlan));
-        when(replaceScopeGuard.validate(editorialPlan))
-                .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        OperationType operationType = command.editorialPlanOperationType().orElseThrow();
+        when(editorialPlan.operationType()).thenReturn(operationType);
+        when(editorialPlanModel.expectedReadinessAfter()).thenReturn(
+                operationType == OperationType.RETIRE
+                        ? LegalEditorialReadiness.NOT_READY
+                        : LegalEditorialReadiness.READY);
+        if (operationType == OperationType.REPLACE) {
+            when(replaceScopeGuard.validate(editorialPlan))
+                    .thenReturn(LegalManifestValidation.pass(editorialPlan));
+        }
     }
 
-    private ValidatedEditorialPlan mismatchedPlan(PlanConfirmationMismatch mismatch) {
+    private ValidatedEditorialPlan mismatchedPlan(
+            Command command,
+            PlanConfirmationMismatch mismatch) {
         LegalEditorialPlanV1 planModel = mock(LegalEditorialPlanV1.class);
-        when(planModel.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        OperationType expectedType = command.editorialPlanOperationType().orElseThrow();
+        when(planModel.expectedReadinessAfter()).thenReturn(
+                expectedType == OperationType.RETIRE
+                        ? LegalEditorialReadiness.NOT_READY
+                        : LegalEditorialReadiness.READY);
         ValidatedEditorialPlan mismatched = mock(ValidatedEditorialPlan.class);
         when(mismatched.plan()).thenReturn(planModel);
         when(mismatched.operationType()).thenReturn(
                 mismatch == PlanConfirmationMismatch.TYPE
-                        ? OperationType.RETIRE
-                        : OperationType.REPLACE);
+                        ? expectedType == OperationType.REPLACE
+                                ? OperationType.RETIRE
+                                : OperationType.REPLACE
+                        : expectedType);
         when(mismatched.operationId()).thenReturn(
                 mismatch == PlanConfirmationMismatch.OPERATION_ID
                         ? UUID.fromString("00000000-0000-0000-0000-000000000011")
@@ -611,14 +663,24 @@ class LegalEditorialPreflightTest {
                         Arguments.of(command, mismatch)));
     }
 
-    private static Stream<Arguments> replaceCommandsAndPlanConfirmationMismatches() {
-        return Stream.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE).flatMap(command ->
+    private static Stream<Arguments> editorialPlanCommandsAndPlanConfirmationMismatches() {
+        return Stream.of(
+                        Command.PLAN_REPLACE,
+                        Command.APPLY_REPLACE,
+                        Command.PLAN_RETIRE,
+                        Command.APPLY_RETIRE)
+                .flatMap(command ->
                 Stream.of(PlanConfirmationMismatch.values()).map(mismatch ->
                         Arguments.of(command, mismatch)));
     }
 
-    private static Stream<Arguments> replaceCommandsAndTargetMismatches() {
-        return Stream.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE).flatMap(command ->
+    private static Stream<Arguments> editorialPlanCommandsAndTargetMismatches() {
+        return Stream.of(
+                        Command.PLAN_REPLACE,
+                        Command.APPLY_REPLACE,
+                        Command.PLAN_RETIRE,
+                        Command.APPLY_RETIRE)
+                .flatMap(command ->
                 Stream.of(PlanTargetMismatch.values()).map(mismatch ->
                         Arguments.of(command, mismatch)));
     }

@@ -48,7 +48,7 @@ class LegalEditorialEnvironmentTest {
     @ParameterizedTest
     @EnumSource(
             value = Command.class,
-            names = {"READINESS", "PLAN_PROMOTE", "PLAN_REPLACE"})
+            names = {"READINESS", "PLAN_PROMOTE", "PLAN_REPLACE", "PLAN_RETIRE"})
     void readOnlyCommandsDoNotRequireOrInterpretTheMutationEnableFlag(Command command) {
         Map<String, String> environment = baseEnvironment();
         environment.put(LegalEditorialEnvironment.ENABLED_VARIABLE, "hostile-non-boolean");
@@ -63,7 +63,7 @@ class LegalEditorialEnvironmentTest {
     @ParameterizedTest
     @EnumSource(
             value = Command.class,
-            names = {"APPLY_PROMOTE", "APPLY_REPLACE"})
+            names = {"APPLY_PROMOTE", "APPLY_REPLACE", "APPLY_RETIRE"})
     void mutatingCommandPassesWhenTheEnableFlagIsExactlyTrue(Command command) {
         LegalManifestValidation<LegalEditorialEnvironment> result =
                 LegalEditorialEnvironment.resolve(
@@ -183,7 +183,10 @@ class LegalEditorialEnvironmentTest {
 
     private static Stream<Arguments> disabledFlagCases() {
         return Stream.of(null, "false", "TRUE", "True", " true", "true ", "1", "")
-                .flatMap(value -> Stream.of(Command.APPLY_PROMOTE, Command.APPLY_REPLACE)
+                .flatMap(value -> Stream.of(
+                                Command.APPLY_PROMOTE,
+                                Command.APPLY_REPLACE,
+                                Command.APPLY_RETIRE)
                         .map(command -> Arguments.of(command, value)));
     }
 

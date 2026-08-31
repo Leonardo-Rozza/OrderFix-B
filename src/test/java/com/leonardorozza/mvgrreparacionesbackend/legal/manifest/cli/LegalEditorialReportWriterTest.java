@@ -54,6 +54,10 @@ class LegalEditorialReportWriterTest {
             UUID.fromString("00000000-0000-0000-0000-000000000010");
     private static final String PLAN_SHA256 =
             "534ef5a63292484c4cde6fc2fa6735f7d42dbc40a3df671a6f9550626aebe49c";
+    private static final String SENSITIVE_RETIRE_REASON =
+            "password=super-secret jdbc:postgresql://private-host/legal SELECT secret";
+    private static final String SENSITIVE_FINGERPRINT =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static ValidatedRelease release;
@@ -172,6 +176,62 @@ class LegalEditorialReportWriterTest {
     }
 
     @Test
+    void writesAppliedRetireAsPassWithDeliberateNotReadyAndExactReceipt() throws IOException {
+        LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.RETIRE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.NOT_READY,
+                11, 6, 35, 13, 10, 7, 1);
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.PASS);
+        when(result.persisted()).thenReturn(Boolean.TRUE);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.APPLIED);
+        when(result.receipt()).thenReturn(Optional.of(receipt));
+        when(result.issues()).thenReturn(List.of());
+        when(result.omittedIssueCount()).thenReturn(0);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(
+                LegalEditorialReport.forApplyRetire(
+                        release,
+                        validatedRetirePlan(),
+                        result),
+                output);
+
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json).isEqualTo("{\"reportVersion\":3,\"command\":\"apply-retire\","
+                + "\"status\":\"PASS\",\"persisted\":true,\"publication\":{"
+                + "\"publicationId\":\"release-valid-v1\",\"schemaVersion\":1,"
+                + "\"manifestSha256\":\"" + GOLDEN_SHA + "\","
+                + "\"publicationUuid\":\"60870649-efbb-4d2b-8407-4f1901b86a45\"},"
+                + "\"operation\":{\"operationType\":\"RETIRE\",\"outcome\":\"APPLIED\","
+                + "\"appliedAt\":\"2026-08-28T18:00:00.123456Z\"},"
+                + "\"plan\":{\"operationId\":\"" + OPERATION_ID + "\","
+                + "\"editorialPlanSha256\":\"" + PLAN_SHA256 + "\","
+                + "\"changeRequired\":null,\"observedAt\":null,"
+                + "\"expectedReadinessAfter\":\"NOT_READY\"},"
+                + "\"readiness\":{\"value\":\"NOT_READY\",\"observedAt\":null,"
+                + "\"editorialStateFingerprint\":null},"
+                + "\"counts\":{\"release\":{\"documents\":11,\"requirements\":6,"
+                + "\"scopes\":8},\"state\":{\"documentVersions\":11,"
+                + "\"requirementVersions\":6,\"documentTransitions\":35,"
+                + "\"requirementTransitions\":13,\"documentSlots\":10,"
+                + "\"requiredSetPointers\":7,\"replacementBatches\":1},"
+                + "\"delta\":null},\"issues\":[],\"omittedIssueCount\":0}");
+        assertThat(json).doesNotContain(
+                SENSITIVE_RETIRE_REASON,
+                SENSITIVE_FINGERPRINT,
+                "documentRetirements",
+                "requirementRetirements",
+                "expectedEditorialStateFingerprint",
+                "password=",
+                "jdbc:postgresql",
+                "SELECT ");
+        assertExactlyOneJsonObject(output.toByteArray());
+    }
+
+    @Test
     void writesUnknownWithExplicitNullDatabaseMetadata() throws IOException {
         LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
         when(result.status()).thenReturn(LegalManifestStatus.ERROR);
@@ -240,6 +300,43 @@ class LegalEditorialReportWriterTest {
     }
 
     @Test
+    void writesUnknownRetireWithOnlyConfirmedInputIdentity() throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(
+                LegalEditorialReport.forUnknownApplyRetire(
+                        release,
+                        validatedRetirePlan()),
+                output);
+
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json).isEqualTo("{\"reportVersion\":3,\"command\":\"apply-retire\","
+                + "\"status\":\"ERROR\",\"persisted\":null,\"publication\":{"
+                + "\"publicationId\":\"release-valid-v1\",\"schemaVersion\":1,"
+                + "\"manifestSha256\":\"" + GOLDEN_SHA + "\",\"publicationUuid\":null},"
+                + "\"operation\":{\"operationType\":\"RETIRE\",\"outcome\":\"UNKNOWN\","
+                + "\"appliedAt\":null},\"plan\":{\"operationId\":\"" + OPERATION_ID + "\","
+                + "\"editorialPlanSha256\":\"" + PLAN_SHA256 + "\","
+                + "\"changeRequired\":null,\"observedAt\":null,"
+                + "\"expectedReadinessAfter\":\"NOT_READY\"},\"readiness\":null,"
+                + "\"counts\":{\"release\":{\"documents\":11,\"requirements\":6,"
+                + "\"scopes\":8},\"state\":null,\"delta\":null},\"issues\":[{"
+                + "\"severity\":\"ERROR\",\"code\":\"COMMIT_OUTCOME_UNKNOWN\","
+                + "\"location\":\"database/commit\","
+                + "\"message\":\"No se pudo determinar si la operación editorial fue "
+                + "confirmada.\"}],\"omittedIssueCount\":0}");
+        JsonNode parsed = JSON.readTree(json);
+        assertThat(parsed.path("persisted").isNull()).isTrue();
+        assertThat(parsed.path("publication").path("publicationUuid").isNull()).isTrue();
+        assertThat(parsed.path("operation").path("appliedAt").isNull()).isTrue();
+        assertThat(parsed.path("readiness").isNull()).isTrue();
+        assertThat(parsed.path("counts").path("state").isNull()).isTrue();
+        assertThat(parsed.path("counts").path("delta").isNull()).isTrue();
+        assertThat(json).doesNotContain(SENSITIVE_RETIRE_REASON, SENSITIVE_FINGERPRINT);
+        assertExactlyOneJsonObject(output.toByteArray());
+    }
+
+    @Test
     void outputNeverLeaksContentPathsSqlOrRuntimeDetails() throws IOException {
         LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
                 LegalEditorialApplyReceipt.OperationType.PROMOTE,
@@ -284,6 +381,24 @@ class LegalEditorialReportWriterTest {
         ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
         when(plan.plan()).thenReturn(model);
         when(plan.operationType()).thenReturn(OperationType.REPLACE);
+        when(plan.operationId()).thenReturn(OPERATION_ID);
+        when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
+        return plan;
+    }
+
+    private static ValidatedEditorialPlan validatedRetirePlan() {
+        LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
+        when(model.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.NOT_READY);
+        when(model.expectedEditorialStateFingerprint()).thenReturn(SENSITIVE_FINGERPRINT);
+        when(model.documentRetirements()).thenReturn(List.of(
+                new LegalEditorialPlanV1.DocumentRetirement(
+                        UUID.fromString("00000000-0000-0000-0000-000000000099"),
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        List.of(),
+                        SENSITIVE_RETIRE_REASON)));
+        ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
+        when(plan.plan()).thenReturn(model);
+        when(plan.operationType()).thenReturn(OperationType.RETIRE);
         when(plan.operationId()).thenReturn(OPERATION_ID);
         when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
         return plan;

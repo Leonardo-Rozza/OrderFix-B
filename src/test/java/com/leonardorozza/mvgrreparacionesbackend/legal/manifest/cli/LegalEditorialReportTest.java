@@ -186,6 +186,58 @@ class LegalEditorialReportTest {
     }
 
     @Test
+    void planRetireKeepsNotReadyDistinctFromABlockedPlanningOutcome() {
+        ValidatedEditorialPlan editorialPlan = validatedRetirePlan();
+        LegalEditorialReport applicable = LegalEditorialReport.forPlanRetire(
+                release,
+                editorialPlan,
+                planResult(
+                        LegalManifestStatus.PASS,
+                        LegalEditorialPlanResult.Outcome.APPLICABLE,
+                        LegalEditorialReadiness.NOT_READY,
+                        List.of()));
+        LegalEditorialReport blocked = LegalEditorialReport.forPlanRetire(
+                release,
+                editorialPlan,
+                planResult(
+                        LegalManifestStatus.BLOCKED,
+                        LegalEditorialPlanResult.Outcome.BLOCKED,
+                        LegalEditorialReadiness.NOT_READY,
+                        List.of(issue(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+
+        assertThat(applicable.command()).isEqualTo("plan-retire");
+        assertThat(applicable.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(applicable.persisted()).isFalse();
+        assertThat(applicable.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.RETIRE);
+        assertThat(applicable.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.APPLICABLE);
+        assertThat(applicable.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(applicable.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(applicable.plan().changeRequired()).isTrue();
+        assertThat(applicable.plan().observedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(applicable.plan().expectedReadinessAfter())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertThat(applicable.publication().publicationUuid()).isEqualTo(PUBLICATION_UUID);
+        assertThat(applicable.readiness().value())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertThat(applicable.readiness().observedAt()).isNull();
+        assertThat(applicable.counts().state()).isNull();
+        assertThat(applicable.counts().delta()).isEqualTo(deltaCounts());
+
+        assertThat(blocked.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(blocked.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.BLOCKED);
+        assertThat(blocked.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(blocked.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(blocked.plan().expectedReadinessAfter())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertNoDatabaseMetadata(blocked);
+    }
+
+    @Test
     void applyPromoteKeepsSuccessRollbackAndUnknownPersistenceDistinct() {
         LegalEditorialReport applied = LegalEditorialReport.forApplyPromote(
                 release,
@@ -323,6 +375,100 @@ class LegalEditorialReportTest {
     }
 
     @Test
+    void applyRetireClosesSuccessReplayAndAllFailureRowsWithNotReadyIdentity() {
+        ValidatedEditorialPlan editorialPlan = validatedRetirePlan();
+        LegalEditorialReport applied = LegalEditorialReport.forApplyRetire(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.APPLIED,
+                        retireReceipt(),
+                        List.of()));
+        LegalEditorialReport replay = LegalEditorialReport.forApplyRetire(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
+                        retireReceipt(),
+                        List.of()));
+        LegalEditorialReport blocked = LegalEditorialReport.forApplyRetire(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.BLOCKED,
+                        Boolean.FALSE,
+                        LegalEditorialApplyResult.Outcome.BLOCKED,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        LegalEditorialReport error = LegalEditorialReport.forApplyRetire(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.ERROR,
+                        Boolean.FALSE,
+                        LegalEditorialApplyResult.Outcome.ERROR,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.POSTCONDITION_NOT_READY,
+                                "database/postcondition"))));
+        LegalEditorialReport unknown = LegalEditorialReport.forApplyRetire(
+                release,
+                editorialPlan,
+                applyResult(
+                        LegalManifestStatus.ERROR,
+                        null,
+                        LegalEditorialApplyResult.Outcome.UNKNOWN,
+                        null,
+                        List.of(issue(
+                                LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                                "database/commit"))));
+
+        assertThat(applied.command()).isEqualTo("apply-retire");
+        assertThat(applied.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(applied.persisted()).isTrue();
+        assertThat(applied.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.RETIRE);
+        assertThat(applied.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.APPLIED);
+        assertThat(applied.operation().appliedAt()).isEqualTo(OBSERVED_AT);
+        assertThat(applied.publication().publicationUuid()).isEqualTo(PUBLICATION_UUID);
+        assertThat(applied.readiness().value())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertThat(applied.counts().state())
+                .isEqualTo(new LegalEditorialReport.StateCounts(11, 6, 35, 13, 10, 7, 1));
+        assertThat(replay.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.ALREADY_APPLIED);
+        assertThat(replay.persisted()).isTrue();
+
+        for (LegalEditorialReport report : List.of(
+                applied,
+                replay,
+                blocked,
+                error,
+                unknown)) {
+            assertThat(report.plan().operationId()).isEqualTo(OPERATION_ID);
+            assertThat(report.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+            assertThat(report.plan().expectedReadinessAfter())
+                    .isEqualTo(LegalEditorialReadiness.NOT_READY);
+            assertThat(report.plan().changeRequired()).isNull();
+            assertThat(report.plan().observedAt()).isNull();
+            assertThat(report.counts().delta()).isNull();
+        }
+        assertThat(blocked.persisted()).isFalse();
+        assertThat(error.persisted()).isFalse();
+        assertThat(unknown.persisted()).isNull();
+        assertNoDatabaseMetadata(blocked);
+        assertNoDatabaseMetadata(error);
+        assertNoDatabaseMetadata(unknown);
+    }
+
+    @Test
     void conservativeUnknownBoundaryNeverInventsDatabaseMetadata() {
         LegalEditorialReport withRelease = LegalEditorialReport.forUnknownApply(release);
         LegalEditorialReport beforeRelease = LegalEditorialReport.forUnknownApply(null);
@@ -363,7 +509,31 @@ class LegalEditorialReportTest {
     }
 
     @Test
-    void knownPreflightFailuresRemainTypedForAllFiveCommands() {
+    void conservativeUnknownRetireBoundaryRetainsOnlyConfirmedInputIdentity() {
+        LegalEditorialReport unknown = LegalEditorialReport.forUnknownApplyRetire(
+                release,
+                validatedRetirePlan());
+
+        assertThat(unknown.command()).isEqualTo("apply-retire");
+        assertThat(unknown.status()).isEqualTo(LegalManifestStatus.ERROR);
+        assertThat(unknown.persisted()).isNull();
+        assertThat(unknown.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.RETIRE);
+        assertThat(unknown.operation().outcome())
+                .isEqualTo(LegalEditorialReport.Outcome.UNKNOWN);
+        assertThat(unknown.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(unknown.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(unknown.plan().expectedReadinessAfter())
+                .isEqualTo(LegalEditorialReadiness.NOT_READY);
+        assertThat(unknown.issues()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+            assertThat(issue.location()).isEqualTo("database/commit");
+        });
+        assertNoDatabaseMetadata(unknown);
+    }
+
+    @Test
+    void knownPreflightFailuresRemainTypedForEveryEditorialCommand() {
         LegalManifestIssue blockedIssue = issue(
                 LegalManifestIssueCode.CLI_ARGUMENTS_INVALID,
                 "cli/editorial/arguments");
@@ -383,6 +553,16 @@ class LegalEditorialReportTest {
                         Command.APPLY_REPLACE,
                         null,
                         blockedIssue);
+        LegalEditorialReport retireBeforeConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.PLAN_RETIRE,
+                        null,
+                        blockedIssue);
+        LegalEditorialReport applyRetireBeforeConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.APPLY_RETIRE,
+                        null,
+                        blockedIssue);
 
         assertThat(readiness.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(readiness.persisted()).isFalse();
@@ -394,12 +574,17 @@ class LegalEditorialReportTest {
         assertThat(replaceBeforeConfirmation.operation().operationType())
                 .isEqualTo(LegalEditorialReport.OperationType.REPLACE);
         assertThat(replaceBeforeConfirmation.plan()).isNull();
+        assertThat(retireBeforeConfirmation.operation().operationType())
+                .isEqualTo(LegalEditorialReport.OperationType.RETIRE);
+        assertThat(retireBeforeConfirmation.plan()).isNull();
         for (LegalEditorialReport failure : List.of(
                 readiness,
                 plan,
                 apply,
                 replaceBeforeConfirmation,
-                applyReplaceBeforeConfirmation)) {
+                applyReplaceBeforeConfirmation,
+                retireBeforeConfirmation,
+                applyRetireBeforeConfirmation)) {
             assertThat(failure.publication()).isNull();
             assertThat(failure.counts()).isNull();
         }
@@ -433,6 +618,33 @@ class LegalEditorialReportTest {
         assertThat(applyReplaceAfterConfirmation.plan().editorialPlanSha256())
                 .isEqualTo(PLAN_SHA256);
         assertNoDatabaseMetadata(applyReplaceAfterConfirmation);
+
+        ValidatedEditorialPlan retirePlan = validatedRetirePlan();
+        LegalEditorialReport retireAfterConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.PLAN_RETIRE,
+                        release,
+                        retirePlan,
+                        issue(
+                                LegalManifestIssueCode.RETIREMENT_REASON_REQUIRED,
+                                "documentRetirements"));
+        LegalEditorialReport applyRetireAfterConfirmation =
+                LegalEditorialReport.forKnownFailure(
+                        Command.APPLY_RETIRE,
+                        release,
+                        retirePlan,
+                        issue(
+                                LegalManifestIssueCode.RETIREMENT_REASON_REQUIRED,
+                                "documentRetirements"));
+        for (LegalEditorialReport retireFailure : List.of(
+                retireAfterConfirmation,
+                applyRetireAfterConfirmation)) {
+            assertThat(retireFailure.plan().operationId()).isEqualTo(OPERATION_ID);
+            assertThat(retireFailure.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+            assertThat(retireFailure.plan().expectedReadinessAfter())
+                    .isEqualTo(LegalEditorialReadiness.NOT_READY);
+            assertNoDatabaseMetadata(retireFailure);
+        }
 
         LegalEditorialReport operational = LegalEditorialReport.forKnownFailure(
                 Command.APPLY_PROMOTE,
@@ -493,6 +705,47 @@ class LegalEditorialReportTest {
                         receipt(),
                         List.of())))
                 .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> LegalEditorialReport.forPlanRetire(
+                release,
+                validatedRetirePlan(),
+                planResult(
+                        LegalManifestStatus.PASS,
+                        LegalEditorialPlanResult.Outcome.APPLICABLE,
+                        LegalEditorialReadiness.READY,
+                        List.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> LegalEditorialReport.forApplyRetire(
+                release,
+                validatedRetirePlan(),
+                applyResult(
+                        LegalManifestStatus.PASS,
+                        Boolean.TRUE,
+                        LegalEditorialApplyResult.Outcome.APPLIED,
+                        replaceReceipt,
+                        List.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> LegalEditorialReport.forPlanRetire(
+                release,
+                validatedReplacePlan(),
+                planResult(
+                        LegalManifestStatus.PASS,
+                        LegalEditorialPlanResult.Outcome.APPLICABLE,
+                        LegalEditorialReadiness.NOT_READY,
+                        List.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> LegalEditorialReport.forPlanReplace(
+                release,
+                validatedRetirePlan(),
+                planResult(
+                        LegalManifestStatus.PASS,
+                        LegalEditorialPlanResult.Outcome.APPLICABLE,
+                        LegalEditorialReadiness.READY,
+                        List.of())))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static void assertNoDatabaseMetadata(LegalEditorialReport report) {
@@ -525,6 +778,14 @@ class LegalEditorialReportTest {
             LegalManifestStatus status,
             LegalEditorialPlanResult.Outcome outcome,
             List<LegalManifestIssue> issues) {
+        return planResult(status, outcome, LegalEditorialReadiness.READY, issues);
+    }
+
+    private static LegalEditorialPlanResult planResult(
+            LegalManifestStatus status,
+            LegalEditorialPlanResult.Outcome outcome,
+            LegalEditorialReadiness expectedReadinessAfter,
+            List<LegalManifestIssue> issues) {
         LegalEditorialPlanResult result = mock(LegalEditorialPlanResult.class);
         when(result.status()).thenReturn(status);
         when(result.outcome()).thenReturn(outcome);
@@ -535,7 +796,7 @@ class LegalEditorialReportTest {
             when(result.changeRequired()).thenReturn(Optional.of(true));
             when(result.observedAt()).thenReturn(Optional.of(OBSERVED_AT));
             when(result.expectedReadinessAfter())
-                    .thenReturn(Optional.of(LegalEditorialReadiness.READY));
+                    .thenReturn(Optional.of(expectedReadinessAfter));
             when(result.deltaCounts()).thenReturn(Optional.of(new LegalEditorialPlanResult.DeltaCounts(
                     22, 0, 12, 0, 11, 0, 0, 0, 8, 0)));
         } else {
@@ -575,6 +836,17 @@ class LegalEditorialReportTest {
         return plan;
     }
 
+    private static ValidatedEditorialPlan validatedRetirePlan() {
+        LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
+        when(model.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.NOT_READY);
+        ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
+        when(plan.plan()).thenReturn(model);
+        when(plan.operationType()).thenReturn(OperationType.RETIRE);
+        when(plan.operationId()).thenReturn(OPERATION_ID);
+        when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
+        return plan;
+    }
+
     private static LegalEditorialReadinessObservation observation() {
         return new LegalEditorialReadinessObservation(
                 Optional.of(PUBLICATION_UUID),
@@ -599,6 +871,15 @@ class LegalEditorialReportTest {
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 11, 6, 34, 12, 11, 8, 1);
+    }
+
+    private static LegalEditorialApplyReceipt retireReceipt() {
+        return new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.RETIRE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.NOT_READY,
+                11, 6, 35, 13, 10, 7, 1);
     }
 
     private static LegalEditorialReport.StateCounts stateCounts() {

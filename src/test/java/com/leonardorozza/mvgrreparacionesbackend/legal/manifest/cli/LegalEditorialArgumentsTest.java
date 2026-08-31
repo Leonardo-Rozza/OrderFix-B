@@ -4,6 +4,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditori
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestIssueCode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.model.LegalEditorialPlanV1.OperationType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -39,7 +40,7 @@ class LegalEditorialArgumentsTest {
             "--confirm-editorial-plan-sha256=" + PLAN_SHA256;
 
     @Test
-    void exposesTheFiveCaseSensitiveCommandsAndTheirMutationMode() {
+    void exposesTheSevenCaseSensitiveCommandsAndTheirMutationMode() {
         assertThat(Command.values())
                 .extracting(Command::externalValue)
                 .containsExactly(
@@ -47,14 +48,28 @@ class LegalEditorialArgumentsTest {
                         "plan-promote",
                         "apply-promote",
                         "plan-replace",
-                        "apply-replace");
+                        "apply-replace",
+                        "plan-retire",
+                        "apply-retire");
         assertThat(Command.READINESS.mutating()).isFalse();
         assertThat(Command.PLAN_PROMOTE.mutating()).isFalse();
         assertThat(Command.APPLY_PROMOTE.mutating()).isTrue();
         assertThat(Command.PLAN_REPLACE.mutating()).isFalse();
         assertThat(Command.PLAN_REPLACE.requiresEditorialPlan()).isTrue();
+        assertThat(Command.PLAN_REPLACE.editorialPlanOperationType())
+                .contains(OperationType.REPLACE);
         assertThat(Command.APPLY_REPLACE.mutating()).isTrue();
         assertThat(Command.APPLY_REPLACE.requiresEditorialPlan()).isTrue();
+        assertThat(Command.APPLY_REPLACE.editorialPlanOperationType())
+                .contains(OperationType.REPLACE);
+        assertThat(Command.PLAN_RETIRE.mutating()).isFalse();
+        assertThat(Command.PLAN_RETIRE.requiresEditorialPlan()).isTrue();
+        assertThat(Command.PLAN_RETIRE.editorialPlanOperationType())
+                .contains(OperationType.RETIRE);
+        assertThat(Command.APPLY_RETIRE.mutating()).isTrue();
+        assertThat(Command.APPLY_RETIRE.requiresEditorialPlan()).isTrue();
+        assertThat(Command.APPLY_RETIRE.editorialPlanOperationType())
+                .contains(OperationType.RETIRE);
     }
 
     @ParameterizedTest
@@ -198,7 +213,11 @@ class LegalEditorialArgumentsTest {
     void replaceDiagnosticStringRedactsBothPathsIdsAndHashes() {
         String privateManifest = "/private/editor/release/publication-manifest.json";
         String privatePlan = "/private/editor/plan/editorial-plan.json";
-        for (Command command : List.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE)) {
+        for (Command command : List.of(
+                Command.PLAN_REPLACE,
+                Command.APPLY_REPLACE,
+                Command.PLAN_RETIRE,
+                Command.APPLY_RETIRE)) {
             LegalEditorialArguments arguments = new LegalEditorialArguments(
                     command,
                     Path.of(privateManifest),
@@ -250,7 +269,11 @@ class LegalEditorialArgumentsTest {
                 CONFIRM_OPERATION,
                 CONFIRM_PLAN_SHA);
         List<Arguments> cases = new ArrayList<>();
-        for (Command command : List.of(Command.PLAN_REPLACE, Command.APPLY_REPLACE)) {
+        for (Command command : List.of(
+                Command.PLAN_REPLACE,
+                Command.APPLY_REPLACE,
+                Command.PLAN_RETIRE,
+                Command.APPLY_RETIRE)) {
             addPermutations(command, namedArguments, new ArrayList<>(), cases);
         }
         return cases.stream();
@@ -283,6 +306,8 @@ class LegalEditorialArgumentsTest {
                 cliArguments("apply-promote"),
                 cliArguments("plan-replace"),
                 cliArguments("apply-replace"),
+                cliArguments("plan-retire"),
+                cliArguments("apply-retire"),
                 cliArguments("readiness", "--manifest=", PUBLICATION, CONFIRM_SHA),
                 cliArguments("plan-promote", "--manifest=   ", PUBLICATION, CONFIRM_SHA),
                 cliArguments("apply-promote", "--manifest=\t", PUBLICATION, CONFIRM_SHA),
@@ -314,6 +339,9 @@ class LegalEditorialArgumentsTest {
                 cliArguments("apply", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("PLAN-REPLACE", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("APPLY-REPLACE", MANIFEST, PUBLICATION, CONFIRM_SHA),
+                cliArguments("PLAN-RETIRE", MANIFEST, PUBLICATION, CONFIRM_SHA),
+                cliArguments("APPLY-RETIRE", MANIFEST, PUBLICATION, CONFIRM_SHA),
+                cliArguments("retire", MANIFEST, PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", null, PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", "--manifest", PUBLICATION, CONFIRM_SHA),
                 cliArguments("readiness", "--manifest", "publication-manifest.json", PUBLICATION),
@@ -393,7 +421,11 @@ class LegalEditorialArgumentsTest {
                 replaceArguments("--editorial-plan="),
                 replaceArguments("--editorial-plan=   "),
                 replaceArguments(Command.APPLY_REPLACE, "--editorial-plan="),
-                replaceArguments(Command.APPLY_REPLACE, "--editorial-plan=   "))
+                replaceArguments(Command.APPLY_REPLACE, "--editorial-plan=   "),
+                replaceArguments(Command.PLAN_RETIRE, "--editorial-plan="),
+                replaceArguments(Command.PLAN_RETIRE, "--editorial-plan=   "),
+                replaceArguments(Command.APPLY_RETIRE, "--editorial-plan="),
+                replaceArguments(Command.APPLY_RETIRE, "--editorial-plan=   "))
                 .map(arguments -> Arguments.of((Object) arguments));
     }
 
