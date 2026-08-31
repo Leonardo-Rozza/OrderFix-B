@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario; implementación pendiente
+Estado: aprobado por el usuario; implementación en curso — 9A, 9B y 9C completados al 2026-08-31
 
 Rama backend: `codex/lanzamiento-publico-backend`
 

@@ -28,17 +28,19 @@ class LegalEditorialTransactionBoundaryTest {
         doThrow(new SQLException("ambiguous commit", "08006"))
                 .when(connection).commit();
         TransactionTemplate transaction = transaction(connection);
-        LegalTransactionCompletionState<LegalEditorialApplyReceipt> state =
-                new LegalTransactionCompletionState<>();
+        LegalEditorialTransactionState<LegalEditorialApplyReceipt> state =
+                new LegalEditorialTransactionState<>();
 
         assertThatThrownBy(() -> transaction.execute(status -> {
             state.callbackStarted();
+            state.planConstructed();
             state.receiptDelivered(receipt());
             return receipt();
         })).isInstanceOf(TransactionSystemException.class);
 
         assertThat(state.snapshot().persistence())
-                .isEqualTo(LegalTransactionCompletionState.Persistence.UNKNOWN);
+                .isEqualTo(LegalEditorialTransactionState.Persistence.UNKNOWN);
+        assertThat(state.snapshot().planConstructed()).isTrue();
         assertThat(state.snapshot().receipt()).isEmpty();
     }
 
@@ -49,18 +51,20 @@ class LegalEditorialTransactionBoundaryTest {
         doThrow(new SQLException("ambiguous rollback", "08006"))
                 .when(connection).rollback();
         TransactionTemplate transaction = transaction(connection);
-        LegalTransactionCompletionState<LegalEditorialApplyReceipt> state =
-                new LegalTransactionCompletionState<>();
+        LegalEditorialTransactionState<LegalEditorialApplyReceipt> state =
+                new LegalEditorialTransactionState<>();
 
         assertThatThrownBy(() -> transaction.execute(status -> {
             state.callbackStarted();
+            state.planConstructed();
             state.receiptDelivered(receipt());
             status.setRollbackOnly();
             return receipt();
         })).isInstanceOf(TransactionSystemException.class);
 
         assertThat(state.snapshot().persistence())
-                .isEqualTo(LegalTransactionCompletionState.Persistence.UNKNOWN);
+                .isEqualTo(LegalEditorialTransactionState.Persistence.UNKNOWN);
+        assertThat(state.snapshot().planConstructed()).isTrue();
         assertThat(state.snapshot().receipt()).isEmpty();
     }
 

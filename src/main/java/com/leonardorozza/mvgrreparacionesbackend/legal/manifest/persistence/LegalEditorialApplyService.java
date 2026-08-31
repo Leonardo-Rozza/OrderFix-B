@@ -30,6 +30,7 @@ public final class LegalEditorialApplyService {
     private final LegalEditorialPostStateVerifier postStateVerifier;
     private final LegalEditorialReadinessCore readinessCore;
     private final LegalEditorialReplaceScopeGuard replaceScopeGuard;
+    private final LegalEditorialCommitReconciler commitReconciler;
     private final LegalEditorialFailureMapper failureMapper;
 
     LegalEditorialApplyService(
@@ -42,6 +43,7 @@ public final class LegalEditorialApplyService {
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
+            LegalEditorialCommitReconciler commitReconciler,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier) {
@@ -64,6 +66,9 @@ public final class LegalEditorialApplyService {
         this.replaceScopeGuard = Objects.requireNonNull(
                 replaceScopeGuard,
                 "replaceScopeGuard");
+        this.commitReconciler = Objects.requireNonNull(
+                commitReconciler,
+                "commitReconciler");
         this.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
         this.databaseGate.requireExactEditorialPreflights(
                 this.jdbc,
@@ -78,7 +83,10 @@ public final class LegalEditorialApplyService {
                 target,
                 promotionWriter,
                 observedAt -> requirePromotePlan(requireApplicable(
-                        planner.planPromote(target, observedAt))));
+                        planner.planPromote(target, observedAt))),
+                planConstructed -> commitReconciler.reconcilePromote(
+                        target,
+                        planConstructed));
     }
 
     /** Applies or confirms one complete replacement bound to an accredited immutable plan. */
@@ -97,7 +105,11 @@ public final class LegalEditorialApplyService {
                 target,
                 replacementWriter,
                 observedAt -> requireReplacePlan(requireApplicable(
-                        planner.planReplace(target, supportedPlan, observedAt))));
+                        planner.planReplace(target, supportedPlan, observedAt))),
+                planConstructed -> commitReconciler.reconcileReplace(
+                        target,
+                        supportedPlan,
+                        planConstructed));
     }
 
     /** Applies or confirms one explicit fail-closed retirement of the current release. */
@@ -110,21 +122,27 @@ public final class LegalEditorialApplyService {
                 current,
                 retirementWriter,
                 observedAt -> requireRetirePlan(requireApplicable(
-                        planner.planRetire(current, editorialPlan, observedAt))));
+                        planner.planRetire(current, editorialPlan, observedAt))),
+                planConstructed -> commitReconciler.reconcileRetire(
+                        current,
+                        editorialPlan,
+                        planConstructed));
     }
 
     private LegalEditorialApplyResult apply(
             ValidatedRelease target,
             LegalEditorialMutationWriter writer,
-            PlanOperation operation) {
-        LegalTransactionCompletionState<ConfirmedApply> transactionState =
-                new LegalTransactionCompletionState<>();
+            PlanOperation operation,
+            ReconciliationOperation reconciliation) {
+        LegalEditorialTransactionState<ConfirmedApply> transactionState =
+                new LegalEditorialTransactionState<>();
         try {
             requireSharedJdbcSession(writer);
             databaseGate.executeMutable(status -> {
                 transactionState.callbackStarted();
                 Instant observedAt = readTransactionTimestamp();
                 LegalEditorialExecutionPlan plan = operation.plan(observedAt);
+                transactionState.planConstructed();
 
                 ConfirmedApply confirmed = plan.changeRequired()
                         ? applyFresh(target, plan, observedAt, writer)
@@ -135,13 +153,42 @@ public final class LegalEditorialApplyService {
             transactionState.transactionReturnedNormally();
             return confirmedResult(transactionState.snapshot());
         } catch (RuntimeException | LinkageError failure) {
-            LegalTransactionCompletionState.Snapshot<ConfirmedApply> snapshot =
+            LegalEditorialTransactionState.Snapshot<ConfirmedApply> snapshot =
                     transactionState.snapshot();
             return switch (snapshot.persistence()) {
                 case PERSISTED -> confirmedResult(snapshot);
-                case UNKNOWN -> LegalEditorialApplyResult.unknown();
+                case UNKNOWN -> reconcileUnknown(snapshot, failure, reconciliation);
                 case NOT_PERSISTED -> mappedFailure(failure);
             };
+        }
+    }
+
+    private LegalEditorialApplyResult reconcileUnknown(
+            LegalEditorialTransactionState.Snapshot<ConfirmedApply> snapshot,
+            Throwable originalFailure,
+            ReconciliationOperation reconciliation) {
+        if (!snapshot.planConstructed()) {
+            return LegalEditorialApplyResult.unknown();
+        }
+        LegalEditorialCommitReconciler.Result reconciled;
+        try {
+            reconciled = reconciliation.reconcile(true);
+        } catch (RuntimeException | LinkageError inconclusiveFailure) {
+            return LegalEditorialApplyResult.unknown();
+        }
+        if (reconciled == null) {
+            return LegalEditorialApplyResult.unknown();
+        }
+        try {
+            return switch (reconciled.outcome()) {
+                case POST_EXACT -> reconciled.receipt()
+                        .map(LegalEditorialApplyResult::alreadyApplied)
+                        .orElseGet(LegalEditorialApplyResult::unknown);
+                case SOURCE_EXACT -> mappedSourceFailure(originalFailure);
+                case UNKNOWN -> LegalEditorialApplyResult.unknown();
+            };
+        } catch (RuntimeException | LinkageError invalidEvidence) {
+            return LegalEditorialApplyResult.unknown();
         }
     }
 
@@ -258,7 +305,8 @@ public final class LegalEditorialApplyService {
                 || !planner.usesJdbc(jdbc)
                 || !writer.usesJdbc(jdbc)
                 || !postStateVerifier.usesJdbc(jdbc)
-                || !readinessCore.usesJdbc(jdbc)) {
+                || !readinessCore.usesJdbc(jdbc)
+                || !commitReconciler.usesJdbc(jdbc)) {
             throw new LegalEditorialOperationalException(
                     LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
                     OBSERVATION_LOCATION);
@@ -284,8 +332,24 @@ public final class LegalEditorialApplyService {
         return observationError();
     }
 
+    private LegalEditorialApplyResult mappedSourceFailure(Throwable originalFailure) {
+        try {
+            LegalManifestIssue mapped = failureMapper.map(originalFailure);
+            if (mapped == null || mapped.severity() != LegalManifestStatus.ERROR) {
+                return observationError();
+            }
+            try {
+                return LegalEditorialApplyResult.error(List.of(mapped));
+            } catch (IllegalArgumentException foreignOperationalIssue) {
+                return observationError();
+            }
+        } catch (RuntimeException | LinkageError mapperFailure) {
+            return observationError();
+        }
+    }
+
     private static LegalEditorialApplyResult confirmedResult(
-            LegalTransactionCompletionState.Snapshot<ConfirmedApply> snapshot) {
+            LegalEditorialTransactionState.Snapshot<ConfirmedApply> snapshot) {
         ConfirmedApply confirmed = snapshot.receipt().orElseThrow(() ->
                 new IllegalStateException("El apply confirmado no conservó su receipt"));
         return switch (confirmed.outcome()) {
@@ -351,5 +415,10 @@ public final class LegalEditorialApplyService {
     @FunctionalInterface
     private interface PlanOperation {
         LegalEditorialExecutionPlan plan(Instant observedAt);
+    }
+
+    @FunctionalInterface
+    private interface ReconciliationOperation {
+        LegalEditorialCommitReconciler.Result reconcile(boolean planConstructed);
     }
 }

@@ -147,6 +147,7 @@ class LegalInitialPromotionFailureIT {
                 production.postStateVerifier(),
                 production.readinessCore(),
                 production.replaceScopeGuard(),
+                production.commitReconciler(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),
                 production.privilegeVerifier());
@@ -184,6 +185,7 @@ class LegalInitialPromotionFailureIT {
                 production.postStateVerifier(),
                 production.readinessCore(),
                 production.replaceScopeGuard(),
+                production.commitReconciler(),
                 new LegalEditorialFailureMapper(),
                 production.schemaVerifier(),
                 production.privilegeVerifier());
@@ -199,7 +201,7 @@ class LegalInitialPromotionFailureIT {
     }
 
     @Test
-    void commitAcknowledgementLossReturnsUnknownAndExactRetryReconciles()
+    void commitAcknowledgementLossReconcilesImmediatelyAndExactRetryIsSelectOnly()
             throws Exception {
         ImportedRelease target = importedDraft("initial-promotion-commit-unknown-v1");
         CommitAcknowledgementLostDataSource ambiguousDataSource =
@@ -211,7 +213,13 @@ class LegalInitialPromotionFailureIT {
         LegalEditorialApplyResult firstAttempt = ambiguous.service()
                 .applyPromote(target.release());
 
-        assertEditorialUnknown(firstAttempt);
+        assertEditorialConfirmed(
+                firstAttempt,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(firstAttempt.operationType())
+                .contains(LegalEditorialApplyReceipt.OperationType.PROMOTE);
+        assertThat(firstAttempt.targetPublicationUuid()).contains(target.publicationId());
+        assertThat(firstAttempt.readinessAfter()).contains(LegalEditorialReadiness.READY);
         assertThat(ambiguousDataSource.armed()).isFalse();
         OffsetDateTime appliedAt = observer.queryForObject("""
                 SELECT max(dt.ocurrido_en)
@@ -221,8 +229,13 @@ class LegalInitialPromotionFailureIT {
                  WHERE pd.publicacion_id = ?
                 """, OffsetDateTime.class, target.publicationId());
         assertThat(appliedAt).isNotNull();
+        assertThat(firstAttempt.appliedAt())
+                .contains(Objects.requireNonNull(appliedAt).toInstant());
+        assertThat(firstAttempt.receipt()).get()
+                .extracting(LegalEditorialApplyReceipt::appliedAt)
+                .isEqualTo(appliedAt.toInstant());
         LegalEditorialReadinessResult readiness = production.readinessCore()
-                .evaluate(target.release(), Objects.requireNonNull(appliedAt).toInstant());
+                .evaluate(target.release(), appliedAt.toInstant());
         assertThat(readiness.readiness()).isEqualTo(LegalEditorialReadiness.READY);
         Map<String, Long> rowsBeforeReplay = editorialTableCounts(observer);
         Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeReplay =

@@ -554,7 +554,7 @@ class LegalEditorialRetireIT {
     }
 
     @Test
-    void restrictedCommitAcknowledgementLossIsUnknownAndRetryConvergesWithoutDml()
+    void restrictedCommitAcknowledgementLossReconcilesAndRetryRemainsSelectOnly()
             throws Exception {
         ImportedRelease current = readyRelease("retire-commit-unknown-v1");
         DocumentVersion retiredDocument = document(
@@ -581,11 +581,14 @@ class LegalEditorialRetireIT {
         LegalEditorialApplyResult firstAttempt = ambiguous.service().applyRetire(
                 current.release(), plan);
 
-        assertEditorialUnknown(firstAttempt);
-        assertThat(firstAttempt.operationType()).isEmpty();
-        assertThat(firstAttempt.targetPublicationUuid()).isEmpty();
-        assertThat(firstAttempt.appliedAt()).isEmpty();
-        assertThat(firstAttempt.readinessAfter()).isEmpty();
+        assertEditorialConfirmed(
+                firstAttempt,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(firstAttempt.operationType())
+                .contains(LegalEditorialApplyReceipt.OperationType.RETIRE);
+        assertThat(firstAttempt.targetPublicationUuid()).contains(current.publicationId());
+        assertThat(firstAttempt.readinessAfter())
+                .contains(LegalEditorialReadiness.NOT_READY);
         assertThat(firstAttempt.omittedIssueCount()).isZero();
         assertThat(ambiguousDataSource.armed()).isFalse();
         assertThat(apply.readinessCore().evaluate(
@@ -596,6 +599,10 @@ class LegalEditorialRetireIT {
                 .get(retiredDocument.id())
                 .getLast()
                 .occurredAt();
+        assertThat(firstAttempt.appliedAt()).contains(committedAppliedAt);
+        assertThat(firstAttempt.receipt()).get()
+                .extracting(LegalEditorialApplyReceipt::appliedAt)
+                .isEqualTo(committedAppliedAt);
         Map<String, String> rowsBeforeReplay = editorialTableRows();
         Map<String, LegalManifestPersistenceITSupport.SequenceState> sequencesBeforeReplay =
                 editorialSequenceStates(owner);

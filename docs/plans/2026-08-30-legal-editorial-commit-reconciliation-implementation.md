@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30, 9B completado el 2026-08-31 y
-9C pendiente
+Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C completados el
+2026-08-31; 9D1, 9D2, 9E y 9F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -192,7 +192,7 @@ Commit:
 
 ## Subcorte 9C — Integración con apply
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -252,6 +252,31 @@ git status --short
 Commit:
 
     fix(legal): reconcilia apply editorial ambiguo
+
+### Evidencia de cierre 9C
+
+- La prueba TDD nueva nació roja porque `LegalEditorialApplyService` todavía no exigía el
+  reconciliador en su único constructor. El cierre integra el facade editorial marker-only,
+  registra `planConstructed` después del plan tipado y antes de cualquier writer, y sólo intenta
+  una reconciliación después de que la transacción original quedó completamente desvinculada.
+- `POST_EXACT` devuelve `ALREADY_APPLIED` únicamente con el receipt releído; `SOURCE_EXACT` mapea
+  sólo el throwable original y conserva exclusivamente issues `ERROR` admitidos por el contrato;
+  toda evidencia de reconciliación nula, parcial, foránea o fallida conserva `UNKNOWN`. Sólo un
+  `SOURCE_EXACT` cuyo throwable original mapea a un blocker, un issue ajeno, `null` o un fallo del
+  mapper cae en `EDITORIAL_OBSERVATION_FAILED`. No hay recursión, segundo writer, healing ni retry
+  de DML.
+- La puerta focal exacta con Amazon Corretto 21.0.10 cerró 50/50 pruebas: 6 de integración del
+  apply con reconciliación, 14 de PROMOTE, 11 de REPLACE, 9 de RETIRE, 8 del resultado público y
+  2 de la frontera transaccional.
+- El lifecycle fresco `clean verify` cerró 4.231/4.231 unitarias y 37/37 integraciones de
+  `LegalInitialPromotionFailureIT`, `LegalEditorialReplaceIT` y `LegalEditorialRetireIT` sobre
+  PostgreSQL 16.14 con las 27 migraciones. Los dos JAR se empaquetaron y Failsafe terminó sin
+  fallos, errores ni omitidos.
+- Los tres escenarios existentes de ACK perdido ahora devuelven `ALREADY_APPLIED` en la primera
+  invocación con operación, publicación, `appliedAt` y readiness confirmados desde PostgreSQL. El
+  replay posterior conserva filas y secuencias sin cambios.
+- No se modificaron import, V27/V28, migrations, resources, schemas, grants, API, controllers,
+  JPA, frontend, CLI, reportes ni contratos públicos. No hubo push ni deploy.
 
 ## Subcorte 9D1 — Evidencia PostgreSQL concluyente
 

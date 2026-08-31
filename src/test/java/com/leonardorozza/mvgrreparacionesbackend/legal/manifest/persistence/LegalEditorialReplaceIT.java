@@ -353,7 +353,7 @@ class LegalEditorialReplaceIT {
     }
 
     @Test
-    void commitAcknowledgementLossNeverReturnsFalseSuccessAndRetryConverges()
+    void commitAcknowledgementLossReconcilesImmediatelyAndRetryIsSelectOnly()
             throws Exception {
         ImportedRelease source = readyRelease("replace-commit-unknown-source-v1");
         ImportedRelease target = importedRequirementOnlyTarget(
@@ -369,7 +369,14 @@ class LegalEditorialReplaceIT {
         LegalEditorialApplyResult firstAttempt = ambiguous.service().applyReplace(
                 target.release(), fixture.plan());
 
-        assertEditorialUnknown(firstAttempt);
+        assertEditorialConfirmed(
+                firstAttempt,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(firstAttempt.operationType())
+                .contains(LegalEditorialApplyReceipt.OperationType.REPLACE);
+        assertThat(firstAttempt.targetPublicationUuid()).contains(target.publicationId());
+        assertThat(firstAttempt.readinessAfter()).contains(LegalEditorialReadiness.READY);
+        Instant reconciledAppliedAt = firstAttempt.appliedAt().orElseThrow();
         assertThat(ambiguousDataSource.armed()).isFalse();
         assertThat(ownerApply.readinessCore().evaluate(
                 target.release(), databaseNow()).readiness())
@@ -382,6 +389,7 @@ class LegalEditorialReplaceIT {
                 target.release(), fixture.plan());
 
         assertEditorialConfirmed(replay, LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        assertThat(replay.appliedAt()).contains(reconciledAppliedAt);
         assertThat(editorialTableRows()).isEqualTo(rowsBeforeReplay);
         assertThat(editorialSequenceStates(owner)).isEqualTo(sequencesBeforeReplay);
     }
@@ -556,6 +564,7 @@ class LegalEditorialReplaceIT {
                 harness.postStateVerifier(),
                 readiness,
                 harness.replaceScopeGuard(),
+                harness.commitReconciler(),
                 new LegalEditorialFailureMapper(),
                 harness.schemaVerifier(),
                 harness.privilegeVerifier());

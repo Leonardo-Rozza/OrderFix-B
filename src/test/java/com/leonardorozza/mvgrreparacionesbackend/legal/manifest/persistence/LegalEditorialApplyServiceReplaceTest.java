@@ -77,6 +77,7 @@ class LegalEditorialApplyServiceReplaceTest {
         verify(harness.retirementWriter, never()).usesJdbc(any());
         verify(harness.postStateVerifier, never()).usesJdbc(any());
         verify(harness.readinessCore, never()).usesJdbc(any());
+        verify(harness.commitReconciler, never()).usesJdbc(any());
         verify(harness.planner, never()).planReplace(any(), any(), any());
         verify(harness.promotionWriter, never()).write(any());
         verify(harness.replacementWriter, never()).write(any());
@@ -277,6 +278,12 @@ class LegalEditorialApplyServiceReplaceTest {
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
         when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(ready());
+        when(harness.commitReconciler.reconcileReplace(
+                release,
+                editorialPlan,
+                true)).thenReturn(new LegalEditorialCommitReconciler.Result(
+                        LegalEditorialCommitReconciler.Outcome.UNKNOWN,
+                        Optional.empty()));
 
         LegalEditorialApplyResult result =
                 harness.service().applyReplace(release, editorialPlan);
@@ -290,6 +297,10 @@ class LegalEditorialApplyServiceReplaceTest {
         assertThat(result.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+        verify(harness.commitReconciler).reconcileReplace(
+                release,
+                editorialPlan,
+                true);
     }
 
     @Test
@@ -531,6 +542,8 @@ class LegalEditorialApplyServiceReplaceTest {
                 mock(LegalEditorialReadinessCore.class);
         private final LegalEditorialReplaceScopeGuard scopeGuard =
                 mock(LegalEditorialReplaceScopeGuard.class);
+        private final LegalEditorialCommitReconciler commitReconciler =
+                mock(LegalEditorialCommitReconciler.class);
         private final LegalEditorialFailureMapper failureMapper =
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
@@ -546,6 +559,7 @@ class LegalEditorialApplyServiceReplaceTest {
             when(retirementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
+            when(commitReconciler.usesJdbc(jdbc)).thenReturn(true);
             when(jdbc.queryForObject(
                     "SELECT transaction_timestamp()",
                     OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
@@ -569,6 +583,7 @@ class LegalEditorialApplyServiceReplaceTest {
                     postStateVerifier,
                     readinessCore,
                     replaceScopeGuard,
+                    commitReconciler,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);

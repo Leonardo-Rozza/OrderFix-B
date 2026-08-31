@@ -282,6 +282,7 @@ public class LegalEditorialDatabaseConfiguration {
             LegalEditorialPostStateVerifier postStateVerifier,
             LegalEditorialReadinessCore readinessCore,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
+            LegalEditorialCommitReconciler commitReconciler,
             LegalEditorialFailureMapper failureMapper,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier) {
@@ -295,6 +296,7 @@ public class LegalEditorialDatabaseConfiguration {
                 postStateVerifier,
                 readinessCore,
                 replaceScopeGuard,
+                commitReconciler,
                 failureMapper,
                 schemaVerifier,
                 privilegeVerifier);

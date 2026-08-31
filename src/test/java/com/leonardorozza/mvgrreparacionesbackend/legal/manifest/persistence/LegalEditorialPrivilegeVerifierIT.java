@@ -467,6 +467,15 @@ class LegalEditorialPrivilegeVerifierIT {
         transaction.setTimeout(
                 LegalDatabaseBudgets.production().transactionTimeoutSeconds());
         transaction.setReadOnly(false);
+        TransactionTemplate reconciliationTransaction = new TransactionTemplate(manager);
+        reconciliationTransaction.setName("legal-editorial-restricted-role-reconciliation-it");
+        reconciliationTransaction.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        reconciliationTransaction.setIsolationLevel(
+                TransactionDefinition.ISOLATION_READ_COMMITTED);
+        reconciliationTransaction.setTimeout(
+                LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        reconciliationTransaction.setReadOnly(true);
 
         LegalRequiredSetRevisionCalculator revisionCalculator =
                 new LegalRequiredSetRevisionCalculator();
@@ -486,6 +495,21 @@ class LegalEditorialPrivilegeVerifierIT {
                 jdbc,
                 LegalDatabaseBudgets.production(),
                 List.of(schema, privileges));
+        LegalManifestDatabaseGate reconciliationGate = new LegalManifestDatabaseGate(
+                reconciliationTransaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+        LegalEditorialPostStateVerifier postStateVerifier =
+                new LegalEditorialPostStateVerifier(jdbc);
+        LegalEditorialCommitReconciler commitReconciler =
+                new LegalEditorialCommitReconciler(
+                        reconciliationGate,
+                        jdbc,
+                        planner,
+                        postStateVerifier,
+                        schema,
+                        privileges);
         return new LegalEditorialApplyService(
                 gate,
                 jdbc,
@@ -493,9 +517,10 @@ class LegalEditorialPrivilegeVerifierIT {
                 new LegalInitialPromotionCore(jdbc),
                 new LegalDocumentReplacementWriter(jdbc, readiness),
                 new LegalEditorialRetirementWriter(jdbc, readiness),
-                new LegalEditorialPostStateVerifier(jdbc),
+                postStateVerifier,
                 readiness,
                 new LegalEditorialReplaceScopeGuard(),
+                commitReconciler,
                 new LegalEditorialFailureMapper(),
                 schema,
                 privileges);

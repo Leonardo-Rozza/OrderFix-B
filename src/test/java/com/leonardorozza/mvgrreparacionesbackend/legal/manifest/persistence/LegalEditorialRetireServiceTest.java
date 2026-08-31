@@ -232,6 +232,12 @@ class LegalEditorialRetireServiceTest {
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(OBSERVED_AT));
         when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(notReady());
+        when(harness.commitReconciler.reconcileRetire(
+                release,
+                editorialPlan,
+                true)).thenReturn(new LegalEditorialCommitReconciler.Result(
+                        LegalEditorialCommitReconciler.Outcome.UNKNOWN,
+                        Optional.empty()));
 
         LegalEditorialApplyResult result = harness.service()
                 .applyRetire(release, editorialPlan);
@@ -245,6 +251,10 @@ class LegalEditorialRetireServiceTest {
         assertThat(result.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+        verify(harness.commitReconciler).reconcileRetire(
+                release,
+                editorialPlan,
+                true);
     }
 
     @Test
@@ -437,6 +447,8 @@ class LegalEditorialRetireServiceTest {
                 mock(LegalEditorialReadinessCore.class);
         private final LegalEditorialReplaceScopeGuard replaceScopeGuard =
                 mock(LegalEditorialReplaceScopeGuard.class);
+        private final LegalEditorialCommitReconciler commitReconciler =
+                mock(LegalEditorialCommitReconciler.class);
         private final LegalEditorialFailureMapper failureMapper =
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
@@ -452,6 +464,7 @@ class LegalEditorialRetireServiceTest {
             when(retirementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
+            when(commitReconciler.usesJdbc(jdbc)).thenReturn(true);
             when(jdbc.queryForObject(
                     "SELECT transaction_timestamp()",
                     OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
@@ -470,6 +483,7 @@ class LegalEditorialRetireServiceTest {
                     postStateVerifier,
                     readinessCore,
                     replaceScopeGuard,
+                    commitReconciler,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);

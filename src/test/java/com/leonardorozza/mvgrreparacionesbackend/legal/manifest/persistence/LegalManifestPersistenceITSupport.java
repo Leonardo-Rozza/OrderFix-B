@@ -281,6 +281,14 @@ final class LegalManifestPersistenceITSupport {
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         transaction.setTimeout(budgets.transactionTimeoutSeconds());
         transaction.setReadOnly(false);
+        TransactionTemplate reconciliationTransaction = new TransactionTemplate(manager);
+        reconciliationTransaction.setName("legal-editorial-reconciliation-it");
+        reconciliationTransaction.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        reconciliationTransaction.setIsolationLevel(
+                TransactionDefinition.ISOLATION_READ_COMMITTED);
+        reconciliationTransaction.setTimeout(budgets.transactionTimeoutSeconds());
+        reconciliationTransaction.setReadOnly(true);
 
         LegalRequiredSetRevisionCalculator revisionCalculator =
                 new LegalRequiredSetRevisionCalculator();
@@ -309,6 +317,19 @@ final class LegalManifestPersistenceITSupport {
                 jdbc,
                 budgets,
                 List.of(schemaVerifier, privilegeVerifier));
+        LegalManifestDatabaseGate reconciliationGate = new LegalManifestDatabaseGate(
+                reconciliationTransaction,
+                jdbc,
+                budgets,
+                List.of(schemaVerifier, privilegeVerifier));
+        LegalEditorialCommitReconciler commitReconciler =
+                new LegalEditorialCommitReconciler(
+                        reconciliationGate,
+                        jdbc,
+                        plannerCore,
+                        postStateVerifier,
+                        schemaVerifier,
+                        privilegeVerifier);
         LegalEditorialApplyService service = new LegalEditorialApplyService(
                 gate,
                 jdbc,
@@ -319,6 +340,7 @@ final class LegalManifestPersistenceITSupport {
                 postStateVerifier,
                 readinessCore,
                 replaceScopeGuard,
+                commitReconciler,
                 new LegalEditorialFailureMapper(),
                 schemaVerifier,
                 privilegeVerifier);
@@ -327,6 +349,8 @@ final class LegalManifestPersistenceITSupport {
                 jdbc,
                 transaction,
                 gate,
+                reconciliationTransaction,
+                reconciliationGate,
                 schemaVerifier,
                 privilegeVerifier,
                 originVerifier,
@@ -337,6 +361,7 @@ final class LegalManifestPersistenceITSupport {
                 retirementWriter,
                 replaceScopeGuard,
                 postStateVerifier,
+                commitReconciler,
                 service);
     }
 
@@ -945,6 +970,8 @@ final class LegalManifestPersistenceITSupport {
             JdbcTemplate jdbc,
             TransactionTemplate transaction,
             LegalManifestDatabaseGate gate,
+            TransactionTemplate reconciliationTransaction,
+            LegalManifestDatabaseGate reconciliationGate,
             LegalEditorialSchemaVerifier schemaVerifier,
             LegalEditorialPrivilegeVerifier privilegeVerifier,
             LegalManifestOriginGraphVerifier originVerifier,
@@ -955,6 +982,7 @@ final class LegalManifestPersistenceITSupport {
             LegalEditorialRetirementWriter retirementWriter,
             LegalEditorialReplaceScopeGuard replaceScopeGuard,
             LegalEditorialPostStateVerifier postStateVerifier,
+            LegalEditorialCommitReconciler commitReconciler,
             LegalEditorialApplyService service
     ) { }
 

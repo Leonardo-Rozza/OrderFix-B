@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -55,7 +56,9 @@ class LegalEditorialApplyServiceTest {
         assertThat(LegalEditorialApplyService.class.getDeclaredConstructors())
                 .singleElement()
                 .satisfies(constructor -> {
-                    assertThat(constructor.getParameterCount()).isEqualTo(12);
+                    assertThat(constructor.getParameterCount()).isEqualTo(13);
+                    assertThat(constructor.getParameterTypes())
+                            .containsOnlyOnce(LegalEditorialCommitReconciler.class);
                     assertThat(constructor.getModifiers() & Modifier.PUBLIC).isZero();
                 });
         verify(harness.gate).requireExactEditorialPreflights(
@@ -98,6 +101,8 @@ class LegalEditorialApplyServiceTest {
         order.verify(harness.postStateVerifier).verify(plan);
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
         order.verify(harness.readinessCore).evaluate(release, OBSERVED_AT);
+        verify(harness.commitReconciler, never())
+                .reconcilePromote(eq(release), anyBoolean());
     }
 
     @Test
@@ -284,6 +289,8 @@ class LegalEditorialApplyServiceTest {
         order.verify(harness.postStateVerifier).verify(plan);
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
         verify(harness.readinessCore, never()).evaluate(any(), any());
+        verify(harness.commitReconciler, never())
+                .reconcilePromote(eq(release), anyBoolean());
     }
 
     @Test
@@ -366,6 +373,10 @@ class LegalEditorialApplyServiceTest {
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt());
         when(harness.readinessCore.evaluate(release, OBSERVED_AT))
                 .thenReturn(ready());
+        when(harness.commitReconciler.reconcilePromote(release, true))
+                .thenReturn(new LegalEditorialCommitReconciler.Result(
+                        LegalEditorialCommitReconciler.Outcome.UNKNOWN,
+                        Optional.empty()));
 
         LegalEditorialApplyResult result = harness.service().applyPromote(release);
 
@@ -378,6 +389,7 @@ class LegalEditorialApplyServiceTest {
         assertThat(result.issues())
                 .extracting(LegalManifestIssue::code)
                 .containsExactly(LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN);
+        verify(harness.commitReconciler).reconcilePromote(release, true);
     }
 
     @Test
@@ -399,23 +411,42 @@ class LegalEditorialApplyServiceTest {
         LegalEditorialApplyResult result = harness.service().applyPromote(release);
 
         assertSuccess(result, LegalEditorialApplyResult.Outcome.APPLIED, receipt);
+        verify(harness.commitReconciler, never())
+                .reconcilePromote(eq(release), anyBoolean());
     }
 
     @Test
-    void aForeignJdbcParticipantFailsBeforeOpeningTheTransaction() {
-        Harness harness = new Harness();
-        when(harness.postStateVerifier.usesJdbc(harness.jdbc)).thenReturn(false);
+    void foreignJdbcParticipantsFailBeforeOpeningTheTransaction() {
+        Harness foreignVerifier = new Harness();
+        when(foreignVerifier.postStateVerifier.usesJdbc(foreignVerifier.jdbc))
+                .thenReturn(false);
 
-        LegalEditorialApplyResult result = harness.service()
+        LegalEditorialApplyResult verifierResult = foreignVerifier.service()
                 .applyPromote(mock(ValidatedRelease.class));
 
         assertKnownFailure(
-                result,
+                verifierResult,
                 LegalManifestStatus.ERROR,
                 LegalEditorialApplyResult.Outcome.ERROR,
                 LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
-        verify(harness.gate, never()).executeMutable(any());
-        verify(harness.jdbc, never()).queryForObject(anyString(), any(Class.class));
+        verify(foreignVerifier.gate, never()).executeMutable(any());
+        verify(foreignVerifier.jdbc, never()).queryForObject(anyString(), any(Class.class));
+
+        Harness foreignReconciler = new Harness();
+        when(foreignReconciler.commitReconciler.usesJdbc(foreignReconciler.jdbc))
+                .thenReturn(false);
+
+        LegalEditorialApplyResult reconcilerResult = foreignReconciler.service()
+                .applyPromote(mock(ValidatedRelease.class));
+
+        assertKnownFailure(
+                reconcilerResult,
+                LegalManifestStatus.ERROR,
+                LegalEditorialApplyResult.Outcome.ERROR,
+                LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        verify(foreignReconciler.gate, never()).executeMutable(any());
+        verify(foreignReconciler.jdbc, never())
+                .queryForObject(anyString(), any(Class.class));
     }
 
     private static LegalEditorialExecutionPlan plan(boolean changeRequired) {
@@ -556,6 +587,8 @@ class LegalEditorialApplyServiceTest {
                 mock(LegalEditorialReadinessCore.class);
         private final LegalEditorialReplaceScopeGuard replaceScopeGuard =
                 mock(LegalEditorialReplaceScopeGuard.class);
+        private final LegalEditorialCommitReconciler commitReconciler =
+                mock(LegalEditorialCommitReconciler.class);
         private final LegalEditorialFailureMapper failureMapper =
                 new LegalEditorialFailureMapper();
         private final LegalEditorialSchemaVerifier schemaVerifier =
@@ -571,6 +604,7 @@ class LegalEditorialApplyServiceTest {
             when(retirementWriter.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
+            when(commitReconciler.usesJdbc(jdbc)).thenReturn(true);
             when(jdbc.queryForObject(
                     "SELECT transaction_timestamp()",
                     OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
@@ -589,6 +623,7 @@ class LegalEditorialApplyServiceTest {
                     postStateVerifier,
                     readinessCore,
                     replaceScopeGuard,
+                    commitReconciler,
                     failureMapper,
                     schemaVerifier,
                     privilegeVerifier);
