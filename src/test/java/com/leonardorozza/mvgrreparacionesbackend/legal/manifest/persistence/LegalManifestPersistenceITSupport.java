@@ -777,6 +777,101 @@ final class LegalManifestPersistenceITSupport {
         return Objects.requireNonNull(count, "blocked editorial gate waits");
     }
 
+    static Optional<Integer> blockedEditorialGatePid(
+            JdbcTemplate observer,
+            String applicationName,
+            int holderPid) {
+        requireBackendPid(holderPid, "holderPid");
+        return observer.query("""
+                SELECT activity.pid
+                  FROM pg_catalog.pg_stat_activity activity
+                 WHERE activity.datname = pg_catalog.current_database()
+                   AND activity.application_name = ?
+                   AND activity.state = 'active'
+                   AND activity.wait_event_type = 'Lock'
+                   AND activity.query LIKE '%pg_advisory_xact_lock%'
+                   AND activity.query LIKE '%hashtextextended%'
+                   AND ? = ANY(pg_catalog.pg_blocking_pids(activity.pid))
+                 ORDER BY activity.pid
+                 LIMIT 1
+                """, (resultSet, rowNumber) -> resultSet.getInt(1),
+                applicationName,
+                holderPid)
+                .stream()
+                .findFirst();
+    }
+
+    static Optional<Integer> blockedPublicationForUpdatePid(
+            JdbcTemplate observer,
+            String applicationName,
+            int holderPid) {
+        requireBackendPid(holderPid, "holderPid");
+        return observer.query("""
+                SELECT activity.pid
+                  FROM pg_catalog.pg_stat_activity activity
+                 WHERE activity.datname = pg_catalog.current_database()
+                   AND activity.application_name = ?
+                   AND activity.state = 'active'
+                   AND activity.wait_event_type = 'Lock'
+                   AND activity.query LIKE '%FROM legal_publicaciones%'
+                   AND activity.query LIKE '%FOR UPDATE%'
+                   AND ? = ANY(pg_catalog.pg_blocking_pids(activity.pid))
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_catalog.pg_locks held
+                        WHERE held.pid = activity.pid
+                          AND held.locktype = 'advisory'
+                          AND held.granted
+                   )
+                 ORDER BY activity.pid
+                 LIMIT 1
+                """, (resultSet, rowNumber) -> resultSet.getInt(1),
+                applicationName,
+                holderPid)
+                .stream()
+                .findFirst();
+    }
+
+    static boolean hasBidirectionalWaitCycle(
+            JdbcTemplate observer,
+            int firstPid,
+            int secondPid) {
+        requireBackendPid(firstPid, "firstPid");
+        requireBackendPid(secondPid, "secondPid");
+        Boolean cycle = observer.queryForObject("""
+                SELECT ? = ANY(pg_catalog.pg_blocking_pids(?))
+                   AND ? = ANY(pg_catalog.pg_blocking_pids(?))
+                """, Boolean.class,
+                secondPid,
+                firstPid,
+                firstPid,
+                secondPid);
+        return Boolean.TRUE.equals(cycle);
+    }
+
+    static boolean terminateBackend(JdbcTemplate observer, int backendPid) {
+        requireBackendPid(backendPid, "backendPid");
+        Boolean terminated = observer.queryForObject(
+                "SELECT pg_catalog.pg_terminate_backend(?)",
+                Boolean.class,
+                backendPid);
+        return Boolean.TRUE.equals(terminated);
+    }
+
+    static void awaitBackendGone(JdbcTemplate observer, int backendPid) {
+        requireBackendPid(backendPid, "backendPid");
+        awaitCondition(
+                "backend PostgreSQL terminado pid=" + backendPid,
+                () -> Boolean.TRUE.equals(observer.queryForObject("""
+                        SELECT NOT EXISTS (
+                            SELECT 1
+                              FROM pg_catalog.pg_stat_activity
+                             WHERE datname = pg_catalog.current_database()
+                               AND pid = ?
+                        )
+                        """, Boolean.class, backendPid)));
+    }
+
     static Optional<Integer> blockedDocumentInsertPid(
             JdbcTemplate observer,
             String applicationName) {
@@ -918,7 +1013,44 @@ final class LegalManifestPersistenceITSupport {
                     assertThat(result.next()).isFalse();
                 }
             }
-            return new EditorialLockHolder(connection);
+            return new EditorialLockHolder(connection, backendPid(connection));
+        } catch (RuntimeException | SQLException failure) {
+            try {
+                connection.rollback();
+            } finally {
+                connection.close();
+            }
+            throw failure;
+        }
+    }
+
+    static PublicationRowLockHolder holdPublicationRow(
+            DataSource dataSource,
+            UUID publicationId) throws SQLException {
+        Objects.requireNonNull(dataSource, "dataSource");
+        Objects.requireNonNull(publicationId, "publicationId");
+        Connection connection = dataSource.getConnection();
+        try {
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+            connection.setAutoCommit(false);
+            try (var statement = connection.createStatement()) {
+                statement.execute("SET LOCAL deadlock_timeout = '10s'");
+            }
+            int backendPid = backendPid(connection);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT id
+                      FROM legal_publicaciones
+                     WHERE id = ?
+                     FOR UPDATE
+                    """)) {
+                statement.setObject(1, publicationId);
+                try (var result = statement.executeQuery()) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.getObject(1, UUID.class)).isEqualTo(publicationId);
+                    assertThat(result.next()).isFalse();
+                }
+            }
+            return new PublicationRowLockHolder(connection, backendPid);
         } catch (RuntimeException | SQLException failure) {
             try {
                 connection.rollback();
@@ -994,6 +1126,25 @@ final class LegalManifestPersistenceITSupport {
                 .as("manifest=%s issues=%s", manifest.getFileName(), validation.issues())
                 .isEqualTo(LegalManifestStatus.PASS);
         return validation.value().orElseThrow();
+    }
+
+    private static int backendPid(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT pg_catalog.pg_backend_pid()")) {
+            try (var result = statement.executeQuery()) {
+                assertThat(result.next()).isTrue();
+                int backendPid = result.getInt(1);
+                assertThat(result.next()).isFalse();
+                return backendPid;
+            }
+        }
+    }
+
+    private static int requireBackendPid(int backendPid, String parameter) {
+        if (backendPid <= 0) {
+            throw new IllegalArgumentException(parameter + " debe ser positivo");
+        }
+        return backendPid;
     }
 
     private static Path goldenManifest(Class<?> resourceAnchor) throws URISyntaxException {
@@ -1152,13 +1303,70 @@ final class LegalManifestPersistenceITSupport {
         }
     }
 
+    static final class PublicationRowLockHolder implements AutoCloseable {
+
+        private final Connection connection;
+        private final int backendPid;
+        private boolean open = true;
+
+        private PublicationRowLockHolder(Connection connection, int backendPid) {
+            this.connection = connection;
+            this.backendPid = requireBackendPid(backendPid, "backendPid");
+        }
+
+        int backendPid() {
+            return backendPid;
+        }
+
+        void acquireEditorialLock() throws SQLException {
+            if (!open) {
+                throw new IllegalStateException(
+                        "El holder de publicación ya fue liberado");
+            }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """)) {
+                statement.setString(1, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+                try (var result = statement.executeQuery()) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.next()).isFalse();
+                }
+            }
+        }
+
+        void release() throws SQLException {
+            if (!open) {
+                return;
+            }
+            open = false;
+            try {
+                connection.rollback();
+            } finally {
+                connection.close();
+            }
+        }
+
+        @Override
+        public void close() throws SQLException {
+            release();
+        }
+    }
+
     static final class EditorialLockHolder implements AutoCloseable {
 
         private final Connection connection;
+        private final int backendPid;
         private boolean open = true;
 
-        private EditorialLockHolder(Connection connection) {
+        private EditorialLockHolder(Connection connection, int backendPid) {
             this.connection = connection;
+            this.backendPid = requireBackendPid(backendPid, "backendPid");
+        }
+
+        int backendPid() {
+            return backendPid;
         }
 
         void release() throws SQLException {
