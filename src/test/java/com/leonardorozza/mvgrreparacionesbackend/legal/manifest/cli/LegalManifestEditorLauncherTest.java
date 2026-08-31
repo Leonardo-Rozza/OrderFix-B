@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -26,25 +27,33 @@ class LegalManifestEditorLauncherTest {
                 .normalize();
         assertThat(launcher).isRegularFile().isExecutable();
 
-        Path legalCliJar = Files.createFile(temporaryDirectory.resolve("legal-cli.jar"));
-        Path javaProbe = temporaryDirectory.resolve("java-probe.sh");
+        Path fixtures = Files.createDirectory(
+                temporaryDirectory.resolve("launcher fixtures with spaces"));
+        Files.createFile(temporaryDirectory.resolve("glob-match.json"));
+        Path legalCliJar = Files.createFile(fixtures.resolve("legal cli.jar"));
+        Path javaProbe = fixtures.resolve("java probe.sh");
         Files.writeString(javaProbe, """
                 #!/bin/sh
                 set -eu
                 [ "${JAVA_TOOL_OPTIONS+x}" != x ] || exit 21
                 [ "${JDK_JAVA_OPTIONS+x}" != x ] || exit 22
                 [ "${_JAVA_OPTIONS+x}" != x ] || exit 23
-                printf '%s\\n' "$@"
+                for argument do
+                    printf '<%s>\\n' "$argument"
+                done
                 """, StandardCharsets.UTF_8);
         assertThat(javaProbe.toFile().setExecutable(true, true)).isTrue();
 
+        List<String> forwardedArguments = List.of(
+                "readiness",
+                "--manifest=release with spaces/manifest.json",
+                "glob-*.json",
+                "$ORDENFIX_DO_NOT_EXPAND",
+                "quotes-'single'-\"double\"",
+                "--flag=value with spaces",
+                "");
         ProcessResult process = LegalCliProcessSupport.execute(
-                List.of(
-                        launcher.toString(),
-                        "readiness",
-                        "--manifest=release/publication-manifest.json",
-                        "--confirm-publication-id=legal-v1",
-                        "--confirm-manifest-sha256=" + "a".repeat(64)),
+                launcherCommand(launcher, forwardedArguments),
                 temporaryDirectory,
                 Map.of(
                         "ORDENFIX_LEGAL_CLI_JAR", legalCliJar.toString(),
@@ -55,15 +64,28 @@ class LegalManifestEditorLauncherTest {
                 StdoutMode.CAPTURE);
 
         assertThat(process.exitCode()).isZero();
+        assertThat(process.timedOut()).isFalse();
         assertThat(process.stderr()).isEmpty();
         assertThat(process.stdout()).isEqualTo(
-                "-jar\n"
-                        + legalCliJar + "\n"
-                        + "readiness\n"
-                        + "--manifest=release/publication-manifest.json\n"
-                        + "--confirm-publication-id=legal-v1\n"
-                        + "--confirm-manifest-sha256=" + "a".repeat(64) + "\n");
+                "<-jar>\n"
+                        + "<" + legalCliJar + ">\n"
+                        + "<readiness>\n"
+                        + "<--manifest=release with spaces/manifest.json>\n"
+                        + "<glob-*.json>\n"
+                        + "<$ORDENFIX_DO_NOT_EXPAND>\n"
+                        + "<quotes-'single'-\"double\">\n"
+                        + "<--flag=value with spaces>\n"
+                        + "<>\n");
         assertThat(process.stdoutLimitExceeded()).isFalse();
         assertThat(process.stderrLimitExceeded()).isFalse();
+    }
+
+    private static List<String> launcherCommand(
+            Path launcher,
+            List<String> arguments) {
+        var command = new ArrayList<String>();
+        command.add(launcher.toString());
+        command.addAll(arguments);
+        return List.copyOf(command);
     }
 }
