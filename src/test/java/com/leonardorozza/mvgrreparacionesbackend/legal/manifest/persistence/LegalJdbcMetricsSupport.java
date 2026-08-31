@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import javax.sql.DataSource;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.lang.reflect.Proxy;
 import java.sql.CallableStatement;
 import java.sql.Connection;
@@ -17,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
@@ -348,12 +351,17 @@ final class LegalJdbcMetricsSupport {
             long failures,
             long rowsRead,
             long maximumRowsRead,
+            long executionsWithTerminalNumericBinding,
+            Set<Long> terminalNumericBindings,
             Duration totalDuration,
             Duration maximumDuration
     ) {
         SqlSnapshot {
             Objects.requireNonNull(sql, "sql");
             Objects.requireNonNull(category, "category");
+            terminalNumericBindings = Set.copyOf(Objects.requireNonNull(
+                    terminalNumericBindings,
+                    "terminalNumericBindings"));
             Objects.requireNonNull(totalDuration, "totalDuration");
             Objects.requireNonNull(maximumDuration, "maximumDuration");
         }
@@ -443,6 +451,7 @@ final class LegalJdbcMetricsSupport {
         private final Metrics metrics;
         private final Connection connectionProxy;
         private final List<String> batchSql = new CopyOnWriteArrayList<>();
+        private final Map<Integer, Object> parameterBindings = new LinkedHashMap<>();
         private volatile String currentSql;
 
         private StatementInvocation(
@@ -478,6 +487,7 @@ final class LegalJdbcMetricsSupport {
                 try {
                     Object result = metrics.executeStatement(
                             sql,
+                            terminalNumericBinding(),
                             () -> LegalJdbcMetricsSupport.invoke(delegate, method, arguments));
                     return result instanceof ResultSet rows
                             ? instrumentResultSet(rows, sql, metrics, (Statement) proxy)
@@ -489,7 +499,13 @@ final class LegalJdbcMetricsSupport {
                 }
             }
             Object result = LegalJdbcMetricsSupport.invoke(delegate, method, arguments);
-            if ("addBatch".equals(method.getName())
+            if (isParameterBinding(method, arguments)) {
+                int index = (Integer) arguments[0];
+                Object value = "setNull".equals(method.getName()) ? null : arguments[1];
+                parameterBindings.put(index, value);
+            } else if ("clearParameters".equals(method.getName())) {
+                parameterBindings.clear();
+            } else if ("addBatch".equals(method.getName())
                     && arguments != null
                     && arguments.length == 1
                     && arguments[0] instanceof String addedSql) {
@@ -501,6 +517,47 @@ final class LegalJdbcMetricsSupport {
                 return instrumentResultSet(rows, currentSql, metrics, (Statement) proxy);
             }
             return result;
+        }
+
+        private static boolean isParameterBinding(Method method, Object[] arguments) {
+            return method.getName().startsWith("set")
+                    && arguments != null
+                    && arguments.length >= 2
+                    && arguments[0] instanceof Integer;
+        }
+
+        private Long terminalNumericBinding() {
+            return parameterBindings.entrySet().stream()
+                    .max(Map.Entry.comparingByKey())
+                    .map(Map.Entry::getValue)
+                    .map(StatementInvocation::exactLong)
+                    .orElse(null);
+        }
+
+        private static Long exactLong(Object value) {
+            try {
+                if (value instanceof Byte number) {
+                    return number.longValue();
+                }
+                if (value instanceof Short number) {
+                    return number.longValue();
+                }
+                if (value instanceof Integer number) {
+                    return number.longValue();
+                }
+                if (value instanceof Long number) {
+                    return number;
+                }
+                if (value instanceof BigInteger number) {
+                    return number.longValueExact();
+                }
+                if (value instanceof BigDecimal number) {
+                    return number.longValueExact();
+                }
+                return null;
+            } catch (ArithmeticException notAnExactLong) {
+                return null;
+            }
         }
 
         private String sqlForInvocation(Method method, Object[] arguments) {
@@ -546,7 +603,10 @@ final class LegalJdbcMetricsSupport {
             }
         }
 
-        private Object executeStatement(String sql, JdbcInvocation invocation) throws Throwable {
+        private Object executeStatement(
+                String sql,
+                Long terminalNumericBinding,
+                JdbcInvocation invocation) throws Throwable {
             String normalized = normalizeSql(sql);
             Category category = categoryOf(normalized);
             long started = System.nanoTime();
@@ -565,7 +625,10 @@ final class LegalJdbcMetricsSupport {
                 if (category == Category.ADVISORY_LOCK) {
                     maximumAdvisoryNanos.accumulateAndGet(duration, Math::max);
                 }
-                sqlMetrics(normalized, category).execution(duration, failed);
+                sqlMetrics(normalized, category).execution(
+                        duration,
+                        failed,
+                        terminalNumericBinding);
             }
         }
 
@@ -636,21 +699,27 @@ final class LegalJdbcMetricsSupport {
         private final AtomicLong failures = new AtomicLong();
         private final AtomicLong rowsRead = new AtomicLong();
         private final AtomicLong maximumRowsRead = new AtomicLong();
+        private final AtomicLong executionsWithTerminalNumericBinding = new AtomicLong();
         private final AtomicLong totalNanos = new AtomicLong();
         private final AtomicLong maximumNanos = new AtomicLong();
+        private final Set<Long> terminalNumericBindings = ConcurrentHashMap.newKeySet();
 
         private MutableSqlMetrics(String sql, Category category) {
             this.sql = sql;
             this.category = category;
         }
 
-        private void execution(long duration, boolean failed) {
+        private void execution(long duration, boolean failed, Long terminalNumericBinding) {
             executions.incrementAndGet();
             if (failed) {
                 failures.incrementAndGet();
             }
             totalNanos.addAndGet(duration);
             maximumNanos.accumulateAndGet(duration, Math::max);
+            if (terminalNumericBinding != null) {
+                executionsWithTerminalNumericBinding.incrementAndGet();
+                terminalNumericBindings.add(terminalNumericBinding);
+            }
         }
 
         private void rowRead(long resultSetRows) {
@@ -666,6 +735,8 @@ final class LegalJdbcMetricsSupport {
                     failures.get(),
                     rowsRead.get(),
                     maximumRowsRead.get(),
+                    executionsWithTerminalNumericBinding.get(),
+                    terminalNumericBindings,
                     Duration.ofNanos(totalNanos.get()),
                     Duration.ofNanos(maximumNanos.get()));
         }

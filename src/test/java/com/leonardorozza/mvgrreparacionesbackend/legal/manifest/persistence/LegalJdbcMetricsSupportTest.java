@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Savepoint;
 import java.sql.Statement;
+import java.sql.Types;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -319,6 +320,44 @@ class LegalJdbcMetricsSupportTest {
                         "{ call legal_refresh(?) }");
         assertThat(snapshot.executions(DML)).isEqualTo(1L);
         assertThat(snapshot.executions(OTHER)).isEqualTo(1L);
+    }
+
+    @Test
+    void capturesTheTerminalNumericBindingThatReachedEachPreparedExecution() throws Exception {
+        PreparedStatement driverStatement = mock(PreparedStatement.class);
+        String sql = "SELECT id FROM legal_publicaciones WHERE id = ? LIMIT ?";
+        when(driverConnection.prepareStatement(sql)).thenReturn(driverStatement);
+        when(driverStatement.execute()).thenReturn(false);
+        LegalJdbcMetricsSupport support = LegalJdbcMetricsSupport.instrument(
+                delegate,
+                Duration.ZERO);
+        PreparedStatement statement = support.dataSource()
+                .getConnection()
+                .prepareStatement(sql);
+
+        statement.setString(1, "publication");
+        statement.setInt(2, 513);
+        statement.execute();
+        statement.clearParameters();
+        statement.setString(1, "publication");
+        statement.setLong(2, 8_193L);
+        statement.execute();
+        statement.clearParameters();
+        statement.setString(1, "publication");
+        statement.setNull(2, Types.BIGINT);
+        statement.execute();
+        statement.clearParameters();
+        statement.setString(1, "publication");
+        statement.setObject(2, new java.math.BigDecimal("513.5"));
+        statement.execute();
+
+        LegalJdbcMetricsSupport.SqlSnapshot captured = support.snapshot().bySql().get(sql);
+        assertThat(captured.executions()).isEqualTo(4L);
+        assertThat(captured.executionsWithTerminalNumericBinding()).isEqualTo(2L);
+        assertThat(captured.terminalNumericBindings()).containsExactlyInAnyOrder(513L, 8_193L);
+        verify(driverStatement).setInt(2, 513);
+        verify(driverStatement).setLong(2, 8_193L);
+        verify(driverStatement, times(3)).clearParameters();
     }
 
     @Test
