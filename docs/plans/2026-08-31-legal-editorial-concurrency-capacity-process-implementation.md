@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: 10A, 10B y 10C cerrados; 10D a 10F pendientes
+Estado: 10A, 10B, 10C y 10D cerrados; 10E y 10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -509,7 +509,7 @@ registrar la misma razón o repetir bajo un entorno controlado. No hubo push ni 
 
 ## Subcorte 10D — Infraestructura de procesos
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31.
 
 ### Objetivo
 
@@ -577,7 +577,103 @@ Commit:
 
 ### Evidencia de cierre 10D
 
-Pendiente.
+El subcorte quedó implementado en ocho commits locales atómicos:
+
+- `09c0e68 test(legal): conserva resultados binarios de procesos`;
+- `9e8148b test(legal): cierra lifecycle de subprocesses`;
+- `f528f46 test(legal): aisla entorno de procesos legales`;
+- `23139f8 test(legal): congela limite de captura de procesos`;
+- `e021d67 test(legal): centraliza runner cli legal`;
+- `373bc47 test(legal): acredita fallo determinista de stdout`;
+- `5923eec test(legal): endurece launcher editorial`;
+- `d8f6a97 test(legal): conserva timeout del runner cli`.
+
+El rango modifica cinco archivos y todos pertenecen a `src/test`: cuatro existentes y el agente
+`LegalCliStdoutFailureAgent` nuevo. No modifica `src/main`, migraciones, properties, `pom.xml`,
+scripts, API productiva ni frontend. `LegalManifestImportProcessIT` no necesitó adaptación porque el soporte
+conservó compatibilidad; se recompiló y pasó sus nueve casos. El launcher productivo también quedó
+sin cambios porque la nueva caracterización confirmó su comportamiento actual.
+
+#### Contrato del soporte de procesos
+
+`ProcessResult` conserva stdout y stderr como bytes con copias defensivas, decodifica UTF-8 de
+forma estricta y expone duración monotónica, timeout, exit final y exceso independiente por cada
+stream. El límite se congeló exactamente en `1.048.576` bytes por stream; los lectores continúan
+drenando después del límite para no bloquear al hijo. El watchdog normal permanece en `90 s`, la
+gracia de terminación en `2 s` y las ventanas de captura y apagado de lectores en `5 s` cada una.
+
+El timeout corto se prueba con coordinación por archivo y `WatchService`, sin sleeps: el soporte
+cierra stdin, termina el proceso, escala a terminación forzada si hace falta, espera el exit final,
+cierra streams, cancela lectores y apaga el executor. Las rutas de excepción e interrupción
+repropagan `InterruptedException` después del cleanup; si una interrupción ocurre durante las
+propias esperas del cleanup, éste restaura el flag. La configuración nula, `stdoutMode` inválido y
+los timeouts no positivos o fuera de rango se rechazan antes de iniciar el hijo.
+
+El entorno hijo sustituye la herencia general del host por una base sintética. En POSIX parte de
+`PATH=<java.home>/bin:/usr/bin:/bin`, `TMPDIR`/`TMP`/`TEMP` apuntando al directorio de trabajo y
+`LANG`/`LC_ALL=C.UTF-8`. En Windows también sintetiza PATH y temporales, y sólo toma del host el
+valor de `SystemRoot` mediante búsqueda case-insensitive. Los overrides explícitos se aplican al
+final. Las pruebas niegan secretos y canales hostiles de JVM, Spring, OrdenFix, datasource,
+preload, shell, proxy y PostgreSQL. La puerta ejecutada acredita POSIX en macOS; la compatibilidad
+Linux queda diseñada y debe confirmarse en CI. Windows nativo no forma parte de 10D.
+
+`LegalManifestCliProcessIT` eliminó su runner duplicado —incluidas `155` líneas de motor local— y
+usa el soporte común con su timeout explícito de `75 s`. Sus doce casos de JAR, entorno,
+redacción, límite y PostgreSQL permanecieron verdes.
+
+#### Fallo de stdout y launcher
+
+El agente se construye dentro de `@TempDir`, en una ruta con espacios, con manifest
+`Premain-Class` y una única clase JDK-only. Se ubica primero en el classpath del hijo y reemplaza
+`System.out` antes de `main`. El probe escribe el contrato ASCII `0123456789` en dos bloques y
+congela tres resultados deterministas:
+
+| Modo | Exit | Stdout exacto |
+|---|---:|---|
+| sin agente | `0` | `0123456789` |
+| agente `N=0` | `3` | vacío |
+| agente `N=7` | `3` | `0123456` |
+
+Al alcanzar N, el agente cierra el descriptor real, marca el stream como fallido y mantiene
+`PrintStream.checkError()`. Como evidencia interactiva de la sesión, no persistida en los reportes
+finales, el ciclo TDD mostró dos rojos: primero no existían los bytes compilados del agente; con un
+`premain` no-op, el hijo todavía salía `0` cuando se esperaba `3`. La implementación final cerró
+ambos casos. Las reauditorías además endurecieron la semántica de escrituras vacías posteriores al
+fallo y la creación del JAR temporal mediante `CREATE_NEW`.
+
+Los dos JAR productivos conservan sus `Start-Class`, no declaran `Premain-Class`, `Agent-Class` ni
+`Launcher-Agent-Class`, y no contienen la clase del agente ni clases anidadas asociadas. El agente
+test-only todavía no se combina con apply y evidencia DB autoritativa: esa matriz pertenece a
+10E.
+
+El launcher real elimina `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS`. Un Java probe
+en ruta con espacios recibió literalmente y en orden una ruta de JAR con espacios, espacios
+internos, glob con coincidencia real, `$`, comillas simples/dobles, `--flag=value` y un argumento
+vacío. La coincidencia `glob-match.json` hace que una regresión de `"$@"` a `$@` falle de manera
+inequívoca. `scripts/legal-manifest-editor.sh` no necesitó cambios y pasó `sh -n`.
+
+#### Puertas, ambiente y auditoría
+
+Con Amazon Corretto `21.0.10+7-LTS` (`Corretto-21.0.10.7.1`), Maven `3.9.11`, Flyway `11.14.1`,
+macOS `26.6.2` aarch64 y PostgreSQL `16.14` mediante la imagen `postgres:16-alpine`, se validaron
+`27` migraciones hasta V27 y se ejecutó:
+
+- puerta focal: `LegalCliProcessSupportTest` `9/9` y `LegalManifestEditorLauncherTest` `1/1`, sin
+  fallos, errores ni omitidas, `BUILD SUCCESS`; tiempo de sesión observado `11,122 s`;
+- lifecycle limpio: las mismas `10` unitarias más `LegalManifestCliIsolationIT` `3/3`,
+  `LegalManifestCliProcessIT` `12/12`, `LegalManifestImportProcessIT` `9/9` y
+  `LegalEditorialPrivilegeVerifierIT` `8/8`; total `32` integraciones, cero fallos, errores u
+  omitidas, `BUILD SUCCESS`; tiempo de sesión observado `1:05`;
+- `sh -n scripts/legal-manifest-editor.sh`, `git diff --check` y `git status --short`, todos
+  limpios antes de abrir este commit documental.
+
+Las auditorías adversariales encontraron durante el desarrollo dos P3 del agente y un P2 de
+cobertura del glob; todos se corrigieron y las reauditorías cerraron sin P0–P3 técnicos. No hubo
+test flaky, retry automático ni reporte Failsafe reutilizado. Una auditoría documental posterior
+detectó que la migración del runner había sustituido sus `75 s` explícitos por el default de
+`90 s`; `d8f6a97` restauró el contrato anterior y motivó la segunda puerta integral desde
+`clean`. No hubo push ni deploy. La combinación del agente con el JAR editorial real, exit `3` y
+postestado PostgreSQL independiente queda expresamente reservada al subcorte 10E.
 
 ## Subcorte 10E — Matriz del JAR editorial
 
@@ -777,7 +873,7 @@ ausente sí bloquea el cierre.
 | 10A | `test(legal): acredita concurrencia editorial` |
 | 10B | `test(legal): acredita fallos editoriales` |
 | 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989` |
-| 10D | `test(legal): endurece procesos editoriales` |
+| 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97` |
 | 10E | `test(legal): acredita jar editorial` |
 | 10F | `docs(legal): cierra corte de procesos reales` |
 

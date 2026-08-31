@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado por el usuario el 2026-08-31; 10A–10C cerrados y 10D–10F pendientes
+Estado: aprobado por el usuario el 2026-08-31; 10A–10D cerrados y 10E–10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -273,10 +273,18 @@ El commit esperado es:
 
 ### 10D — Infraestructura de procesos
 
+Estado: cerrado el 2026-08-31.
+
 Ampliar `LegalCliProcessSupport` y sus pruebas; acreditar aislamiento, rol, propiedades hostiles y
 launcher sin completar todavía toda la matriz funcional del JAR. El commit esperado es:
 
     test(legal): endurece procesos editoriales
+
+Durante la implementación, ese commit previsto se descompuso en ocho microcommits test-only
+entre `09c0e68` y `d8f6a97`. La descomposición separa resultado binario, lifecycle, entorno,
+límite de captura, runner compartido, fallo determinista de stdout, launcher y preservación del
+timeout explícito del runner, sin ampliar el alcance aprobado. La evidencia detallada queda
+registrada en el plan de implementación.
 
 ### 10E — Matriz del JAR editorial
 
