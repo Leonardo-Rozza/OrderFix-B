@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado por el usuario el 2026-08-31; pendiente de implementación
+Estado: aprobado por el usuario el 2026-08-31; enmienda de capacidad aprobada el 2026-08-31
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -132,8 +132,26 @@ exacto observado bajo una frontera nueva permite concluir el resultado.
 
 ### `LegalEditorialCapacityIT`
 
-Nueva integración de capacidad editorial sobre el fixture contractual máximo: 128 documentos,
-256 requisitos y 16 scopes. El escenario combina reuse, adición, reemplazo `1→1`, split y merge.
+La capacidad se acredita con dos techos distintos, porque importación y proyección editorial no
+comparten la misma cardinalidad realizable:
+
+- `LegalManifestImportCapacityIT` conserva el máximo contractual importable de 128 documentos,
+  256 requisitos y 16 scopes;
+- `LegalEditorialCapacityIT` usa el máximo editorial compuesto de 87 documentos, 256 requisitos,
+  16 scopes y los 88 slots vigentes posibles.
+
+La separación fue aprobada por el usuario después de caracterizar el modelo V27. Cada documento
+requiere al menos un contexto y el slot vigente se identifica por `(tipo, locale, contexto)`.
+Con 11 tipos, un locale y ocho contextos existen 88 claves únicas. Un split `1→2` necesita que su
+predecesor ocupe al menos dos contextos y un merge `2→1` que su sucesor ocupe al menos dos; por
+eso fuente y target pueden contener como máximo 87 documentos mientras ocupan exactamente los 88
+slots. Los 128 documentos siguen siendo un límite válido de importación, pero no se presentan
+como una publicación READY.
+
+El escenario editorial combina 82 reuses, una adición compensada por un retiro, un lote `1→1`,
+un split `1→2` y un merge `2→1`. Mantiene 250 requisitos reutilizados y seis reemplazados. Un
+requisito READY puede referenciar como máximo 11 documentos dentro de su único contexto; el límite
+contractual de 16 referencias continúa acreditado sólo en el fixture importable.
 
 La instrumentación agrega 5 ms por ejecución JDBC lógica, mide por separado readiness, plan y
 apply, conserva el timeout real de statements y registra:

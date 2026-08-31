@@ -316,8 +316,9 @@ Estado: pendiente.
 
 ### Objetivo
 
-Medir readiness, plan y apply sobre el fixture máximo, congelar caps JDBC deterministas y bloquear
-lecturas no acotadas sin relajar presupuestos.
+Conservar el techo importable `128/256/16` y medir readiness, plan y apply sobre el techo editorial
+compuesto `87/256/16/88 slots`; congelar caps JDBC deterministas y bloquear lecturas no acotadas
+sin relajar presupuestos.
 
 ### Archivos
 
@@ -344,22 +345,26 @@ demuestre equivalencia exacta y el diff siga siendo acotado.
    excepción conserva duración; el delay de 5 ms se aplica una vez por ejecución lógica.
 2. Registrar por separado total, categoría SQL normalizada, mayor statement, sentencia del
    advisory lock, filas consumidas, commits/rollbacks y duración monotónica de operación.
-3. Construir fuente y target válidos de 128 documentos, 256 requisitos y los 16 scopes. Mantener el
-   máximo combinando reuse mayoritario, una adición compensada, un lote `1→1`, un split `1→2` y un
-   merge `2→1`, con requisitos reutilizados y reemplazados.
-4. Preparar estado sin instrumentación, promover la fuente y acreditar el plan compuesto exacto
+3. Mantener `LegalManifestImportCapacityIT` como acreditación separada del máximo contractual
+   importable de 128 documentos, 256 requisitos y 16 scopes; ese fixture no se promociona ni se
+   presenta como READY.
+4. Construir fuente y target editoriales de 87 documentos, 256 requisitos, 16 scopes y 88 slots
+   únicos. Combinar exactamente 82 reuses, una adición compensada por un retiro, un lote `1→1`,
+   un split `1→2` y un merge `2→1`; conservar 250 requisitos y reemplazar seis. Ningún requisito
+   READY puede referenciar más de los 11 documentos disponibles en su contexto.
+5. Preparar estado sin instrumentación, promover la fuente y acreditar el plan compuesto exacto
    antes de iniciar mediciones.
-5. Sobre el datasource editorial restringido instrumentado con 5 ms, resetear y medir por
+6. Sobre el datasource editorial restringido instrumentado con 5 ms, resetear y medir por
    separado readiness `NOT_READY`, plan `APPLICABLE` y apply `APPLIED`.
-6. Para cada operación exigir duración `<70 s`, statement `<30 s`, transacción productiva de 75 s,
+7. Para cada operación exigir duración `<70 s`, statement `<30 s`, transacción productiva de 75 s,
    rol/preflights exactos y resultado funcional correcto.
-7. Inventariar cada lectura multirrow por SQL normalizado. Agregar corrupción sentinel por familia
+8. Inventariar cada lectura multirrow por SQL normalizado. Agregar corrupción sentinel por familia
    de relación y exigir consumo máximo `expected + 1`; observer y setup usan otro datasource.
-8. Registrar primero valores observados. Tras revisar que no existe N+1, congelar caps exactos o
+9. Registrar primero valores observados. Tras revisar que no existe N+1, congelar caps exactos o
    márgenes enteros justificados por operación/categoría, nunca porcentajes arbitrarios.
-9. Medir memoria sólo si el entorno permite repetir la cifra bajo condiciones controladas. Si no,
+10. Medir memoria sólo si el entorno permite repetir la cifra bajo condiciones controladas. Si no,
    dejar la razón explícita para 10F sin inventar un cap.
-10. Si una lectura supera `expected + 1`, el tiempo excede el presupuesto o aparece batching
+11. Si una lectura supera `expected + 1`, el tiempo excede el presupuesto o aparece batching
     deficiente, detener 10C con prueba roja; no modificar producción, migraciones ni timeouts.
 
 ### Pruebas y puerta
@@ -576,8 +581,10 @@ No modificar frontend, runbooks, `FRONTEND_INTEGRATION.md`, `README.md`, código
 2. JDK/vendor, Maven, PostgreSQL, Flyway y 27 migraciones hasta V27.
 3. Comando exacto, duración de pared, Surefire/Failsafe, fallos, errores y omitidos de cada puerta.
 4. Resultado de cada carrera y fallo contrastado con filas, transiciones, secuencias y SQL owner.
-5. Fixture `128/256/16`, delay 5 ms y, por separado para readiness/plan/apply: observado, cap,
-   duración, llamadas totales/por categoría, mayor statement, advisory lock y `expected + 1`.
+5. Fixture importable `128/256/16`; fixture editorial compuesto `87/256/16/88 slots`, con un
+   máximo de 11 referencias por requisito READY; delay 5 ms y, por separado para
+   readiness/plan/apply: observado, cap, duración, llamadas totales/por categoría, mayor
+   statement, advisory lock y `expected + 1`.
 6. Memoria reproducible o razón explícita para no fijarla.
 7. Matriz JAR con estado, outcome, readiness, exit, JSON, stderr, canaries, rol y postestado DB.
 8. Nombre/hash/Start-Class/contenido de ambos JAR y ausencia de secretos/agente de test.
