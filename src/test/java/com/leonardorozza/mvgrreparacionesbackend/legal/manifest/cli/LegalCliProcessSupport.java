@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -113,6 +114,7 @@ final class LegalCliProcessSupport {
         sanitizeInheritedEnvironment(environment);
         environment.putAll(Map.copyOf(environmentOverrides));
 
+        long started = System.nanoTime();
         Process process = processBuilder.start();
         if (stdoutMode == StdoutMode.CLOSE_IMMEDIATELY) {
             process.getInputStream().close();
@@ -140,10 +142,13 @@ final class LegalCliProcessSupport {
             CapturedOutput stderr = standardError.get(5, TimeUnit.SECONDS);
             return new ProcessResult(
                     process.exitValue(),
-                    decodeUtf8(stdout.bytes()),
-                    decodeUtf8(stderr.bytes()),
+                    stdout.bytes(),
+                    stderr.bytes(),
                     stdout.limitExceeded(),
-                    stderr.limitExceeded());
+                    stderr.limitExceeded(),
+                    MAX_CAPTURE_BYTES,
+                    Duration.ofNanos(System.nanoTime() - started),
+                    false);
         } finally {
             readers.shutdownNow();
         }
@@ -175,12 +180,18 @@ final class LegalCliProcessSupport {
         }
     }
 
-    private static String decodeUtf8(byte[] bytes) throws CharacterCodingException {
-        return StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString();
+    private static String decodeUtf8(byte[] bytes, String streamName) {
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+        } catch (CharacterCodingException exception) {
+            throw new AssertionError(
+                    "El stream " + streamName + " del proceso no es UTF-8 válido",
+                    exception);
+        }
     }
 
     private static void requireRegularFile(Path artifact, String description) {
@@ -205,11 +216,45 @@ final class LegalCliProcessSupport {
 
     record ProcessResult(
             int exitCode,
-            String stdout,
-            String stderr,
+            byte[] stdoutBytes,
+            byte[] stderrBytes,
             boolean stdoutLimitExceeded,
-            boolean stderrLimitExceeded
-    ) { }
+            boolean stderrLimitExceeded,
+            int captureLimitBytes,
+            Duration wallDuration,
+            boolean timedOut
+    ) {
+
+        ProcessResult {
+            stdoutBytes = Objects.requireNonNull(stdoutBytes, "stdoutBytes").clone();
+            stderrBytes = Objects.requireNonNull(stderrBytes, "stderrBytes").clone();
+            wallDuration = Objects.requireNonNull(wallDuration, "wallDuration");
+            if (captureLimitBytes <= 0) {
+                throw new IllegalArgumentException("captureLimitBytes debe ser positivo");
+            }
+            if (wallDuration.isNegative()) {
+                throw new IllegalArgumentException("wallDuration no puede ser negativa");
+            }
+        }
+
+        @Override
+        public byte[] stdoutBytes() {
+            return stdoutBytes.clone();
+        }
+
+        @Override
+        public byte[] stderrBytes() {
+            return stderrBytes.clone();
+        }
+
+        String stdout() {
+            return decodeUtf8(stdoutBytes, "stdout");
+        }
+
+        String stderr() {
+            return decodeUtf8(stderrBytes, "stderr");
+        }
+    }
 
     private record CapturedOutput(byte[] bytes, boolean limitExceeded) {
         private static CapturedOutput empty() {
