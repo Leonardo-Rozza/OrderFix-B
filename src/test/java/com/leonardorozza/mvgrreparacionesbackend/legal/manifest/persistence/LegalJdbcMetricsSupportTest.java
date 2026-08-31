@@ -73,7 +73,6 @@ class LegalJdbcMetricsSupportTest {
         statement.executeLargeUpdate("DELETE FROM legal_publicaciones");
         statement.addBatch("INSERT INTO legal_auditoria(id) VALUES (1)");
         statement.executeBatch();
-        statement.clearBatch();
         statement.addBatch("INSERT INTO legal_auditoria(id) VALUES (2)");
         statement.executeLargeBatch();
         LegalJdbcMetricsSupport.Snapshot snapshot = support.snapshot();
@@ -86,8 +85,10 @@ class LegalJdbcMetricsSupportTest {
         assertThat(snapshot.executions(OTHER)).isZero();
         assertThat(snapshot.executionsContaining("SELECT", "2")).isEqualTo(1L);
         assertThat(snapshot.rowsReadContaining("SELECT", "2")).isEqualTo(1L);
+        assertThat(snapshot.maximumRowsReadContaining("SELECT", "2")).isEqualTo(1L);
         assertThat(snapshot.bySql()).containsKey("SELECT 1");
         assertThat(snapshot.executionsContaining("INSERT INTO legal_auditoria")).isEqualTo(2L);
+        assertThat(snapshot.bySql().keySet()).noneMatch(sql -> sql.contains(";"));
         assertThat(delays).hasValue(6L);
         verify(driverStatement).executeBatch();
         verify(driverStatement).executeLargeBatch();
@@ -150,6 +151,39 @@ class LegalJdbcMetricsSupportTest {
         assertThat(connection.unwrap(Connection.class)).isSameAs(connection);
         assertThat(support.snapshot().rowsRead()).isEqualTo(1L);
         assertThat(support.snapshot().rowsReadContaining("legal_publicaciones")).isEqualTo(1L);
+        assertThat(support.snapshot().maximumRowsReadContaining("legal_publicaciones"))
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void keepsAggregateRowsAndMaximumCardinalityPerResultSetSeparate() throws Exception {
+        Statement driverStatement = mock(Statement.class);
+        ResultSet firstRows = mock(ResultSet.class);
+        ResultSet secondRows = mock(ResultSet.class);
+        when(driverConnection.createStatement()).thenReturn(driverStatement);
+        when(driverStatement.executeQuery("SELECT id FROM legal_documentos"))
+                .thenReturn(firstRows, secondRows);
+        when(firstRows.next()).thenReturn(true, true, false);
+        when(secondRows.next()).thenReturn(true, true, true, false);
+        LegalJdbcMetricsSupport support = LegalJdbcMetricsSupport.instrument(
+                delegate,
+                Duration.ZERO);
+        Statement statement = support.dataSource().getConnection().createStatement();
+
+        ResultSet first = statement.executeQuery("SELECT id FROM legal_documentos");
+        while (first.next()) {
+            // Consume the complete first driver result.
+        }
+        ResultSet second = statement.executeQuery("SELECT id FROM legal_documentos");
+        while (second.next()) {
+            // Consume the complete second driver result.
+        }
+        LegalJdbcMetricsSupport.SqlSnapshot sql = support.snapshot().bySql()
+                .get("SELECT id FROM legal_documentos");
+
+        assertThat(sql.executions()).isEqualTo(2L);
+        assertThat(sql.rowsRead()).isEqualTo(5L);
+        assertThat(sql.maximumRowsRead()).isEqualTo(3L);
     }
 
     @Test
@@ -179,13 +213,51 @@ class LegalJdbcMetricsSupportTest {
         assertThat(delays).hasValue(1L);
         assertThat(snapshot.statementExecutions()).isEqualTo(1L);
         assertThat(snapshot.commits()).isEqualTo(1L);
-        assertThat(snapshot.rollbacks()).isEqualTo(2L);
+        assertThat(snapshot.rollbacks()).isEqualTo(1L);
         assertThat(snapshot.roundTrips()).isEqualTo(1L);
         assertThat(snapshot.executions(TX_CONTROL)).isZero();
         assertThat(snapshot.bySql()).doesNotContainKeys("<commit>", "<rollback>");
         verify(credentialsConnection).commit();
         verify(credentialsConnection).rollback();
         verify(credentialsConnection).rollback(org.mockito.ArgumentMatchers.any(Savepoint.class));
+    }
+
+    @Test
+    void countsOnlySuccessfulTransactionCompletions() throws Exception {
+        SQLException commitFailure = new SQLException("commit failed");
+        SQLException rollbackFailure = new SQLException("rollback failed");
+        org.mockito.Mockito.doThrow(commitFailure).when(driverConnection).commit();
+        org.mockito.Mockito.doThrow(rollbackFailure).when(driverConnection).rollback();
+        LegalJdbcMetricsSupport support = LegalJdbcMetricsSupport.instrument(
+                delegate,
+                Duration.ZERO);
+        Connection connection = support.dataSource().getConnection();
+
+        assertThatThrownBy(connection::commit).isSameAs(commitFailure);
+        assertThatThrownBy(connection::rollback).isSameAs(rollbackFailure);
+
+        assertThat(support.snapshot().commits()).isZero();
+        assertThat(support.snapshot().rollbacks()).isZero();
+    }
+
+    @Test
+    void delayFailureBeforeTheDriverIsNotCountedAsARoundTrip() throws Exception {
+        Statement driverStatement = mock(Statement.class);
+        SQLException delayFailure = new SQLException("latency probe interrupted");
+        when(driverConnection.createStatement()).thenReturn(driverStatement);
+        LegalJdbcMetricsSupport support = LegalJdbcMetricsSupport.instrument(
+                delegate,
+                Duration.ofMillis(5),
+                ignored -> {
+                    throw delayFailure;
+                });
+
+        Statement statement = support.dataSource().getConnection().createStatement();
+        assertThatThrownBy(() -> statement.execute("SELECT 1")).isSameAs(delayFailure);
+
+        assertThat(support.snapshot().roundTrips()).isZero();
+        assertThat(support.snapshot().bySql()).isEmpty();
+        verify(driverStatement, times(0)).execute("SELECT 1");
     }
 
     @Test

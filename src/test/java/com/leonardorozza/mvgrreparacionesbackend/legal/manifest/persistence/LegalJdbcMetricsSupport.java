@@ -27,7 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>The proxy measures logical driver executions, not individual rows in a batch. It deliberately
  * keeps transaction completion separate from statements so the configured latency models a JDBC
- * statement round trip without changing commit or rollback behaviour.</p>
+ * statement round trip without changing commit or rollback behaviour. A statement is counted only
+ * after the artificial delay reaches the driver, and commit/rollback counters represent successful
+ * full-transaction completions.</p>
  */
 final class LegalJdbcMetricsSupport {
 
@@ -174,7 +176,7 @@ final class LegalJdbcMetricsSupport {
                                 "commit",
                                 () -> invoke(delegate, method, arguments));
                     }
-                    if ("rollback".equals(method.getName())) {
+                    if ("rollback".equals(method.getName()) && method.getParameterCount() == 0) {
                         return metrics.completeTransaction(
                                 "rollback",
                                 () -> invoke(delegate, method, arguments));
@@ -211,6 +213,7 @@ final class LegalJdbcMetricsSupport {
             Metrics metrics,
             Statement statementProxy) {
         Objects.requireNonNull(delegate, "resultSet");
+        AtomicLong resultSetRows = new AtomicLong();
         return (ResultSet) Proxy.newProxyInstance(
                 LegalJdbcMetricsSupport.class.getClassLoader(),
                 new Class<?>[]{ResultSet.class},
@@ -230,7 +233,7 @@ final class LegalJdbcMetricsSupport {
                     }
                     Object result = invoke(delegate, method, arguments);
                     if ("next".equals(method.getName()) && Boolean.TRUE.equals(result)) {
-                        metrics.rowRead(sql);
+                        metrics.rowRead(sql, resultSetRows.incrementAndGet());
                     }
                     return result;
                 });
@@ -344,6 +347,7 @@ final class LegalJdbcMetricsSupport {
             long executions,
             long failures,
             long rowsRead,
+            long maximumRowsRead,
             Duration totalDuration,
             Duration maximumDuration
     ) {
@@ -390,6 +394,13 @@ final class LegalJdbcMetricsSupport {
             return matching(fragments).values().stream()
                     .mapToLong(SqlSnapshot::rowsRead)
                     .sum();
+        }
+
+        long maximumRowsReadContaining(String... fragments) {
+            return matching(fragments).values().stream()
+                    .mapToLong(SqlSnapshot::maximumRowsRead)
+                    .max()
+                    .orElse(0L);
         }
 
         Map<String, SqlSnapshot> matching(String... fragments) {
@@ -463,12 +474,19 @@ final class LegalJdbcMetricsSupport {
             String sql = sqlForInvocation(method, arguments);
             if (isExecution(method)) {
                 currentSql = sql;
-                Object result = metrics.executeStatement(
-                        sql,
-                        () -> LegalJdbcMetricsSupport.invoke(delegate, method, arguments));
-                return result instanceof ResultSet rows
-                        ? instrumentResultSet(rows, sql, metrics, (Statement) proxy)
-                        : result;
+                boolean dynamicBatch = isDynamicBatchExecution(method);
+                try {
+                    Object result = metrics.executeStatement(
+                            sql,
+                            () -> LegalJdbcMetricsSupport.invoke(delegate, method, arguments));
+                    return result instanceof ResultSet rows
+                            ? instrumentResultSet(rows, sql, metrics, (Statement) proxy)
+                            : result;
+                } finally {
+                    if (dynamicBatch) {
+                        batchSql.clear();
+                    }
+                }
             }
             Object result = LegalJdbcMetricsSupport.invoke(delegate, method, arguments);
             if ("addBatch".equals(method.getName())
@@ -498,6 +516,12 @@ final class LegalJdbcMetricsSupport {
                 return String.join("; ", batchSql);
             }
             return preparedSql;
+        }
+
+        private boolean isDynamicBatchExecution(Method method) {
+            return ("executeBatch".equals(method.getName())
+                    || "executeLargeBatch".equals(method.getName()))
+                    && DYNAMIC_STATEMENT_SQL.equals(preparedSql);
         }
     }
 
@@ -547,21 +571,19 @@ final class LegalJdbcMetricsSupport {
 
         private Object completeTransaction(String operation, JdbcInvocation invocation)
                 throws Throwable {
-            try {
-                return invocation.invoke();
-            } finally {
-                if ("commit".equals(operation)) {
-                    commits.incrementAndGet();
-                } else {
-                    rollbacks.incrementAndGet();
-                }
+            Object result = invocation.invoke();
+            if ("commit".equals(operation)) {
+                commits.incrementAndGet();
+            } else {
+                rollbacks.incrementAndGet();
             }
+            return result;
         }
 
-        private void rowRead(String sql) {
+        private void rowRead(String sql, long resultSetRows) {
             String normalized = normalizeSql(sql);
             rowsRead.incrementAndGet();
-            sqlMetrics(normalized, categoryOf(normalized)).rowRead();
+            sqlMetrics(normalized, categoryOf(normalized)).rowRead(resultSetRows);
         }
 
         private MutableSqlMetrics sqlMetrics(String normalized, Category category) {
@@ -613,6 +635,7 @@ final class LegalJdbcMetricsSupport {
         private final AtomicLong executions = new AtomicLong();
         private final AtomicLong failures = new AtomicLong();
         private final AtomicLong rowsRead = new AtomicLong();
+        private final AtomicLong maximumRowsRead = new AtomicLong();
         private final AtomicLong totalNanos = new AtomicLong();
         private final AtomicLong maximumNanos = new AtomicLong();
 
@@ -630,8 +653,9 @@ final class LegalJdbcMetricsSupport {
             maximumNanos.accumulateAndGet(duration, Math::max);
         }
 
-        private void rowRead() {
+        private void rowRead(long resultSetRows) {
             rowsRead.incrementAndGet();
+            maximumRowsRead.accumulateAndGet(resultSetRows, Math::max);
         }
 
         private SqlSnapshot snapshot() {
@@ -641,6 +665,7 @@ final class LegalJdbcMetricsSupport {
                     executions.get(),
                     failures.get(),
                     rowsRead.get(),
+                    maximumRowsRead.get(),
                     Duration.ofNanos(totalNanos.get()),
                     Duration.ofNanos(maximumNanos.get()));
         }
