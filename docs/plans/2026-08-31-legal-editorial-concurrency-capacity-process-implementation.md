@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: 10A cerrado; 10B a 10F pendientes
+Estado: 10A y 10B cerrados; 10C a 10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -193,7 +193,7 @@ timeouts ni presupuestos. `git diff --check` quedó limpio. No hubo push ni depl
 
 ## Subcorte 10B — Fallos y recuperación
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31.
 
 ### Objetivo
 
@@ -222,11 +222,14 @@ Reutilizar sin eliminar cobertura:
 ### Implementación TDD
 
 1. Timeout: retener el advisory lock, ejecutar apply con `LegalDatabaseBudgets(5, 2, 1, 1)` y
-   exigir `ERROR/persisted=false` con `DB_LOCK_TIMEOUT`, snapshot exacto y cero DML confirmado.
-   Liberar; el retry aplica una vez y el siguiente replay devuelve `ALREADY_APPLIED`.
+   acreditar SQLState crudo `55P03`, mapeado por el contrato editorial público a
+   `ERROR/persisted=false` con issue `CONCURRENT_OPERATION`, snapshot exacto y cero DML
+   confirmado. Liberar; el retry aplica una vez y el siguiente replay devuelve
+   `ALREADY_APPLIED`.
 2. Deadlock real: una transacción externa retiene una identidad que REPLACE necesita; observar al
    apply bloqueado y recién entonces hacer que el holder solicite el advisory lock que el apply ya
-   posee. Exigir SQLState `40P01` mapeado a `DB_CONCURRENCY`, rollback completo y retry convergente.
+   posee. Exigir SQLState crudo `40P01`, mapeado por el contrato editorial público al issue
+   `CONCURRENT_OPERATION`, rollback completo y retry convergente.
 3. Session kill antes de commit: detener apply en un checkpoint SQL observable, capturar el PID y
    ejecutar `pg_terminate_backend`. Una frontera owner nueva debe acreditar source exacto; el
    resultado no puede ser APPLIED y el retry debe aplicar exactamente una vez.
@@ -253,7 +256,59 @@ Commit:
 
 ### Evidencia de cierre 10B
 
-Pendiente.
+El subcorte quedó implementado en el commit local atómico:
+
+- `794c9b2 test(legal): acredita fallos editoriales`.
+
+La matriz nueva usa roles importador/editorial restringidos, observer owner independiente y
+PostgreSQL real. Congela estos cinco resultados:
+
+1. El timeout del advisory acredita SQLState crudo `55P03`, resultado público
+   `ERROR/persisted=false`, issue `CONCURRENT_OPERATION` en `database/concurrency`, cero writer,
+   cero DML y snapshot exacto. Tras liberar el lock, el retry devuelve `APPLIED` y el replay
+   `ALREADY_APPLIED` sin writer ni DML adicional.
+2. El deadlock de `REPLACE` pausa el apply justo antes de `FOR UPDATE`, confirma que ya posee el
+   advisory y que el holder externo espera ese PID, y recién entonces habilita el row lock. El
+   ciclo bidireccional produce `40P01`, mapeado a `CONCURRENT_OPERATION`, con rollback completo,
+   cero DML y snapshot exacto. Retry y replay convergen sin duplicación.
+3. El session kill observa al `PROMOTE` real bloqueado en la publicación antes de cualquier DML,
+   termina ese PID y espera su ausencia de `pg_stat_activity`. Una frontera read-only nueva
+   acredita `SOURCE_EXACT`; el resultado es `ERROR/persisted=false` con
+   `EDITORIAL_OBSERVATION_FAILED`, sin metadata tentativa. El mismo servicio recupera el pool,
+   aplica una vez y luego confirma replay sin writer ni DML adicional.
+4. La pérdida de ACK con reconciliación disponible devuelve
+   `ALREADY_APPLIED/persisted=true`, reconstruye el receipt exacto desde PostgreSQL y deja un solo
+   writer persistido. El replay conserva receipt, filas, secuencias y contador DML.
+5. La pérdida de ACK con la siguiente frontera read-only indisponible devuelve
+   `UNKNOWN/persisted=null`, issue único `COMMIT_OUTCOME_UNKNOWN` en `database/commit` y cero
+   metadata tentativa; el canary interno queda redactado. El owner prueba que el commit ocurrió y
+   retry/replay convergen sin writer ni DML duplicado.
+
+Todos los escenarios correlacionan PID/blocker, outcome, `persisted`, issue público, receipt,
+writer, sentencias DML y snapshots exactos de filas, conteos y secuencias V27. El contador JDBC
+test-only cubre las rutas productivas actuales `execute`, `update` y `batchUpdate`; el cleanup
+termina y junta workers antes de liberar conexiones compartidas.
+
+`LegalEditorialITFixture` se conservó sin cambios deliberadamente: los holders, conexiones,
+executors y probes de PID pertenecen al soporte de integración que controla su ciclo de vida, no
+al fixture declarativo compartido.
+
+La primera ejecución focal directa llegó a `4/5` por una assertion de conteo de `REPLACE` más
+estricta que el contrato. Se corrigió únicamente la prueba para comparar el receipt y el
+postestado contractual; no se tocó producción. Después quedaron verdes, con Amazon Corretto
+`21.0.10`, PostgreSQL `16.14` y schema legal V27:
+
+- puerta focal limpia: `4.263` unitarias + `5` integraciones, sin fallos, errores ni omitidas, en
+  `1:19`;
+- matriz de regresión limpia: `4.263` unitarias + `25` integraciones, sin fallos, errores ni
+  omitidas, en `1:46`.
+
+Tres revisiones adversariales independientes encontraron inicialmente cobertura insuficiente del
+writer de retry, ausencia de contador DML literal y una carrera/cleanup mejorable en el deadlock.
+Tras agregar las assertions, el contador JDBC, el checkpoint previo al row lock y el cleanup por
+PID/application name, las tres reauditorías cerraron sin hallazgos P0–P3. `git diff --check` quedó
+limpio. No se modificaron `src/main`, migraciones, V27, grants, roles productivos, `pom.xml`, API,
+frontend, presupuestos ni timeouts. No hubo push ni deploy.
 
 ## Subcorte 10C — Capacidad
 
