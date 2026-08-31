@@ -627,6 +627,48 @@ class LegalEditorialCliTest {
     }
 
     @Test
+    void terminalErrorAndUnknownResultsRemainAuthoritativeAtTheCliBoundary()
+            throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        LegalEditorialApplyResult errorResult = knownErrorResult();
+        LegalEditorialApplyResult terminalUnknown = unknownResult();
+        when(service.applyPromote(release))
+                .thenReturn(errorResult, terminalUnknown);
+        prepareSuccessfulContext(Command.APPLY_PROMOTE, LegalEditorialApplyService.class, service);
+        ByteArrayOutputStream errorOutput = new ByteArrayOutputStream();
+        ByteArrayOutputStream unknownOutput = new ByteArrayOutputStream();
+
+        int errorExit = cli().runSafely(validArguments(Command.APPLY_PROMOTE), errorOutput);
+        int unknownExit = cli().runSafely(validArguments(Command.APPLY_PROMOTE), unknownOutput);
+
+        JsonNode errorReport = report(errorOutput);
+        assertThat(errorExit).isEqualTo(3);
+        assertThat(errorReport.path("status").textValue()).isEqualTo("ERROR");
+        assertThat(errorReport.path("persisted").isBoolean()).isTrue();
+        assertThat(errorReport.path("persisted").booleanValue()).isFalse();
+        assertThat(errorReport.path("operation").path("outcome").textValue())
+                .isEqualTo("ERROR");
+        assertThat(errorReport.path("issues").path(0).path("code").textValue())
+                .isEqualTo("POSTCONDITION_NOT_READY");
+
+        JsonNode unknownReport = report(unknownOutput);
+        assertThat(unknownExit).isEqualTo(3);
+        assertThat(unknownReport.path("status").textValue()).isEqualTo("ERROR");
+        assertThat(unknownReport.path("persisted").isNull()).isTrue();
+        assertThat(unknownReport.path("operation").path("outcome").textValue())
+                .isEqualTo("UNKNOWN");
+        assertThat(unknownReport.path("issues").path(0).path("code").textValue())
+                .isEqualTo("COMMIT_OUTCOME_UNKNOWN");
+        for (JsonNode report : List.of(errorReport, unknownReport)) {
+            assertThat(report.path("publication").path("publicationUuid").isNull()).isTrue();
+            assertThat(report.path("operation").path("appliedAt").isNull()).isTrue();
+            assertThat(report.path("readiness").isNull()).isTrue();
+            assertThat(report.path("counts").path("state").isNull()).isTrue();
+            assertThat(report.path("counts").path("delta").isNull()).isTrue();
+        }
+    }
+
+    @Test
     void confirmedResultSurvivesContextCloseAndFirstSerializationFailure()
             throws IOException {
         LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
@@ -667,6 +709,26 @@ class LegalEditorialCliTest {
 
         assertThat(exit).isEqualTo(3);
         assertThat(output.writeAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    void partialStdoutAfterConfirmedApplyReturnsThreeWithoutUnknownFallback()
+            throws IOException {
+        LegalEditorialApplyService service = mock(LegalEditorialApplyService.class);
+        LegalEditorialApplyResult result = appliedResult();
+        when(service.applyPromote(release)).thenReturn(result);
+        prepareSuccessfulContext(Command.APPLY_PROMOTE, LegalEditorialApplyService.class, service);
+        PrefixThenFailOutputStream output = new PrefixThenFailOutputStream(
+                "\"outcome\":\"APPLIED\"");
+
+        int exit = cli().runSafely(validArguments(Command.APPLY_PROMOTE), output);
+
+        assertThat(exit).isEqualTo(3);
+        assertThat(output.writeAttempts()).isEqualTo(1);
+        assertThat(output.contents())
+                .containsOnlyOnce("\"reportVersion\":3")
+                .contains("\"outcome\":\"APPLIED\"")
+                .doesNotContain("\"outcome\":\"UNKNOWN\"");
     }
 
     @Test
@@ -906,6 +968,32 @@ class LegalEditorialCliTest {
         return result;
     }
 
+    private static LegalEditorialApplyResult knownErrorResult() {
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.ERROR);
+        when(result.persisted()).thenReturn(Boolean.FALSE);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.ERROR);
+        when(result.receipt()).thenReturn(Optional.empty());
+        when(result.issues()).thenReturn(List.of(issue(
+                LegalManifestIssueCode.POSTCONDITION_NOT_READY,
+                "database/postcondition")));
+        when(result.omittedIssueCount()).thenReturn(0);
+        return result;
+    }
+
+    private static LegalEditorialApplyResult unknownResult() {
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.ERROR);
+        when(result.persisted()).thenReturn(null);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.UNKNOWN);
+        when(result.receipt()).thenReturn(Optional.empty());
+        when(result.issues()).thenReturn(List.of(issue(
+                LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                "database/commit")));
+        when(result.omittedIssueCount()).thenReturn(0);
+        return result;
+    }
+
     private static LegalEditorialApplyResult appliedReplaceResult() {
         LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
                 LegalEditorialApplyReceipt.OperationType.REPLACE,
@@ -973,6 +1061,45 @@ class LegalEditorialCliTest {
 
         private int writeAttempts() {
             return writeAttempts;
+        }
+    }
+
+    private static final class PrefixThenFailOutputStream extends OutputStream {
+
+        private final String marker;
+        private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        private int writeAttempts;
+
+        private PrefixThenFailOutputStream(String marker) {
+            this.marker = marker;
+        }
+
+        @Override
+        public void write(int value) throws IOException {
+            writeAttempts++;
+            captured.write(value);
+            throw new IOException("stdout-truncated");
+        }
+
+        @Override
+        public void write(byte[] bytes, int offset, int length) throws IOException {
+            writeAttempts++;
+            String chunk = new String(bytes, offset, length, StandardCharsets.UTF_8);
+            int markerOffset = chunk.indexOf(marker);
+            int prefixLength = markerOffset < 0
+                    ? Math.min(length, 1)
+                    : chunk.substring(0, markerOffset + marker.length())
+                            .getBytes(StandardCharsets.UTF_8).length;
+            captured.write(bytes, offset, prefixLength);
+            throw new IOException("stdout-truncated");
+        }
+
+        private int writeAttempts() {
+            return writeAttempts;
+        }
+
+        private String contents() {
+            return captured.toString(StandardCharsets.UTF_8);
         }
     }
 

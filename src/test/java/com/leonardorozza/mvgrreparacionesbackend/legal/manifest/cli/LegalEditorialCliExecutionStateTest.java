@@ -49,6 +49,40 @@ class LegalEditorialCliExecutionStateTest {
     @EnumSource(
             value = Command.class,
             names = {"APPLY_PROMOTE", "APPLY_REPLACE", "APPLY_RETIRE"})
+    void terminalUnknownApplySurvivesContextCloseAndSerializationFailure(Command command) {
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.persisted()).thenReturn(null);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.UNKNOWN);
+        LegalEditorialCliExecutionState state = fullyOpened(command, release);
+        ValidatedEditorialPlan confirmedPlan = state.snapshot().editorialPlan().orElse(null);
+
+        state.resultReceived(result);
+        state.contextClosed();
+        state.reportSerializationStarted();
+        state.reportSerializationFailed();
+
+        LegalEditorialCliExecutionState.Snapshot snapshot = state.snapshot();
+        assertThat(snapshot.phase())
+                .isEqualTo(LegalEditorialCliExecutionState.Phase.REPORT_SERIALIZATION_FAILED);
+        assertThat(snapshot.release()).containsSame(release);
+        if (command.requiresEditorialPlan()) {
+            assertThat(snapshot.editorialPlan()).containsSame(confirmedPlan);
+        } else {
+            assertThat(snapshot.editorialPlan()).isEmpty();
+        }
+        assertThat(snapshot.applyResult()).containsSame(result);
+        assertThat(snapshot.applyResult().orElseThrow().outcome())
+                .isEqualTo(LegalEditorialApplyResult.Outcome.UNKNOWN);
+        assertThat(snapshot.persisted()).isNull();
+        assertThat(snapshot.readinessResult()).isEmpty();
+        assertThat(snapshot.planResult()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = Command.class,
+            names = {"APPLY_PROMOTE", "APPLY_REPLACE", "APPLY_RETIRE"})
     void applyWithoutTerminalResultBecomesUnknownAfterInvocationStarts(Command command) {
         ValidatedRelease release = mock(ValidatedRelease.class);
         LegalEditorialCliExecutionState state = fullyOpened(command, release);

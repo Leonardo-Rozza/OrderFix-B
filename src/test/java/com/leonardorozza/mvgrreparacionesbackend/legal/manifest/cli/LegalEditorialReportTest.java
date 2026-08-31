@@ -375,6 +375,52 @@ class LegalEditorialReportTest {
     }
 
     @Test
+    void alreadyAppliedKeepsDatabaseEvidenceIndependentFromCallerPlanIdentity() {
+        UUID otherOperationId =
+                UUID.fromString("00000000-0000-0000-0000-000000000011");
+        String otherPlanSha256 =
+                "875a60b975386133f8f06ecf4b48c27a12e831724c49cbc9861ce541562f0c0f";
+        LegalEditorialApplyReceipt databaseReceipt = replaceReceipt();
+        LegalEditorialApplyResult replay = applyResult(
+                LegalManifestStatus.PASS,
+                Boolean.TRUE,
+                LegalEditorialApplyResult.Outcome.ALREADY_APPLIED,
+                databaseReceipt,
+                List.of());
+
+        LegalEditorialReport first = LegalEditorialReport.forApplyReplace(
+                release,
+                validatedReplacePlan(OPERATION_ID, PLAN_SHA256),
+                replay);
+        LegalEditorialReport other = LegalEditorialReport.forApplyReplace(
+                release,
+                validatedReplacePlan(otherOperationId, otherPlanSha256),
+                replay);
+
+        for (LegalEditorialReport report : List.of(first, other)) {
+            assertThat(report.status()).isEqualTo(LegalManifestStatus.PASS);
+            assertThat(report.persisted()).isTrue();
+            assertThat(report.operation().outcome())
+                    .isEqualTo(LegalEditorialReport.Outcome.ALREADY_APPLIED);
+            assertThat(report.publication().publicationUuid()).isEqualTo(PUBLICATION_UUID);
+            assertThat(report.operation().appliedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(report.readiness().value()).isEqualTo(LegalEditorialReadiness.READY);
+            assertThat(report.counts().state())
+                    .isEqualTo(new LegalEditorialReport.StateCounts(
+                            11, 6, 34, 12, 11, 8, 1));
+            assertThat(report.counts().delta()).isNull();
+        }
+        assertThat(first.operation()).isEqualTo(other.operation());
+        assertThat(first.publication()).isEqualTo(other.publication());
+        assertThat(first.readiness()).isEqualTo(other.readiness());
+        assertThat(first.counts()).isEqualTo(other.counts());
+        assertThat(first.plan().operationId()).isEqualTo(OPERATION_ID);
+        assertThat(first.plan().editorialPlanSha256()).isEqualTo(PLAN_SHA256);
+        assertThat(other.plan().operationId()).isEqualTo(otherOperationId);
+        assertThat(other.plan().editorialPlanSha256()).isEqualTo(otherPlanSha256);
+    }
+
+    @Test
     void applyRetireClosesSuccessReplayAndAllFailureRowsWithNotReadyIdentity() {
         ValidatedEditorialPlan editorialPlan = validatedRetirePlan();
         LegalEditorialReport applied = LegalEditorialReport.forApplyRetire(
@@ -748,6 +794,49 @@ class LegalEditorialReportTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void unknownRejectsEveryMatchingTentativeReceiptBeforeExposingDatabaseMetadata() {
+        LegalEditorialApplyResult poisonedPromote = applyResult(
+                LegalManifestStatus.ERROR,
+                null,
+                LegalEditorialApplyResult.Outcome.UNKNOWN,
+                receipt(),
+                List.of(issue(
+                        LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                        "database/commit")));
+        LegalEditorialApplyResult poisonedReplace = applyResult(
+                LegalManifestStatus.ERROR,
+                null,
+                LegalEditorialApplyResult.Outcome.UNKNOWN,
+                replaceReceipt(),
+                List.of(issue(
+                        LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                        "database/commit")));
+        LegalEditorialApplyResult poisonedRetire = applyResult(
+                LegalManifestStatus.ERROR,
+                null,
+                LegalEditorialApplyResult.Outcome.UNKNOWN,
+                retireReceipt(),
+                List.of(issue(
+                        LegalManifestIssueCode.COMMIT_OUTCOME_UNKNOWN,
+                        "database/commit")));
+
+        assertThatThrownBy(() -> LegalEditorialReport.forApplyPromote(
+                release,
+                poisonedPromote))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> LegalEditorialReport.forApplyReplace(
+                release,
+                validatedReplacePlan(),
+                poisonedReplace))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> LegalEditorialReport.forApplyRetire(
+                release,
+                validatedRetirePlan(),
+                poisonedRetire))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static void assertNoDatabaseMetadata(LegalEditorialReport report) {
         assertThat(report.operation().appliedAt()).isNull();
         assertThat(report.readiness()).isNull();
@@ -826,13 +915,19 @@ class LegalEditorialReportTest {
     }
 
     private static ValidatedEditorialPlan validatedReplacePlan() {
+        return validatedReplacePlan(OPERATION_ID, PLAN_SHA256);
+    }
+
+    private static ValidatedEditorialPlan validatedReplacePlan(
+            UUID operationId,
+            String editorialPlanSha256) {
         LegalEditorialPlanV1 model = mock(LegalEditorialPlanV1.class);
         when(model.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
         ValidatedEditorialPlan plan = mock(ValidatedEditorialPlan.class);
         when(plan.plan()).thenReturn(model);
         when(plan.operationType()).thenReturn(OperationType.REPLACE);
-        when(plan.operationId()).thenReturn(OPERATION_ID);
-        when(plan.editorialPlanSha256()).thenReturn(PLAN_SHA256);
+        when(plan.operationId()).thenReturn(operationId);
+        when(plan.editorialPlanSha256()).thenReturn(editorialPlanSha256);
         return plan;
     }
 

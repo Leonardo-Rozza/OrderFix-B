@@ -232,6 +232,72 @@ class LegalEditorialReportWriterTest {
     }
 
     @Test
+    void writesAlreadyAppliedReplaceWithIdentityOnlyUnderPlanAndExactReceipt()
+            throws IOException {
+        LegalEditorialApplyReceipt receipt = new LegalEditorialApplyReceipt(
+                LegalEditorialApplyReceipt.OperationType.REPLACE,
+                PUBLICATION_UUID,
+                OBSERVED_AT,
+                LegalEditorialReadiness.READY,
+                11, 6, 34, 12, 11, 8, 1);
+        LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
+        when(result.status()).thenReturn(LegalManifestStatus.PASS);
+        when(result.persisted()).thenReturn(Boolean.TRUE);
+        when(result.outcome()).thenReturn(LegalEditorialApplyResult.Outcome.ALREADY_APPLIED);
+        when(result.receipt()).thenReturn(Optional.of(receipt));
+        when(result.issues()).thenReturn(List.of());
+        when(result.omittedIssueCount()).thenReturn(0);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        writer.write(
+                LegalEditorialReport.forApplyReplace(
+                        release,
+                        validatedReplacePlan(),
+                        result),
+                output);
+
+        String json = output.toString(StandardCharsets.UTF_8);
+        assertThat(json).isEqualTo("{\"reportVersion\":3,\"command\":\"apply-replace\","
+                + "\"status\":\"PASS\",\"persisted\":true,\"publication\":{"
+                + "\"publicationId\":\"release-valid-v1\",\"schemaVersion\":1,"
+                + "\"manifestSha256\":\"" + GOLDEN_SHA + "\","
+                + "\"publicationUuid\":\"60870649-efbb-4d2b-8407-4f1901b86a45\"},"
+                + "\"operation\":{\"operationType\":\"REPLACE\","
+                + "\"outcome\":\"ALREADY_APPLIED\","
+                + "\"appliedAt\":\"2026-08-28T18:00:00.123456Z\"},"
+                + "\"plan\":{\"operationId\":\"" + OPERATION_ID + "\","
+                + "\"editorialPlanSha256\":\"" + PLAN_SHA256 + "\","
+                + "\"changeRequired\":null,\"observedAt\":null,"
+                + "\"expectedReadinessAfter\":\"READY\"},"
+                + "\"readiness\":{\"value\":\"READY\",\"observedAt\":null,"
+                + "\"editorialStateFingerprint\":null},"
+                + "\"counts\":{\"release\":{\"documents\":11,\"requirements\":6,"
+                + "\"scopes\":8},\"state\":{\"documentVersions\":11,"
+                + "\"requirementVersions\":6,\"documentTransitions\":34,"
+                + "\"requirementTransitions\":12,\"documentSlots\":11,"
+                + "\"requiredSetPointers\":8,\"replacementBatches\":1},"
+                + "\"delta\":null},\"issues\":[],\"omittedIssueCount\":0}");
+        JsonNode parsed = JSON.readTree(json);
+        assertThat(parsed.path("operation").path("outcome").textValue())
+                .isEqualTo("ALREADY_APPLIED");
+        assertThat(parsed.path("plan").path("operationId").textValue())
+                .isEqualTo(OPERATION_ID.toString());
+        assertThat(parsed.path("plan").path("editorialPlanSha256").textValue())
+                .isEqualTo(PLAN_SHA256);
+        assertThat(parsed.findValuesAsText("operationId"))
+                .containsExactly(OPERATION_ID.toString());
+        assertThat(parsed.findValuesAsText("editorialPlanSha256"))
+                .containsExactly(PLAN_SHA256);
+        assertThat(parsed.path("plan").path("changeRequired").isNull()).isTrue();
+        assertThat(parsed.path("plan").path("observedAt").isNull()).isTrue();
+        assertThat(parsed.path("readiness").path("observedAt").isNull()).isTrue();
+        assertThat(parsed.path("readiness").path("editorialStateFingerprint").isNull())
+                .isTrue();
+        assertThat(parsed.path("counts").path("delta").isNull()).isTrue();
+        assertExactlyOneJsonObject(output.toByteArray());
+    }
+
+    @Test
     void writesUnknownWithExplicitNullDatabaseMetadata() throws IOException {
         LegalEditorialApplyResult result = mock(LegalEditorialApplyResult.class);
         when(result.status()).thenReturn(LegalManifestStatus.ERROR);
