@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +38,13 @@ class LegalEditorialProcessIT {
     private static final String EDITORIAL_ROLE = "ordenfix_legal_editorial_10e";
     private static final String EDITORIAL_PASSWORD =
             "editorial-10e-password-must-never-leak";
+    private static final Set<String> PROTECTED_HTTP_TABLES = Set.of(
+            "legal_aceptacion_lotes",
+            "legal_aceptaciones",
+            "legal_aceptacion_documentos",
+            "legal_aceptacion_metadatos",
+            "legal_aceptacion_metadatos_cifrados",
+            "legal_idempotencia_resultados");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Container
@@ -114,7 +122,7 @@ class LegalEditorialProcessIT {
     }
 
     @Test
-    void restrictedPackagedJarsSeedAndObserveNotReadyRelease() throws Exception {
+    void restrictedPackagedJarsCompleteEditorialLifecycle() throws Exception {
         LegalEditorialProcessFixture.ReleaseArtifact source =
                 fixture.copyRelease("source-process-v1");
 
@@ -166,6 +174,170 @@ class LegalEditorialProcessIT {
                  WHERE publication_external_id = 'source-process-v1'
                    AND estado_construccion = 'SELLADO'
                 """, Long.class)).isEqualTo(1L);
+
+        JsonNode promotePlan = assertSingleJson(
+                fixture.executeEditorial("plan-promote", source),
+                0,
+                3,
+                "plan-promote",
+                "PASS");
+        assertThat(promotePlan.path("persisted").booleanValue()).isFalse();
+        assertOperation(promotePlan, "PROMOTE", "APPLICABLE");
+        assertThat(promotePlan.path("plan").path("changeRequired").booleanValue())
+                .isTrue();
+        assertThat(promotePlan.path("readiness").path("value").textValue())
+                .isEqualTo("READY");
+        assertThat(promotePlan.path("counts").path("delta").isObject()).isTrue();
+        assertNoIssues(promotePlan);
+        assertThat(fixture.snapshotOwner()).isEqualTo(beforeReadiness);
+
+        JsonNode promoted = assertSingleJson(
+                fixture.executeEditorial("apply-promote", source),
+                0,
+                3,
+                "apply-promote",
+                "PASS");
+        assertThat(promoted.path("persisted").booleanValue()).isTrue();
+        assertOperation(promoted, "PROMOTE", "APPLIED");
+        assertThat(promoted.path("publication").path("publicationUuid").textValue())
+                .isEqualTo(publicationUuid);
+        assertThat(promoted.path("plan").isNull()).isTrue();
+        assertThat(promoted.path("readiness").path("value").textValue())
+                .isEqualTo("READY");
+        assertThat(promoted.path("counts").path("delta").isNull()).isTrue();
+        assertNoIssues(promoted);
+        assertStateMatchesDatabase(promoted, "source-process-v1", 11, 6, 21, 8, 0);
+        OwnerSnapshot afterPromote = fixture.snapshotOwner();
+        assertThat(afterPromote).isNotEqualTo(beforeReadiness);
+        assertProtectedRowsUnchanged(beforeReadiness, afterPromote);
+
+        JsonNode promoteReplay = assertSingleJson(
+                fixture.executeEditorial("apply-promote", source),
+                0,
+                3,
+                "apply-promote",
+                "PASS");
+        assertThat(promoteReplay.path("persisted").booleanValue()).isTrue();
+        assertOperation(promoteReplay, "PROMOTE", "ALREADY_APPLIED");
+        assertThat(promoteReplay.path("operation").path("appliedAt"))
+                .isEqualTo(promoted.path("operation").path("appliedAt"));
+        assertThat(promoteReplay.path("publication"))
+                .isEqualTo(promoted.path("publication"));
+        assertThat(promoteReplay.path("counts").path("state"))
+                .isEqualTo(promoted.path("counts").path("state"));
+        assertNoIssues(promoteReplay);
+        assertThat(fixture.snapshotOwner()).isEqualTo(afterPromote);
+        assertThat(fixture.digestTree(source))
+                .isEqualTo(source.sha256ByRelativePath());
+    }
+
+    private static void assertOperation(
+            JsonNode report,
+            String expectedType,
+            String expectedOutcome) {
+        assertThat(report.path("operation").isObject()).isTrue();
+        assertThat(report.path("operation").path("operationType").textValue())
+                .isEqualTo(expectedType);
+        assertThat(report.path("operation").path("outcome").textValue())
+                .isEqualTo(expectedOutcome);
+    }
+
+    private static void assertNoIssues(JsonNode report) {
+        assertThat(report.path("issues")).isEmpty();
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+    }
+
+    private static void assertProtectedRowsUnchanged(
+            OwnerSnapshot before,
+            OwnerSnapshot after) {
+        for (String table : PROTECTED_HTTP_TABLES) {
+            assertThat(after.rowsByTable().get(table))
+                    .as("tabla HTTP protegida %s", table)
+                    .isEqualTo(before.rowsByTable().get(table));
+        }
+    }
+
+    private static void assertStateMatchesDatabase(
+            JsonNode report,
+            String publicationId,
+            int expectedDocumentVersions,
+            int expectedRequirementVersions,
+            int expectedDocumentSlots,
+            int expectedRequiredSetPointers,
+            int expectedReplacementBatches) {
+        UUID publicationUuid = owner.queryForObject("""
+                SELECT id
+                  FROM legal_publicaciones
+                 WHERE publication_external_id = ?
+                """, UUID.class, publicationId);
+        JsonNode state = report.path("counts").path("state");
+        assertThat(state.path("documentVersions").intValue())
+                .isEqualTo(expectedDocumentVersions)
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_publicacion_documentos
+                         WHERE publicacion_id = ?
+                        """, publicationUuid));
+        assertThat(state.path("requirementVersions").intValue())
+                .isEqualTo(expectedRequirementVersions)
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_publicacion_requisitos
+                         WHERE publicacion_id = ?
+                        """, publicationUuid));
+        assertThat(state.path("documentTransitions").intValue())
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_documento_transiciones transition
+                         WHERE EXISTS (
+                               SELECT 1
+                                 FROM legal_publicacion_documentos member
+                                WHERE member.publicacion_id = ?
+                                  AND member.documento_version_id =
+                                      transition.documento_version_id)
+                        """, publicationUuid));
+        assertThat(state.path("requirementTransitions").intValue())
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_requisito_transiciones transition
+                         WHERE EXISTS (
+                               SELECT 1
+                                 FROM legal_publicacion_requisitos member
+                                WHERE member.publicacion_id = ?
+                                  AND member.requisito_version_id =
+                                      transition.requisito_version_id)
+                        """, publicationUuid));
+        assertThat(state.path("documentSlots").intValue())
+                .isEqualTo(expectedDocumentSlots)
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_documento_vigentes
+                         WHERE publicacion_id = ?
+                        """, publicationUuid));
+        assertThat(state.path("requiredSetPointers").intValue())
+                .isEqualTo(expectedRequiredSetPointers)
+                .isEqualTo(databaseCount("""
+                        SELECT count(*)
+                          FROM legal_requisito_conjuntos_actuales
+                         WHERE publicacion_id = ?
+                        """, publicationUuid));
+        assertThat(state.path("replacementBatches").intValue())
+                .isEqualTo(expectedReplacementBatches)
+                .isEqualTo(databaseCount("""
+                        SELECT count(DISTINCT transition.reemplazo_lote_id)
+                          FROM legal_documento_transiciones transition
+                         WHERE transition.reemplazo_lote_id IS NOT NULL
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM legal_publicacion_documentos member
+                                WHERE member.publicacion_id = ?
+                                  AND member.documento_version_id =
+                                      transition.documento_version_id)
+                        """, publicationUuid));
+    }
+
+    private static int databaseCount(String sql, UUID publicationUuid) {
+        return Math.toIntExact(owner.queryForObject(sql, Long.class, publicationUuid));
     }
 
     private JsonNode assertSingleJson(
