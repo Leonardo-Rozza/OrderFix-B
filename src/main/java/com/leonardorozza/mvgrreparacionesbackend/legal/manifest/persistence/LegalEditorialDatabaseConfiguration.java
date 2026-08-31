@@ -209,6 +209,23 @@ public class LegalEditorialDatabaseConfiguration {
     }
 
     @Bean
+    LegalEditorialCommitReconciler legalEditorialCommitReconciler(
+            @Qualifier(READ_ONLY_GATE) LegalManifestDatabaseGate databaseGate,
+            JdbcTemplate jdbcTemplate,
+            LegalEditorialPlannerCore plannerCore,
+            LegalEditorialPostStateVerifier postStateVerifier,
+            LegalEditorialSchemaVerifier schemaVerifier,
+            LegalEditorialPrivilegeVerifier privilegeVerifier) {
+        return new LegalEditorialCommitReconciler(
+                databaseGate,
+                jdbcTemplate,
+                plannerCore,
+                postStateVerifier,
+                schemaVerifier,
+                privilegeVerifier);
+    }
+
+    @Bean
     LegalEditorialFailureMapper legalEditorialFailureMapper() {
         return new LegalEditorialFailureMapper();
     }

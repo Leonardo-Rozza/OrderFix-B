@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B pendiente
+Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30, 9B completado el 2026-08-31 y
+9C pendiente
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -102,7 +103,7 @@ Commit:
 
 ## Subcorte 9B — Reconciliador SELECT-only
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -154,6 +155,40 @@ git status --short
 Commit:
 
     feat(legal): clasifica evidencia de commits ambiguos
+
+### Evidencia del Subcorte 9B
+
+- El ciclo TDD comenzó con la falla de compilación esperada porque
+  `LegalEditorialCommitReconciler` todavía no existía. La implementación posterior quedó interna,
+  package-private, con un único constructor acreditado y una matriz cerrada
+  `POST_EXACT`/`SOURCE_EXACT`/`UNKNOWN`.
+- El gate de reconciliación exige exactamente `DataSourceTransactionManager`,
+  `rollbackOnCommitFailure=false`, `REQUIRES_NEW`, `READ_COMMITTED`, timeout de producción y
+  `readOnly=true`; también exige el mismo datasource/JdbcTemplate y los preflights exactos de
+  schema y privilegios, en ese orden. La configuración Spring inyecta explícitamente el gate
+  read-only y el IT de aislamiento congela ese grafo.
+- La reconciliación sólo comienza con evidencia `planConstructed=true` y después de comprobar que
+  no queda transacción, sincronización ni recurso del datasource anterior ligado al thread. En una
+  nueva frontera protegida por el mismo advisory lock lee un `transaction_timestamp()` fresco y
+  mantiene planner y verifier dentro de la misma transacción/sesión.
+- Sólo un replay `APPLICABLE+changeRequired=false` confirmado por el verificador completo produce
+  `POST_EXACT` con receipt releído de PostgreSQL. Sólo
+  `APPLICABLE+changeRequired=true` produce `SOURCE_EXACT` sin receipt. Replan nulo, operación
+  cruzada, BLOCKED, ERROR, receipt nulo, excepción, `LinkageError`, fallo de lock o DB y cualquier
+  evidencia incompleta permanecen `UNKNOWN` sin metadata tentativa.
+- La regresión arquitectónica inspecciona campos, constructores, parámetros de métodos y fuente:
+  prohíbe writers, apply, failure mapper y DML en el reconciliador. No usa `Instant.now()`,
+  `operationId`, SHA ni receipt tentativo como evidencia.
+- Puerta focal con Amazon Corretto 21.0.10: 91/91 pruebas verdes —16 del reconciliador, 22 del gate,
+  33 del planner y 20 del verificador—. Lifecycle limpio: 4.225/4.225 unitarias y 2/2 pruebas de
+  aislamiento del contexto sobre H2 en modo PostgreSQL, sin fallos, errores ni omitidos; ambos JAR
+  se empaquetaron. La acreditación sobre PostgreSQL real permanece reservada para 9D.
+- Las revisiones adversariales de implementación, alcance y pruebas cerraron sus observaciones de
+  evidencia transaccional y SELECT-only sin hallazgos P1, P2 o P3 pendientes. `git diff --check`
+  quedó limpio.
+- 9B no integra todavía el reconciliador al apply, no ejecuta writers o DML y no modifica import,
+  V27/V28, migrations, resources, schemas, grants, API, controllers, JPA, frontend ni contratos
+  públicos. No hubo push ni deploy.
 
 ## Subcorte 9C — Integración con apply
 

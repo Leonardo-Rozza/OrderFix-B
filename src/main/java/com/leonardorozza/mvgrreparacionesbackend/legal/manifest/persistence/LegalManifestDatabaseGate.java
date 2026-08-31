@@ -71,6 +71,17 @@ final class LegalManifestDatabaseGate {
     <T> T executeReadOnly(TransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireReadOnlyBoundary();
+        return executeAccreditedReadOnly(protectedCallback);
+    }
+
+    /** Executes one commit reconciliation after accrediting its stricter read-only boundary. */
+    <T> T executeEditorialReconciliation(TransactionCallback<T> protectedCallback) {
+        Objects.requireNonNull(protectedCallback, "protectedCallback");
+        requireReadOnlyBoundary();
+        return executeAccreditedReadOnly(protectedCallback);
+    }
+
+    private <T> T executeAccreditedReadOnly(TransactionCallback<T> protectedCallback) {
         return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
             requireEffectiveReadOnlyTransaction();
@@ -151,10 +162,23 @@ final class LegalManifestDatabaseGate {
         }
     }
 
+    /** Accredits the exact immutable boundary and preflight graph used by reconciliation. */
+    void requireExactEditorialReconciliationBoundary(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema,
+            LegalDatabasePreflight privileges) {
+        requireReadOnlyBoundary();
+        requireExactEditorialPreflights(candidate, schema, privileges);
+    }
+
     private void requireReadOnlyBoundary() {
         Object transactionManager = transactionTemplate.getTransactionManager();
         if (transactionManager == null
                 || transactionManager.getClass() != DataSourceTransactionManager.class
+                || ((DataSourceTransactionManager) transactionManager)
+                        .isRollbackOnCommitFailure()
+                || ((DataSourceTransactionManager) transactionManager).getDataSource() == null
+                || jdbc.getDataSource() == null
                 || ((DataSourceTransactionManager) transactionManager).getDataSource()
                         != jdbc.getDataSource()
                 || transactionTemplate.getPropagationBehavior()

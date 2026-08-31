@@ -192,6 +192,49 @@ class LegalManifestDatabaseGateTest {
     }
 
     @Test
+    void reconciliationExecutesTheEffectiveModePreflightsLockAndCallbackInOrder() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingReadOnlyTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn("read committed");
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn("on");
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        when(callback.doInTransaction(any())).thenReturn("reconciled");
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+
+        String result = gate.executeEditorialReconciliation(callback);
+
+        assertThat(result).isEqualTo("reconciled");
+        InOrder order = inOrder(jdbc, schema, privileges, callback);
+        order.verify(jdbc).execute("SET LOCAL statement_timeout TO '30s'");
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class);
+        order.verify(schema).verify();
+        order.verify(privileges).verify();
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
+        order.verify(jdbc).queryForList(
+                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
+        order.verify(callback).doInTransaction(any());
+    }
+
+    @Test
     void readOnlyGateRejectsEveryDeclaredBoundaryDriftBeforeOpeningATransaction() {
         DataSource dataSource = mock(DataSource.class);
         DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
@@ -204,11 +247,17 @@ class LegalManifestDatabaseGateTest {
         TransactionTemplate writable = safeReadOnlyTransaction(manager);
         writable.setReadOnly(false);
         JdbcTransactionManager translatedManager = new JdbcTransactionManager(dataSource);
+        DataSourceTransactionManager rollbackAfterCommitFailure =
+                new DataSourceTransactionManager(dataSource);
+        rollbackAfterCommitFailure.setRollbackOnCommitFailure(true);
 
         assertUnsafeReadOnlyTemplate(joining, dataSource);
         assertUnsafeReadOnlyTemplate(wrongIsolation, dataSource);
         assertUnsafeReadOnlyTemplate(wrongTimeout, dataSource);
         assertUnsafeReadOnlyTemplate(writable, dataSource);
+        assertUnsafeReadOnlyTemplate(
+                safeReadOnlyTransaction(rollbackAfterCommitFailure),
+                dataSource);
         assertUnsafeReadOnlyTemplate(
                 safeReadOnlyTransaction(translatedManager),
                 dataSource);
@@ -225,6 +274,107 @@ class LegalManifestDatabaseGateTest {
         assertEffectiveReadOnlyModeRejected("read committed", "off");
         assertEffectiveReadOnlyModeRejected(null, "on");
         assertEffectiveReadOnlyModeRejected("read committed", null);
+    }
+
+    @Test
+    void reconciliationAccreditsTheExactReadOnlyBoundaryAndOrderedPreflights() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                safeReadOnlyTransaction(manager),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+
+        assertThatCode(() -> gate.requireExactEditorialReconciliationBoundary(
+                jdbc,
+                schema,
+                privileges)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void reconciliationRejectsCommitUnsafeMutableTranslatedOrForeignBoundaries() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager rollbackAfterCommitFailure =
+                new DataSourceTransactionManager(dataSource);
+        rollbackAfterCommitFailure.setRollbackOnCommitFailure(true);
+        DataSourceTransactionManager safeManager = new DataSourceTransactionManager(dataSource);
+        JdbcTransactionManager translatedManager = new JdbcTransactionManager(dataSource);
+        TransactionTemplate mutable = safeReadOnlyTransaction(safeManager);
+        mutable.setReadOnly(false);
+
+        assertUnsafeReconciliationBoundary(
+                safeReadOnlyTransaction(rollbackAfterCommitFailure),
+                dataSource);
+        assertUnsafeReconciliationBoundary(mutable, dataSource);
+        assertUnsafeReconciliationBoundary(
+                safeReadOnlyTransaction(translatedManager),
+                dataSource);
+        assertUnsafeReconciliationBoundary(
+                safeReadOnlyTransaction(safeManager),
+                mock(DataSource.class));
+
+        TransactionTemplate missingManager = new TransactionTemplate();
+        missingManager.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        missingManager.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        missingManager.setTimeout(
+                LegalDatabaseBudgets.production().transactionTimeoutSeconds());
+        missingManager.setReadOnly(true);
+        JdbcTemplate missingDataSource = new JdbcTemplate();
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(missingDataSource)).thenReturn(true);
+        when(privileges.usesJdbc(missingDataSource)).thenReturn(true);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                missingManager,
+                missingDataSource,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges))
+                .requireExactEditorialReconciliationBoundary(
+                        missingDataSource,
+                        schema,
+                        privileges)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void reconciliationRejectsMissingReorderedOrForeignPreflights() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                safeReadOnlyTransaction(manager),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema))
+                .requireExactEditorialReconciliationBoundary(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                safeReadOnlyTransaction(manager),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(privileges, schema))
+                .requireExactEditorialReconciliationBoundary(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LegalManifestDatabaseGate(
+                safeReadOnlyTransaction(manager),
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges))
+                .requireExactEditorialReconciliationBoundary(
+                        new JdbcTemplate(dataSource),
+                        schema,
+                        privileges))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -486,6 +636,26 @@ class LegalManifestDatabaseGateTest {
         assertThatThrownBy(() -> gate.executeReadOnly(callback))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(callback);
+    }
+
+    private static void assertUnsafeReconciliationBoundary(
+            TransactionTemplate transaction,
+            DataSource jdbcDataSource) {
+        JdbcTemplate jdbc = new JdbcTemplate(jdbcDataSource);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema, privileges));
+
+        assertThatThrownBy(() -> gate.requireExactEditorialReconciliationBoundary(
+                jdbc,
+                schema,
+                privileges)).isInstanceOf(IllegalArgumentException.class);
     }
 
     private static void assertEffectiveReadOnlyModeRejected(

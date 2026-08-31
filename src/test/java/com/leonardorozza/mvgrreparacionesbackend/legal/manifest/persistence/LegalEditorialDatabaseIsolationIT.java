@@ -93,10 +93,18 @@ class LegalEditorialDatabaseIsolationIT {
                     jdbc,
                     schemaVerifier,
                     privilegeVerifier)).doesNotThrowAnyException();
+            assertThatCode(() -> readOnlyGate.requireExactEditorialReconciliationBoundary(
+                    jdbc,
+                    schemaVerifier,
+                    privilegeVerifier)).doesNotThrowAnyException();
             assertThatCode(() -> mutableGate.requireExactEditorialPreflights(
                     jdbc,
                     schemaVerifier,
                     privilegeVerifier)).doesNotThrowAnyException();
+            assertThatThrownBy(() -> mutableGate.requireExactEditorialReconciliationBoundary(
+                    jdbc,
+                    schemaVerifier,
+                    privilegeVerifier)).isInstanceOf(IllegalArgumentException.class);
             assertThatCode(mutableGate::requireCommitOutcomeSafe)
                     .doesNotThrowAnyException();
             assertThatThrownBy(readOnlyGate::requireCommitOutcomeSafe)
@@ -111,6 +119,9 @@ class LegalEditorialDatabaseIsolationIT {
             assertThat(context.getBeansOfType(LegalEditorialReadinessService.class)).hasSize(1);
             assertThat(context.getBeansOfType(LegalEditorialPlanService.class)).hasSize(1);
             assertThat(context.getBeansOfType(LegalEditorialApplyService.class)).hasSize(1);
+            assertThat(context.getBeansOfType(LegalEditorialCommitReconciler.class).values())
+                    .singleElement()
+                    .satisfies(reconciler -> assertThat(reconciler.usesJdbc(jdbc)).isTrue());
             assertThat(context.getBeansOfType(LegalEditorialMutationWriter.class).values())
                     .hasSize(3)
                     .allSatisfy(writer -> assertThat(writer.usesJdbc(jdbc)).isTrue())
