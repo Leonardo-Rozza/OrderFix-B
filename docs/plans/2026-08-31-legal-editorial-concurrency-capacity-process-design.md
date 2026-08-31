@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado por el usuario el 2026-08-31; enmienda de capacidad aprobada el 2026-08-31
+Estado: aprobado por el usuario el 2026-08-31; 10A–10C cerrados y 10D–10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -100,8 +100,11 @@ reanudar la acreditación de capacidad.
     `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` antes de iniciar la JVM.
 14. Una operación medida debe terminar debajo de 70 s, cada statement debajo de 30 s y la
     frontera transaccional conserva un presupuesto máximo de 75 s.
-15. Las lecturas multirrow instrumentadas deben quedar limitadas a la cardinalidad esperada más
-    una fila de corrupción.
+15. Toda lectura multirrow instrumentada pertenece a un inventario cerrado. Las lecturas primarias
+    de relaciones dinámicas consumen como máximo su cardinalidad válida más una fila bajo sentinel;
+    los límites fijos del motor se acreditan por el valor exacto entregado al driver en cada
+    ejecución, y las lecturas sin `LIMIT` propio sólo se admiten cuando sus IDs de entrada o su
+    espacio de claves V27 ya están acotados de forma explícita.
 
 ## Componentes de prueba
 
@@ -151,7 +154,9 @@ como una publicación READY.
 El escenario editorial combina 82 reuses, una adición compensada por un retiro, un lote `1→1`,
 un split `1→2` y un merge `2→1`. Mantiene 250 requisitos reutilizados y seis reemplazados. Un
 requisito READY puede referenciar como máximo 11 documentos dentro de su único contexto; el límite
-contractual de 16 referencias continúa acreditado sólo en el fixture importable.
+contractual de 16 referencias continúa acreditado sólo en el fixture importable. Cada publicación
+máxima materializa 2.642 referencias requisito-documento y la proyección activa
+scope-miembro-documento llega a 5.284 filas.
 
 La instrumentación agrega 5 ms por ejecución JDBC lógica, mide por separado readiness, plan y
 apply, conserva el timeout real de statements y registra:
@@ -174,15 +179,36 @@ límites arbitrariamente holgados ni cambios de timeout para ocultar una regresi
 - La **mayor sentencia** es el máximo tiempo monotónico entre la entrada y la salida —normal o por
   excepción— de una de esas invocaciones; incluye los 5 ms artificiales y excluye consumo de filas
   posterior.
-- Las **filas observadas** se cuentan al avanzar exitosamente el `ResultSet`. El límite
-  `expected + 1` restringe filas consumidas para una relación multirrow potencialmente corrupta;
-  no es un límite de llamadas JDBC.
+- Las **filas observadas** se cuentan sólo cuando `ResultSet.next()` devuelve `true`; una ejecución
+  vacía aporta cero filas, pero igualmente permanece en el inventario SQL. En las lecturas
+  primarias de relaciones dinámicas sentinela, `expected + 1` restringe filas consumidas; sus
+  proyecciones derivadas usan caps sentinel propios. Los techos estructurales grandes se comprueban
+  por el `LIMIT` canónico y su bind entero exacto. Ninguno de estos valores limita llamadas JDBC.
 - Los límites `<70 s` se evalúan por separado para readiness, plan y apply; ninguno puede usar el
   margen restante de otro.
 - La espera del advisory lock se mide por separado cuando el driver permita identificar esa
   sentencia sin alterar producción.
 - La memoria máxima sólo se congela si el entorno ofrece una medición reproducible. Si no, 10F
   registra la razón y no publica una cifra engañosa.
+
+#### Enmienda de cierre 10C
+
+La implementación aprobada conserva un inventario cerrado de cada `SELECT` y `ROW_LOCK`, incluso
+cuando devuelve cero o una fila. Toda familia parametrizada debe terminar exactamente en
+`LIMIT ?`, observar en todas sus ejecuciones un último bind numérico entero y coincidir con el
+techo configurado; `NULL`, bind ausente, decimal fraccionario, valor fuera de rango o una expresión
+posterior al placeholder hacen fallar la puerta. Las dos búsquedas por publicación terminan
+exactamente en `LIMIT 2`. Las consultas sin límite propio forman una allowlist cerrada y sólo se
+aceptan porque reciben IDs de una lectura anterior ya limitada o recorren un espacio cerrado por
+unicidad V27 y enums legales congelados.
+
+Los sentinels físicos agregan corrupción a documentos, requisitos y miembros de scope, exigen
+resultado fail-closed y demuestran que cada familia relajada realmente supera su cap normal sin
+exceder su cap sentinel exacto.
+Para límites fijos de 8.193, 16.385, 32.769 y 65.537 no se fabrica una base artificial de ese
+tamaño: la prueba captura el bind exacto entregado al driver y la matriz `LegalEditorialSplitMergeIT`
+mantiene la cobertura semántica de corrupción. Los caps de catálogos son, deliberadamente, un
+snapshot controlado de PostgreSQL 16.14 con V27 y no se presentan como límites del dominio.
 
 ### `LegalCliProcessSupport`
 

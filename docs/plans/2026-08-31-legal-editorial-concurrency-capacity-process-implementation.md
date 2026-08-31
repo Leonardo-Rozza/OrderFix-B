@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: 10A y 10B cerrados; 10C a 10F pendientes
+Estado: 10A, 10B y 10C cerrados; 10D a 10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -44,7 +44,10 @@ atómico.
    rollback, apertura de conexión y consumo de filas se registran por separado.
 10. Readiness, plan y apply se miden por separado; setup, observer y generación de fixtures usan
     datasources no instrumentados.
-11. Toda lectura multirrow potencialmente corrupta consume como máximo `expected + 1` filas.
+11. Toda lectura multirrow pertenece a un inventario cerrado. Las lecturas primarias de relaciones
+    dinámicas consumen como máximo `expected + 1` bajo sentinel; sus proyecciones derivadas usan
+    caps sentinel exactos. Los límites fijos se validan por sintaxis y bind exactos, y cada lectura
+    sin `LIMIT` propio debe justificar una cota estructural previa.
 12. Los procesos reciben un entorno mínimo explícito más los overrides declarados; no heredan
     canales Spring, datasource, editoriales/importador ni opciones JVM ambient.
 13. El agente de stdout vive sólo bajo `src/test`, se empaqueta en un temporal y debe estar ausente
@@ -312,7 +315,7 @@ frontend, presupuestos ni timeouts. No hubo push ni deploy.
 
 ## Subcorte 10C — Capacidad
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31.
 
 ### Objetivo
 
@@ -351,21 +354,27 @@ demuestre equivalencia exacta y el diff siga siendo acotado.
 4. Construir fuente y target editoriales de 87 documentos, 256 requisitos, 16 scopes y 88 slots
    únicos. Combinar exactamente 82 reuses, una adición compensada por un retiro, un lote `1→1`,
    un split `1→2` y un merge `2→1`; conservar 250 requisitos y reemplazar seis. Ningún requisito
-   READY puede referenciar más de los 11 documentos disponibles en su contexto.
+   READY puede referenciar más de los 11 documentos disponibles en su contexto. Materializar
+   2.642 referencias requisito-documento por publicación y 5.284 filas en la proyección activa.
 5. Preparar estado sin instrumentación, promover la fuente y acreditar el plan compuesto exacto
    antes de iniciar mediciones.
 6. Sobre el datasource editorial restringido instrumentado con 5 ms, resetear y medir por
    separado readiness `NOT_READY`, plan `APPLICABLE` y apply `APPLIED`.
 7. Para cada operación exigir duración `<70 s`, statement `<30 s`, transacción productiva de 75 s,
    rol/preflights exactos y resultado funcional correcto.
-8. Inventariar cada lectura multirrow por SQL normalizado. Agregar corrupción sentinel por familia
-   de relación y exigir consumo máximo `expected + 1`; observer y setup usan otro datasource.
+8. Inventariar cada `SELECT` y `ROW_LOCK` por SQL normalizado, aunque devuelva cero o una fila.
+   Agregar corrupción sentinel a las relaciones dinámicas principales: exigir `expected + 1` en
+   sus lecturas primarias y caps sentinel exactos en sus proyecciones. Para techos fijos grandes,
+   capturar por ejecución el bind entero exacto del `LIMIT`; toda lectura sin límite propio requiere
+   una cota estructural allowlisteada. Observer y setup usan otro datasource.
 9. Registrar primero valores observados. Tras revisar que no existe N+1, congelar caps exactos o
    márgenes enteros justificados por operación/categoría, nunca porcentajes arbitrarios.
 10. Medir memoria sólo si el entorno permite repetir la cifra bajo condiciones controladas. Si no,
    dejar la razón explícita para 10F sin inventar un cap.
-11. Si una lectura supera `expected + 1`, el tiempo excede el presupuesto o aparece batching
-    deficiente, detener 10C con prueba roja; no modificar producción, migraciones ni timeouts.
+11. Si una lectura primaria sentinel supera `expected + 1`, una proyección supera su cap sentinel,
+    un límite estructural pierde su bind exacto, el tiempo excede el presupuesto o aparece
+    batching deficiente, detener 10C con prueba roja; no modificar producción, migraciones ni
+    timeouts.
 
 ### Pruebas y puerta
 
@@ -383,7 +392,120 @@ Commit:
 
 ### Evidencia de cierre 10C
 
-Pendiente.
+El subcorte quedó implementado en cuatro commits locales atómicos:
+
+- `c0f02cc docs(legal): separa techos de capacidad editorial`;
+- `e227a2d test(legal): caracteriza metricas jdbc editoriales`;
+- `dc9b619 test(legal): mide cardinalidad jdbc por resultado`;
+- `148f989 test(legal): congela capacidad editorial`.
+
+La separación documental fija primero el fixture dual; los dos microcommits siguientes
+caracterizan la instrumentación antes de consumirla; el commit final agrega
+`LegalEditorialCapacityIT` y completa `LegalEditorialITFixture`, `LegalJdbcMetricsSupport` y sus 11
+caracterizaciones unitarias. Ninguno modifica `src/main`, migraciones, V27, roles, grants,
+`pom.xml`, scripts, API, frontend, presupuestos ni timeouts.
+
+#### Fixtures y resultado funcional
+
+`LegalManifestImportCapacityIT` sigue siendo la acreditación independiente del máximo importable
+`128/256/16`. El nuevo fixture editorial crea fuente y target por el flujo real import/apply, ambos
+con locale único `es-AR`, `87` documentos, `256` requisitos, `16` scopes y `88` slots. Congela:
+
+- `82` documentos reutilizados, una adición compensada por un retiro y lotes `1→1`, `1→2` y
+  `2→1`;
+- `250` requisitos reutilizados y seis reemplazados;
+- `2.642` referencias requisito-documento por publicación y `5.284` identidades activas
+  scope-miembro-documento;
+- delta exacto, en el orden de `DeltaCounts`, `(7, 8, 18, 83, 83, 5, 5, 16, 16, 3)`;
+- readiness inicial `NOT_READY`, plan `APPLICABLE`, apply `APPLIED`, `readinessAfter=READY`, batch
+  identities exactas y postestado estructural observado desde una conexión owner independiente.
+
+#### Métricas congeladas
+
+Con un delay test-only de `5 ms` por ejecución JDBC lógica, datasource editorial restringido y
+setup/observer no instrumentados, una ejecución limpia del gate final produjo:
+
+| Operación | Duración | RT `A/D/R/T/S/O` | Filas | Máx. ejecuciones/SQL | Statement máx. | Advisory máx. |
+|---|---:|---:|---:|---:|---:|---:|
+| readiness | `0,935 s` | `52 (1/0/0/3/48/0)` | `11.636` | `2` | `69,298 ms` | `8,677 ms` |
+| plan | `1,832 s` | `96 (1/0/0/3/92/0)` | `36.042` | `4` | `77,572 ms` | `8,781 ms` |
+| apply | `4,450 s` | `184 (1/17/5/4/157/0)` | `68.648` | `6` | `906,670 ms` | `8,544 ms` |
+
+`A/D/R/T/S/O` significa advisory lock, DML, row lock, control transaccional, SELECT y otras. Los
+conteos, filas y repeticiones de la tabla son los caps congelados; cada categoría debe sumar el
+total de round trips. Las tres operaciones confirman un commit, cero rollbacks y cero fallos JDBC.
+Cada duración permanece bajo `70 s`; cada statement y espera advisory permanece bajo `30 s`.
+
+Cada uno de los tres sentinels agrega tres filas inválidas en su relación —documentos, requisitos
+o miembros— y exige `BLOCKED`, cero DML, un commit y cero rollback. Sólo se relajan las familias
+nombradas por cada escenario y la prueba exige que cada una supere efectivamente su cap normal:
+
+| Sentinel | Duración | RT | Filas | Máx. ejecuciones/SQL | Familias ejercitadas |
+|---|---:|---:|---:|---:|---|
+| documentos | `0,842 s` | `47` | `7.712` | `1` | documentos origen, contextos origen y documentos target |
+| requisitos | `0,966 s` | `50` | `11.123` | `1` | requisitos, audiencias, referencias y requisitos target |
+| miembros de scope | `0,933 s` | `52` | `11.684` | `2` | miembros origen y fingerprints activos de miembros/documentos |
+
+#### Inventario SQL cerrado
+
+Cada `SELECT` y `ROW_LOCK`, incluidos resultados de cero o una fila, debe coincidir con exactamente
+una familia del inventario. Las 35 familias con límite parametrizado deben terminar en el sufijo
+canónico `LIMIT ?`; todas sus ejecuciones deben entregar en el último placeholder un entero exacto
+y sólo el valor configurado. Un bind ausente, `NULL`, fraccionario, fuera de rango o una expresión
+posterior al placeholder falla. Las dos búsquedas de publicación deben terminar exactamente en
+`LIMIT 2`.
+
+Los binds entregados al driver quedaron congelados así:
+
+- origen/target: documentos `88`, contextos `89`, requisitos `257`, audiencias `513`, referencias
+  `2.643`, scopes `17`, miembros `513`, documentos target `88` y requisitos target `257`;
+- fingerprints activos: slots `89`, punteros `17`, miembros `4.097` y referencias `65.537`;
+- readiness: versiones documento `8.193`, versiones requisito `16.385`, lotes `8.193` y miembros
+  predecesor/sucesor `16.385`;
+- planner: membresías documento `1.025`, requisito `2.049`, slots `1.025`, punteros `65`, miembros
+  `16.385` y documentos `32.769`;
+- evidencia: documentos `1.025`, requisitos `2.049`, scopes `65`, miembros `16.385` y documentos
+  `32.769`;
+- historia/lotes: transiciones documento `8.193`, transiciones requisito `8.193`, identidades de
+  lote `513`, predecesores `8.193`, sucesores `8.193` e historia de lote `8.193`.
+
+Las únicas lecturas legales multirrow sin `LIMIT` propio son una allowlist cerrada: evidencias de
+contexto y audiencia, membresías de publicación, slots y scopes activos, headers/locks de lotes,
+publicaciones y líneas bloqueadas, versiones del writer e identidades de punteros. Sus IDs vienen
+de una lectura anterior ya limitada o su espacio de claves queda cerrado por unicidad V27 y enums
+legales. Cualquier nueva familia no inventariada falla; toda familia con bind configurado debe
+observar su variante canónica limitada, y sólo las familias de esa allowlist pueden observar además
+una variante sin límite propio.
+
+Los sentinels demuestran `expected + 1` en sus lecturas primarias de documentos, requisitos y
+miembros. Las proyecciones derivadas se validan con caps sentinel exactos —por ejemplo `515` para
+miembros activos y `5.317` para sus referencias— y binds estructurales congelados. Para techos de
+miles de filas no se construyó una base artificial de 8K–65K: se captura el valor exacto entregado
+al driver en cada ejecución y la regresión `LegalEditorialSplitMergeIT` conserva la cobertura
+semántica de corrupción y composición split/merge. Las lecturas de catálogo tienen caps del
+entorno controlado PostgreSQL `16.14`/V27; no se presentan como cardinalidades del dominio.
+
+#### Puertas, ambiente y auditoría
+
+Se ejecutaron tres lifecycles frescos con Amazon Corretto `21.0.10`, Maven `3.9.11`, Flyway
+`11.14.1`, PostgreSQL `16.14` y 27 migraciones hasta V27:
+
+- focal: `11` unitarias + `1` integración, sin fallos, errores ni omitidas, en `43,278 s`;
+- regresión capacity/import/replace/split-merge: `11` unitarias + `30` integraciones, todas verdes,
+  en `2:04`;
+- capacidad + concurrencia + fallos: `4.274` unitarias + `10` integraciones, todas verdes, en
+  `1:43`.
+
+Las rojas de TDD fueron sólo caracterizaciones esperadas del soporte: inventario de resultados
+`0/1`, relajación localizada de sentinels y captura exacta de binds. No hubo incidente productivo,
+flake, retry automático ni test omitido. Tres auditorías adversariales detectaron durante el
+desarrollo máximos por `ResultSet`, cobertura `0/1`, relajación global, bypasses de binds
+ausentes/`NULL`/fraccionarios y fronteras sintácticas de `LIMIT`; todos se corrigieron. Las
+reauditorías finales cerraron sin P0–P3 y `git diff --check` quedó limpio.
+
+No se congela memoria en 10C: Docker Desktop expuso `3.919 MB` compartidos, pero heap JVM, límite
+del container, GC y carga del host no estaban fijados. Publicar ese pico sería engañoso; 10F debe
+registrar la misma razón o repetir bajo un entorno controlado. No hubo push ni deploy.
 
 ## Subcorte 10D — Infraestructura de procesos
 
@@ -582,9 +704,10 @@ No modificar frontend, runbooks, `FRONTEND_INTEGRATION.md`, `README.md`, código
 3. Comando exacto, duración de pared, Surefire/Failsafe, fallos, errores y omitidos de cada puerta.
 4. Resultado de cada carrera y fallo contrastado con filas, transiciones, secuencias y SQL owner.
 5. Fixture importable `128/256/16`; fixture editorial compuesto `87/256/16/88 slots`, con un
-   máximo de 11 referencias por requisito READY; delay 5 ms y, por separado para
-   readiness/plan/apply: observado, cap, duración, llamadas totales/por categoría, mayor
-   statement, advisory lock y `expected + 1`.
+   máximo de 11 referencias por requisito READY, 2.642 referencias por publicación y 5.284
+   proyecciones activas; delay 5 ms y, por separado para readiness/plan/apply: observado, cap,
+   duración, llamadas totales/por categoría, mayor statement, advisory lock, sentinels primarios
+   `expected + 1`, caps derivados y binds exactos de los límites estructurales.
 6. Memoria reproducible o razón explícita para no fijarla.
 7. Matriz JAR con estado, outcome, readiness, exit, JSON, stderr, canaries, rol y postestado DB.
 8. Nombre/hash/Start-Class/contenido de ambos JAR y ausencia de secretos/agente de test.
@@ -632,7 +755,8 @@ Cualquiera de estos hallazgos bloquea el subcorte correspondiente:
 - doble confirmación incompatible o falso `APPLIED`;
 - discrepancia entre JSON y PostgreSQL;
 - deadlock/session kill no reproducible sin sleeps;
-- N+1, batching insuficiente o lectura por encima de `expected + 1`;
+- N+1, batching insuficiente, lectura primaria sentinel por encima de `expected + 1`, proyección
+  por encima de su cap sentinel o límite estructural sin su bind exacto;
 - necesidad de tocar producción, migraciones, grants, roles, `pom.xml` o timeouts;
 - agente test-only presente en un artefacto;
 - secreto, path, SQL, stack trace o canary filtrado;
@@ -652,7 +776,7 @@ ausente sí bloquea el cierre.
 | plan | `docs(legal): planifica concurrencia y procesos editoriales` |
 | 10A | `test(legal): acredita concurrencia editorial` |
 | 10B | `test(legal): acredita fallos editoriales` |
-| 10C | `test(legal): congela capacidad editorial` |
+| 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989` |
 | 10D | `test(legal): endurece procesos editoriales` |
 | 10E | `test(legal): acredita jar editorial` |
 | 10F | `docs(legal): cierra corte de procesos reales` |
