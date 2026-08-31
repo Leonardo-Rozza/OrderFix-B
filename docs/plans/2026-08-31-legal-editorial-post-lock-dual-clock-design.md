@@ -127,6 +127,14 @@ Si una fecha efectiva cae entre ambos instantes, la operación fresca permanece 
 retry. No se persiste retrospectivamente una transición con `transactionAt` anterior a su fecha
 efectiva.
 
+La misma regla se aplica a la causalidad persistida que el planner puede descubrir después de la
+espera. Antes de construir un delta SOURCE fresco, `transactionAt` debe ser igual o posterior al
+piso causal autoritativo del estado que pretende continuar: sellos de publicaciones, últimas
+transiciones/`stateChangedAt` relevantes, actualización de punteros activos y sellos de lotes
+aplicables. POST/replay se intenta primero con `observedAt` y puede reconocer evidencia posterior
+a `transactionAt`; SOURCE no puede retrofechar una mutación sobre esa evidencia y, si el piso la
+supera, queda bloqueado para retry.
+
 ### Planner y execution plan
 
 `LegalEditorialPlannerCore` recibirá la frontera completa en PROMOTE, REPLACE y RETIRE. Un plan
