@@ -83,6 +83,7 @@ class LegalCliProcessSupportTest {
         assertThat(result.timedOut()).isFalse();
         assertThat(result.stdoutLimitExceeded()).isTrue();
         assertThat(result.stderrLimitExceeded()).isTrue();
+        assertThat(result.captureLimitBytes()).isEqualTo(1_048_576);
         assertThat(result.stdoutBytes()).hasSize(result.captureLimitBytes());
         assertThat(result.stderrBytes()).hasSize(result.captureLimitBytes());
         assertThat(result.stdoutBytes()).containsOnly((byte) 'o');
