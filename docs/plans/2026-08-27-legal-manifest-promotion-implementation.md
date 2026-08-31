@@ -3,8 +3,8 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 8 completados;
-Corte 9 con diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30, 9B
-y 9C completados el 2026-08-31; 9D1, 9D2, 9E y 9F pendientes; Cortes 10 y 11 pendientes
+Corte 9 con diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30 y
+9B/9C/9D1/9D2 completados el 2026-08-31; 9E y 9F pendientes; Cortes 10 y 11 pendientes
 
 Diseño aprobado:
 
@@ -1111,7 +1111,7 @@ Commits locales atómicos de los subcortes 8A–8G:
 ## Corte 9 — Reconciliación y UNKNOWN
 
 Estado: en ejecución; diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30,
-9B, 9C y 9D1 completados el 2026-08-31; 9D2, 9E y 9F pendientes.
+9B, 9C, 9D1 y 9D2 completados el 2026-08-31; 9E y 9F pendientes.
 
 Diseño específico aprobado:
 
@@ -1139,9 +1139,15 @@ la primera invocación y el replay conserva filas y secuencias. La matriz Postgr
 de 9D1 acredita además receipt y conteos reconstruidos, rollback sin ACK y session kill
 concluyente como `SOURCE_EXACT`, fallback cerrado, otra transacción read-only con el mismo lock y
 retry manual único. Su lifecycle fresco cerró 4.231 unitarias y 42 integraciones sobre PostgreSQL
-16.14; las 19 tablas editoriales se compararon por snapshots JSONB exactos. La incertidumbre
-restante continúa en 9D2; import, V27/V28, API, frontend y contratos públicos permanecen sin
-cambios.
+16.14; las 19 tablas editoriales se compararon por snapshots JSONB exactos. 9D2 cierra la
+incertidumbre restante con siete escenarios reales: marker ausente sin segunda frontera, estado
+parcial y retry sin healing, doble session kill, segunda conexión inaccesible, advisory lock con
+SQLState `55P03`, verifier fallido y planner `BLOCKED/ERROR`. Las invocaciones ambiguas conservan
+`ERROR/persisted=null/UNKNOWN`, ocultan receipt y metadata tentativos y acreditan que el
+reconciliador SELECT-only no ejecuta DML. Su puerta fresca cerró 4.231 unitarias y 16 integraciones
+—7 de apply failure, 5 de reconciliación concluyente y 4 de regresión import— sobre PostgreSQL
+16.14 con las 27 migraciones. Import, V27/V28, API, frontend y contratos públicos permanecen sin
+cambios; 9E y 9F continúan pendientes.
 
 ### Objetivo
 

@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-30
 
-Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C/9D1 completados el
-2026-08-31; 9D2, 9E y 9F pendientes
+Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C/9D1/9D2 completados el
+2026-08-31; 9E y 9F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -352,7 +352,7 @@ Commit:
 
 ## Subcorte 9D2 — Incertidumbre PostgreSQL restante
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -398,6 +398,40 @@ git status --short
 Commit:
 
     test(legal): preserva incertidumbre editorial
+
+### Evidencia de cierre 9D2
+
+- El ciclo TDD comenzó con un `LegalEditorialApplyFailureIT` deliberadamente rojo y cerró con
+  siete escenarios sobre PostgreSQL real. El marcador `planConstructed=false` conserva
+  `ERROR/persisted=null/UNKNOWN` sin invocar reconciliador, abrir una segunda conexión ni llamar
+  writer.
+- Estado parcial, planner `BLOCKED`, planner `ERROR` y verifier fallido conservan UNKNOWN. El caso
+  parcial inserta una única transición no proyectada después del unwind original, acredita el
+  replan real `APPLICABLE -> BLOCKED` y demuestra que el retry manual queda BLOCKED sin healing,
+  writer ni DML. El commit real cuyo replay no puede verificarse oculta el receipt tentativo; un
+  retry manual posterior converge a ALREADY_APPLIED sin duplicar filas ni secuencias.
+- Las inyecciones destinadas a la frontera read-only se activan después del unwind de la completion
+  UNKNOWN original. En la caída doble, el primer kill provoca esa completion en la sesión mutable y
+  el segundo termina el PID PostgreSQL distinto de la observación read-only; el fallo de conexión
+  ocurre exactamente en el request del segundo gate; y el lock holder externo sólo bloquea la
+  reconciliación, cuya causa se acredita como `lock_timeout` SQLState `55P03`.
+- Estado parcial, doble session kill, DB inaccesible y lock no adquirido prueban una sola invocación
+  del reconciliador y un intento real de segunda frontera. Cuando esa frontera abre, usa otro lease,
+  modo read-only Spring/PostgreSQL y el mismo advisory lock, con la transacción anterior ya cerrada
+  y desvinculada.
+- Todos los UNKNOWN exponen un único `COMMIT_OUTCOME_UNKNOWN` en `database/commit`, omiten el
+  receipt y sus campos derivados en `LegalEditorialApplyResult` —`operationType`,
+  `targetPublicationUuid`, `appliedAt` y readiness—, descartan metadata tentativa y no filtran
+  canaries. Los snapshots JSONB ordenados de las 19 tablas editoriales y los estados de secuencia
+  acreditan que la reconciliación nunca ejecuta healing ni DML.
+- La puerta exacta y fresca con Amazon Corretto 21.0.10 cerró 4.231/4.231 unitarias y 16/16
+  integraciones: 7 de `LegalEditorialApplyFailureIT`, 5 de `LegalEditorialReconciliationIT` y 4 de
+  `LegalManifestImportFailureIT`. PostgreSQL 16.14 aplicó las 27 migraciones; ambos JAR se
+  empaquetaron y Failsafe terminó sin fallos, errores ni omitidos.
+- Las auditorías adversariales de código, cobertura y diseño cerraron sin hallazgos P1, P2 o P3.
+  Sólo se agregó el IT autorizado y se actualizaron estos documentos de seguimiento; no se
+  modificaron producción, import, V27/V28, migrations, resources, schemas, grants, API,
+  controllers, JPA, frontend, CLI, reportes ni contratos públicos. No hubo push ni deploy.
 
 ## Subcorte 9E — Contratos y regresiones
 
