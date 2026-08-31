@@ -3,7 +3,7 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 8 completados;
-Cortes 9 a 11 pendientes
+Corte 9 con diseño y plan específico registrados, Subcorte 9A pendiente; Cortes 10 y 11 pendientes
 
 Diseño aprobado:
 
@@ -1109,7 +1109,20 @@ Commits locales atómicos de los subcortes 8A–8G:
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
-Estado: pendiente.
+Estado: en ejecución; diseño y plan específico registrados, Subcorte 9A pendiente.
+
+Diseño específico aprobado:
+
+- `docs/plans/2026-08-30-legal-editorial-commit-reconciliation-design.md`;
+- commit local `878a0cf`.
+
+Plan detallado de ejecución:
+
+- `docs/plans/2026-08-30-legal-editorial-commit-reconciliation-implementation.md`.
+
+El plan detallado gobierna el inventario exacto de archivos, el orden TDD, las puertas y los siete
+commits 9A, 9B, 9C, 9D1, 9D2, 9E y 9F. Ante cualquier diferencia, prevalece sobre el bosquejo
+prospectivo de este documento.
 
 ### Objetivo
 
@@ -1123,16 +1136,18 @@ Crear:
 - src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialCommitReconciler.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialTransactionStateTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialCommitReconcilerTest.java;
+- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialApplyServiceReconciliationTest.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialApplyFailureIT.java;
 - src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialReconciliationIT.java.
 
 Modificar:
 
 - LegalEditorialApplyService;
-- LegalEditorialPostStateVerifier;
-- LegalEditorialApplyResult y receipt;
-- LegalEditorialCliExecutionState, report y writer;
-- transaction completion core compartido, sin cambiar import.
+- LegalManifestDatabaseGate y LegalEditorialDatabaseConfiguration;
+- constructores directos, tests de frontera e IT afectados por el wiring;
+- expectativas PostgreSQL anteriores de pérdida de ACK;
+- LegalEditorialApplyResult, post-state verifier, CLI/report/writer o completion core sólo si una
+  prueba del plan detallado lo exige, sin cambiar receipt, JSON v3 ni import v2.
 
 ### Implementación
 
@@ -1148,24 +1163,26 @@ Modificar:
 9. No usar operationId, SHA externo o receipt tentativo como prueba DB.
 10. Un retry del operador repite bundle, plan y confirmaciones idénticos.
 11. stdout inexistente/truncado no fabrica envelope UNKNOWN; exit 3 y reconciliación externa.
-12. UNKNOWN conserva identidad validada del input, pero UUID/timestamps/deltas/receipt DB son null.
+12. UNKNOWN conserva identidad, `operationId`, SHA, readiness esperado y `counts.release` validados
+    del input; `publicationUuid`, `appliedAt`, readiness autoritativo, `counts.state`,
+    `counts.delta` y receipt DB son null.
 
-### Pruebas y puerta
+### Pruebas, puertas y commits
 
 Cubrir todas las completion states, pérdida de ACK, rollback sin ACK, session kill, DB inaccesible,
 source exacto, postestado exacto, parcial, nueva conexión/mismo lock, retry sin duplicados y regresión
 import v2.
 
-~~~bash
-./mvnw -Dtest=LegalEditorialTransactionStateTest,LegalEditorialCommitReconcilerTest,LegalEditorialApplyResultTest,LegalEditorialCliExecutionStateTest,LegalImportTransactionStateTest test
-./mvnw -Dit.test=LegalEditorialApplyFailureIT,LegalEditorialReconciliationIT,LegalManifestImportFailureIT,LegalManifestImportProcessIT verify
-git diff --check
-git status --short
-~~~
+Las puertas focales y la matriz final fresca están congeladas en el plan detallado. Corte 9 se
+registra en estos commits locales:
 
-Commit:
-
-    fix(legal): reconcilia commits editoriales ambiguos
+    feat(legal): modela estado transaccional editorial
+    feat(legal): clasifica evidencia de commits ambiguos
+    fix(legal): reconcilia apply editorial ambiguo
+    test(legal): acredita commits editoriales reconciliados
+    test(legal): preserva incertidumbre editorial
+    test(legal): conserva contratos al reconciliar commits
+    docs(legal): cierra reconciliacion editorial
 
 ## Corte 10 — Concurrencia, capacidad y procesos reales
 
@@ -1369,7 +1386,13 @@ Commit backend:
 | 8E | fix(legal): acredita replay y rollback de retiro |
 | 8F | feat(legal): expone retiro editorial interno |
 | 8G | docs(legal): cierra retiro editorial fail closed |
-| 9 | fix(legal): reconcilia commits editoriales ambiguos |
+| 9A | feat(legal): modela estado transaccional editorial |
+| 9B | feat(legal): clasifica evidencia de commits ambiguos |
+| 9C | fix(legal): reconcilia apply editorial ambiguo |
+| 9D1 | test(legal): acredita commits editoriales reconciliados |
+| 9D2 | test(legal): preserva incertidumbre editorial |
+| 9E | test(legal): conserva contratos al reconciliar commits |
+| 9F | docs(legal): cierra reconciliacion editorial |
 | 10 | test(legal): acredita concurrencia y procesos editoriales |
 | 11 frontend | docs(plan): registra cierre de fase 2.3C |
 | 11 backend | docs(legal): cierra fase 2.3C |
