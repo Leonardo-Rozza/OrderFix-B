@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado para planificación; Subcortes 10A a 10F pendientes
+Estado: 10A cerrado; 10B a 10F pendientes
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -59,7 +59,7 @@ atómico.
 
 ## Subcorte 10A — Concurrencia editorial
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31 mediante el microcorte 10A.1 de reloj post-lock.
 
 ### Objetivo
 
@@ -127,7 +127,69 @@ Commit:
 
 ### Evidencia de cierre 10A
 
-Pendiente.
+El `2026-08-31`, con Amazon Corretto `21.0.10`, la primera ejecución del gate focal
+`./mvnw clean -Dit.test=LegalEditorialConcurrencyIT verify` llegó a PostgreSQL 16 y reveló una
+carrera real en los dos `PROMOTE` idénticos:
+
+- esperado: `APPLIED + ALREADY_APPLIED`;
+- observado: `APPLIED + ERROR`, con issue público
+  `EDITORIAL_OBSERVATION_FAILED/database/observation`;
+- excepción interna capturada mediante instrumentación test-only temporal y luego retirada:
+  `IllegalArgumentException: expectedAppliedAt no puede ser posterior a observedAt`, originada en
+  `LegalEditorialExecutionPlan`;
+- los escenarios de targets incompatibles, `REPLACE` con predecesor compartido y matriz del gate
+  común alcanzaron sus assertions funcionales en esa misma ejecución;
+- no se modificó `src/main`, migraciones, grants, roles, `pom.xml`, API ni timeouts; no se creó
+  commit y no se hizo push.
+
+Causa acreditada: ambas operaciones abren su transacción antes del advisory lock. Aunque el
+servicio lee el tiempo después de obtenerlo, usa `transaction_timestamp()`, que conserva el inicio
+de la transacción. Si la transacción más nueva aplica primero y la más antigua reanuda después, el
+replay ve el `appliedAt` confirmado por la ganadora pero conserva un `observedAt` anterior y falla
+en vez de converger a `ALREADY_APPLIED`.
+
+La regla 15 obligó a detener 10A. Para reanudar se aprobó un microdiseño que:
+
+1. fuerce de forma determinista la inversión `xact_start`/orden del advisory lock mediante
+   latches test-only y evidencia de `pg_stat_activity`, sin sleeps ni retries;
+2. defina un instante editorial congelado realmente posterior al lock para apply, plan, readiness
+   y reconciliación, sin alterar los timestamps transaccionales del importador;
+3. mantenga las validaciones temporales actuales y haga verde `APPLIED + ALREADY_APPLIED`;
+4. vuelva a ejecutar toda la puerta 10A antes del commit previsto.
+
+El microdiseño 10A.1 quedó aprobado y documentado en
+`docs/plans/2026-08-31-legal-editorial-post-lock-dual-clock-design.md`. Antes de tocar producción,
+la carrera fue convertida en una reproducción determinista con latches y `pg_stat_activity`. En
+Amazon Corretto `21.0.10` y PostgreSQL 16, B inició después y confirmó primero (`APPLIED`,
+`xact_start=2026-08-31T15:33:52.495618Z`); A había iniciado en
+`2026-08-31T15:33:52.417101Z` y, al reanudar, devolvió
+`ERROR / EDITORIAL_OBSERVATION_FAILED` en vez de `ALREADY_APPLIED`. La puerta focal terminó con
+`1 test`, `1 failure`, `0 errors` y sin cambios productivos previos.
+
+El microcorte quedó implementado y acreditado en dos commits locales atómicos:
+
+- `9f00cb6 fix(legal): separa el reloj editorial post-lock`;
+- `77c80c5 test(legal): acredita concurrencia editorial`.
+
+La prueba determinista ahora fuerza que B, aun iniciando después, confirme primero. B devuelve
+`APPLIED`; A reanuda con su transacción más antigua y converge a `ALREADY_APPLIED`. Ambos resultados
+comparten el receipt confirmado por B, `receipt.appliedAt` conserva su `transactionAt`, existe una
+sola mutación y un tercer replay no altera filas ni secuencias. La misma clase acredita además los
+targets incompatibles, los `REPLACE` con predecesor compartido y la cooperación del gate entre
+import, dry-run, readiness, plan y apply.
+
+Puertas de cierre ejecutadas con Amazon Corretto `21.0.10`, PostgreSQL `16.14` y schema legal V27:
+
+- clase de concurrencia completa: `4.263` unitarias + `4` integraciones, todas verdes;
+- regresión de fallos y operaciones: `4.263` unitarias + `69` integraciones, todas verdes;
+- puerta 10A ampliada: `4.263` unitarias + `126` integraciones, todas verdes en `4:42`;
+- `./mvnw clean verify`: `4.263` unitarias + `237` integraciones, sin fallos, errores ni omitidas,
+  en `6:18`.
+
+La auditoría negativa confirmó que no hay reloj JVM ni fallback temporal, que
+`statement_timestamp()` sólo se lee en el gate y que import/dry-run conservan su reloj
+transaccional. No se modificaron migraciones, V27, grants, roles, API, CLI, frontend, `pom.xml`,
+timeouts ni presupuestos. `git diff --check` quedó limpio. No hubo push ni deploy.
 
 ## Subcorte 10B — Fallos y recuperación
 

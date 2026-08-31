@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: listo para ejecutar
+Estado: cerrado el 2026-08-31
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -366,12 +366,69 @@ internas duplicadas ni commits intermedios que compilen pero publiquen semántic
 
 ## Evidencia de ejecución
 
-Pendiente. Completar durante el microcorte con:
+### Rojo determinista previo a producción
 
-- salida roja determinista previa;
-- hash del commit productivo;
-- gates unitarios;
-- gates PostgreSQL 16;
-- auditoría temporal negativa;
-- hash del commit de acreditación 10A;
-- confirmación explícita de que no hubo push ni deploy.
+El `2026-08-31`, con Amazon Corretto `21.0.10` y PostgreSQL 16, se ejecutó:
+
+~~~bash
+./mvnw clean "-Dit.test=LegalEditorialConcurrencyIT#identicalPromotionsSerializeToAppliedAndAlreadyApplied" verify
+~~~
+
+Resultado esperado del TDD: `BUILD FAILURE`, `1 test`, `1 failure`, `0 errors`, `0 skipped`.
+La prueba acreditó sin sleeps ni retries:
+
+- A: `xact_start=2026-08-31T15:33:52.417101Z`;
+- B: `xact_start=2026-08-31T15:33:52.495618Z`;
+- B fue liberada primero, confirmó `APPLIED` y su `receipt.appliedAt` coincidió con su
+  `xact_start`;
+- A se liberó después y devolvió `ERROR / EDITORIAL_OBSERVATION_FAILED` en
+  `database/observation`, donde el contrato exige `ALREADY_APPLIED`.
+
+El reporte quedó en `target/failsafe-reports` y `git diff --check` permaneció limpio. Antes de
+esta evidencia no se modificó `src/main`, V27, roles, grants, API, `pom.xml` ni timeouts.
+
+### Cierre
+
+El microcorte quedó cerrado en dos commits locales atómicos:
+
+- `9f00cb6 fix(legal): separa el reloj editorial post-lock` contiene la frontera tipada, gate,
+  planner, execution plan, servicios, writers y sus pruebas unitarias/de compatibilidad;
+- `77c80c5 test(legal): acredita concurrencia editorial` contiene el fixture compartido y la
+  acreditación PostgreSQL determinista del subcorte 10A.
+
+La implementación conserva dos instantes con precisión PostgreSQL y responsabilidades separadas:
+
+- `transactionAt` determina toda mutación fresca, elegibilidad SOURCE, cutoff y receipt;
+- `observedAt`, capturado después del advisory lock, determina readiness, snapshots, replay,
+  postcondiciones y reconciliación;
+- cada entrada editorial agrega neto una sentencia JDBC respecto del flujo anterior: el gate lee
+  ambos relojes y los consumidores ya no vuelven a consultar el timestamp transaccional;
+- un estado visible causalmente posterior a `transactionAt` bloquea conservadoramente la mutación
+  fresca, mientras POST puede reconocer un replay hasta `observedAt`.
+
+Puertas ejecutadas con Amazon Corretto `21.0.10`, PostgreSQL `16.14` y schema legal V27:
+
+- puerta Java focal: `320` tests, todos verdes;
+- reproducción determinista corregida: `APPLIED + ALREADY_APPLIED`, mismo receipt y una sola
+  mutación;
+- clase de concurrencia completa: `4.263` unitarias + `4` integraciones, todas verdes;
+- matriz de fallos/operaciones: `4.263` unitarias + `69` integraciones, todas verdes en `3:43`;
+- puerta 10A ampliada: `4.263` unitarias + `126` integraciones, todas verdes en `4:42`;
+- puerta global `./mvnw clean verify`: `4.263` unitarias + `237` integraciones, `0` fallos,
+  `0` errores y `0` omitidas, en `6:18`.
+
+La auditoría temporal negativa confirmó:
+
+- ausencia de `Instant.now()`, `Clock`, `now()`, `current_timestamp` y `clock_timestamp` en la
+  persistencia editorial productiva;
+- `statement_timestamp()` sólo aparece en `LegalManifestDatabaseGate`;
+- el único constructor productivo de `LegalEditorialTimeBoundary` está en ese gate;
+- `LegalManifestGraphWriter` conserva su `transaction_timestamp()` y el `execute(...)` genérico
+  de import/dry-run permanece sin frontera editorial;
+- no quedaron overloads `Instant`, callbacks editoriales legacy ni writers que persistan
+  `observedAt` como instante fresco.
+
+Tres revisiones adversariales no encontraron defectos abiertos en la propagación temporal, los
+pisos causales ni el fixture concurrente. `git diff --check` quedó limpio. No se cambiaron V27,
+migraciones, roles, grants, contratos públicos, API, CLI, frontend, `pom.xml`, timeouts ni
+presupuestos. No hubo push ni deploy.
