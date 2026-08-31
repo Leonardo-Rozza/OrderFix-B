@@ -397,3 +397,7 @@ verdes, frontend permanece intacto y no hubo push ni deploy.
 
 Estado del criterio: satisfecho el 2026-08-30. Corte 7 queda completado; los Cortes 8 a 11 y la
 Fase 2.3C permanecen abiertos.
+
+Nota de continuidad (2026-08-30): el párrafo anterior conserva el estado histórico al cerrar el
+Corte 7. Corte 8 fue completado posteriormente en siete commits locales de los subcortes 8A–8G;
+la Fase 2.3C, los Cortes 9 a 11 y la habilitación de producción pública continúan pendientes.

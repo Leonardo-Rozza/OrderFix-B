@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 7 completados;
-Corte 8 en ejecución con Subcortes 8A y 8B completados y 8C pendiente; Cortes 9 a 11 pendientes
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 8 completados;
+Cortes 9 a 11 pendientes
 
 Diseño aprobado:
 
@@ -1036,8 +1036,7 @@ Commits atómicos del Corte 7, gobernados por el plan detallado enlazado arriba:
 
 ## Corte 8 — Retiro explícito fail-closed
 
-Estado: en ejecución; diseño específico aprobado, Subcortes 8A, 8B y 8C completados el 2026-08-30
-y 8D pendiente.
+Estado: completado el 2026-08-30; Subcortes 8A a 8G acreditados.
 
 Diseño específico aprobado:
 
@@ -1046,7 +1045,8 @@ Diseño específico aprobado:
 
 Plan detallado de ejecución:
 
-- `docs/plans/2026-08-30-legal-retire-fail-closed-implementation.md`.
+- `docs/plans/2026-08-30-legal-retire-fail-closed-implementation.md`;
+- commit local de planificación `e0a8fb2`.
 
 ### Objetivo
 
@@ -1057,10 +1057,10 @@ El trabajo se divide en siete subcortes acreditables:
 1. 8A — invariantes del execution plan — completado el 2026-08-30;
 2. 8B — postestado parcial exacto — completado el 2026-08-30;
 3. 8C — writer dedicado y aplicación — completado el 2026-08-30;
-4. 8D — PostgreSQL fresco con rol restringido;
-5. 8E — replay, corrupción y rollback;
-6. 8F — CLI interna y reporte v3;
-7. 8G — regresiones y cierre documental.
+4. 8D — PostgreSQL fresco con rol restringido — completado el 2026-08-30;
+5. 8E — replay, corrupción y rollback — completado el 2026-08-30;
+6. 8F — CLI interna y reporte v3 — completado el 2026-08-30;
+7. 8G — regresiones y cierre documental — completado el 2026-08-30.
 
 El plan enlazado congela archivos, pasos, puertas y commits. RETIRE no agrega ledger, migración,
 grant, endpoint o frontend; `persisted=true` acredita postestado confirmado y no un receipt
@@ -1075,7 +1075,37 @@ y el planner permanece select-only. SOURCE exige prehistoria estrictamente anter
 observación y POST rechaza un cutover futuro antes de construir el plan. 8C agrega el writer
 dedicado, revalida causalidad y grafo antes del DML, congela proyecciones con un lock de tabla
 compatible con el rol mínimo y coordina `verifier → constraints → NOT_READY` sin receipt
-tentativo. La ejecución fresca integral con el rol restringido permanece en 8D.
+tentativo. 8D acredita retiros frescos documentales, de requisitos y mixtos con el rol restringido.
+8E demuestra replay select-only, corrupción sin healing, rollback fila por fila de las 19 tablas
+—con los huecos `+1/+1` documentados de secuencias PostgreSQL no transaccionales— y retry
+convergente tras commit incierto. 8F cierra los siete comandos internos, el preflight, el reporte
+v3 y el éxito `RETIRE+NOT_READY`. 8G ejecuta la matriz final corregida y alinea la documentación
+sin modificar producción.
+
+### Evidencia de cierre del Corte 8
+
+- Puerta focal 3.267/3.267; lifecycle limpio 4.193 unitarias y 108 integraciones; repetición
+  independiente 4.193/4.193.
+- Amazon Corretto 21.0.10, PostgreSQL 16.14 y Flyway 11.14.1 sobre V27; ambos JAR no contienen
+  entradas `application-secret.properties` y el launcher pasó `sh -n`.
+- RETIRE preserva estado no afectado, termina `APPLIED+NOT_READY`, acredita replay por postestado,
+  no repara corrupción y revierte fallos tardíos. PROMOTE, REPLACE, split/merge, readiness,
+  privilegios, import y reportes v1/v2 permanecen verdes.
+- El rango completo del Corte 8 no modifica `src/main/resources`, V27/V28, schemas, grants,
+  inventarios, API, controllers, JPA, frontend, runbooks o deploy. La única superficie operativa
+  nueva es `plan-retire`/`apply-retire` dentro del JAR legal interno.
+- Corte 8 completo no cierra la Fase 2.3C ni habilita producción pública. Reconciliación ampliada,
+  concurrencia/capacidad/procesos exhaustivos y cierre cross-repo continúan en Cortes 9 a 11.
+
+Commits locales atómicos de los subcortes 8A–8G:
+
+    2777430 fix(legal): valida plan exacto de retiro
+    ad0e03f fix(legal): preserva postestado parcial de retiro
+    1d45e40 feat(legal): aplica retiro editorial fail closed
+    91113e4 test(legal): acredita retiro editorial en postgresql
+    2adf754 fix(legal): acredita replay y rollback de retiro
+    10f9f13 feat(legal): expone retiro editorial interno
+    docs(legal): cierra retiro editorial fail closed
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
@@ -1336,7 +1366,7 @@ Commit backend:
 | 8B | fix(legal): preserva postestado parcial de retiro |
 | 8C | feat(legal): aplica retiro editorial fail closed |
 | 8D | test(legal): acredita retiro editorial en postgresql |
-| 8E | test(legal): acredita replay y rollback de retiro |
+| 8E | fix(legal): acredita replay y rollback de retiro |
 | 8F | feat(legal): expone retiro editorial interno |
 | 8G | docs(legal): cierra retiro editorial fail closed |
 | 9 | fix(legal): reconcilia commits editoriales ambiguos |

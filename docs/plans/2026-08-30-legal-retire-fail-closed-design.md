@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario; implementación en ejecución, Subcortes 8A–8C completados
+Estado: aprobado por el usuario y completado el 2026-08-30; Subcortes 8A a 8G acreditados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -339,8 +339,14 @@ atómico. No se hace push ni deploy.
 Corte 8 queda cerrado cuando un retiro documental, de requisitos o mixto puede aplicarse con el
 rol editorial exacto y terminar deliberadamente `APPLIED+NOT_READY`; el replay exacto es
 select-only; todo dato no afectado permanece byte por byte equivalente; la corrupción no se
-repara; los fallos revierten toda la operación; PROMOTE y REPLACE permanecen verdes; y la única
+repara; los fallos revierten fila por fila las 19 tablas y sólo dejan los huecos documentados de
+secuencias PostgreSQL no transaccionales; PROMOTE y REPLACE permanecen verdes; y la única
 superficie nueva es la CLI operativa interna.
 
 Corte 8 no cierra por sí solo la Fase 2.3C ni habilita producción pública. Reconciliación ampliada
 de `UNKNOWN`, capacidad/procesos exhaustivos y cierre cross-repo permanecen en los Cortes 9 a 11.
+
+Estado del criterio: satisfecho el 2026-08-30. La evidencia ejecutable, los conteos finales y los
+siete commits locales de implementación y cierre (8A–8G) se registran en
+`docs/plans/2026-08-30-legal-retire-fail-closed-implementation.md`. La Fase 2.3C permanece en
+ejecución con los Cortes 9 a 11 pendientes.

@@ -2,8 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: en ejecución — Subcortes 8A, 8B, 8C, 8D, 8E y 8F completados el 2026-08-30;
-Subcorte 8G pendiente
+Estado: completado el 2026-08-30 — Subcortes 8A a 8G acreditados
 
 Diseño aprobado:
 
@@ -604,7 +603,7 @@ Commit:
 
 ## Subcorte 8G — Regresiones y cierre
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -615,17 +614,19 @@ Cerrar Corte 8 con evidencia ejecutable, documentación alineada y ninguna expan
 - `docs/plans/2026-08-30-legal-retire-fail-closed-design.md`;
 - este documento;
 - `docs/plans/2026-08-27-legal-manifest-promotion-implementation.md`;
-- documentos históricos anteriores sólo con una nota de continuidad que evite una lectura
-  engañosa.
+- `docs/plans/2026-08-30-legal-split-merge-implementation.md`, sólo con una nota de continuidad
+  que preserve como histórico el cierre del Corte 7.
 
 No actualizar todavía runbooks de lanzamiento, `FRONTEND_INTEGRATION.md` o planes frontend: el
 cierre cross-repo permanece reservado para el Corte 11.
 
 ### Puerta final
 
+Prerrequisito: ejecutar los comandos Maven con un JDK 21 activo mediante `JAVA_HOME`.
+
 ~~~bash
 ./mvnw -Dtest=LegalEditorialPlanValidatorTest,LegalEditorialExecutionPlanTest,LegalEditorialPlannerCoreTest,LegalEditorialPlanServiceTest,LegalEditorialRetirementWriterTest,LegalEditorialRetireServiceTest,LegalEditorialPostStateVerifierTest,LegalEditorialApplyServiceTest,LegalEditorialApplyServiceReplaceTest,LegalEditorialArgumentsTest,LegalEditorialCliExecutionStateTest,LegalEditorialPreflightTest,LegalEditorialCliTest,LegalEditorialReportTest,LegalManifestCliTest test
-./mvnw -Dit.test=LegalEditorialRetireIT,LegalEditorialSplitMergeIT,LegalEditorialReplaceIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestImportIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
+./mvnw clean -Dit.test=LegalEditorialRetireIT,LegalEditorialPlannerIT,LegalEditorialSplitMergeIT,LegalEditorialReplaceIT,LegalInitialPromotionIT,LegalInitialPromotionFailureIT,LegalEditorialReadinessIT,LegalEditorialPrivilegeVerifierIT,LegalEditorialDatabaseIsolationIT,LegalManifestImportIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
 ./mvnw test
 sh -n scripts/legal-manifest-editor.sh
 git diff --check
@@ -636,6 +637,44 @@ Registrar Java, PostgreSQL, Flyway, conteos reales, regresiones, revisión adver
 ausencia de push/deploy. Reconciliación ampliada de `UNKNOWN`, capacidad y procesos exhaustivos
 permanecen en Cortes 9 y 10.
 
+### Evidencia de cierre 8G
+
+- Puerta focal: 3.267 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- La auditoría de la puerta detectó que la matriz prospectiva omitía
+  `LegalEditorialPlannerIT`, única acreditación PostgreSQL directa del planner RETIRE read-only
+  modificado en 8B. La ejecución definitiva se hizo con `clean verify`, Java fijado y la clase
+  incorporada; no se usaron reportes Failsafe acumulados.
+- Lifecycle limpio: 4.193 pruebas unitarias y 108 integraciones, todas verdes. El desglose de
+  integración fue RETIRE=20, planner=10, split/merge=13, REPLACE=13, promoción=7, fallos de
+  promoción=4, readiness=9, privilegios=8, aislamiento DB=2, import=7, aislamiento CLI=3 y
+  proceso CLI=12.
+- Suite unitaria independiente: 4.193 pruebas, 0 fallos, 0 errores y 0 omitidas.
+- Entorno acreditado: Amazon Corretto 21.0.10, PostgreSQL 16.14, Flyway 11.14.1 con schema V27 y
+  ambos JAR sin entradas `application-secret.properties`.
+- La matriz conserva PROMOTE, REPLACE, split/merge, RETIRE documental/requisito/mixto, replay
+  select-only, corrupción sin healing, rollback fila por fila de las 19 tablas —con los huecos
+  `+1/+1` documentados de secuencias PostgreSQL no transaccionales—, readiness, rol restringido,
+  import y reportes v1/v2/v3.
+- `sh -n scripts/legal-manifest-editor.sh` y `git diff --check` quedaron limpios. Las auditorías de
+  puerta, alcance y documentación no encontraron expansión funcional; corrigieron la cobertura
+  omitida, trackers desactualizados y el tipo real del commit 8E.
+- 8G modifica sólo documentación. No se alteraron V27/V28, schemas, grants, roles, inventarios,
+  API, controllers, JPA, frontend, runbooks ni configuración pública. La rama backend es
+  `codex/lanzamiento-publico-backend`; no hubo push ni deploy.
+- El proceso JAR completo de RETIRE exitoso/replay, reconciliación ampliada de `UNKNOWN`,
+  concurrencia y capacidad siguen reservados para los Cortes 9 y 10; el cierre cross-repo y los
+  runbooks permanecen en Corte 11.
+
+### Commits locales atómicos de los subcortes 8A–8G
+
+1. `2777430` — `fix(legal): valida plan exacto de retiro` (8A);
+2. `ad0e03f` — `fix(legal): preserva postestado parcial de retiro` (8B);
+3. `1d45e40` — `feat(legal): aplica retiro editorial fail closed` (8C);
+4. `91113e4` — `test(legal): acredita retiro editorial en postgresql` (8D);
+5. `2adf754` — `fix(legal): acredita replay y rollback de retiro` (8E);
+6. `10f9f13` — `feat(legal): expone retiro editorial interno` (8F);
+7. `docs(legal): cierra retiro editorial fail closed` (8G, este cierre).
+
 Commit:
 
     docs(legal): cierra retiro editorial fail closed
@@ -644,5 +683,10 @@ Commit:
 
 Corte 8 termina únicamente cuando 8A–8G están en commits locales separados; RETIRE preserva todo
 el estado no afectado; documentos, requisitos y mixto terminan `APPLIED+NOT_READY`; replay es
-select-only; corrupción no se repara; rollback es exacto; el rol no obtiene nuevos grants; CLI es
-la única superficie incorporada; PROMOTE/REPLACE/import siguen verdes; y no hubo push ni deploy.
+select-only; corrupción no se repara; el rollback restaura fila por fila las 19 tablas y sólo deja
+los huecos documentados de secuencias PostgreSQL no transaccionales; el rol no obtiene nuevos
+grants; CLI es la única superficie incorporada; PROMOTE/REPLACE/import siguen verdes; y no hubo
+push ni deploy.
+
+Estado del criterio: satisfecho el 2026-08-30. Corte 8 queda completado; los Cortes 9 a 11 y la
+Fase 2.3C permanecen abiertos.
