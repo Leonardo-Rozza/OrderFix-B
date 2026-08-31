@@ -340,6 +340,7 @@ class LegalEditorialPlanResultTest {
                 Optional.empty(),
                 OBSERVED_AT,
                 OBSERVED_AT,
+                OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,
                 changeRequired,

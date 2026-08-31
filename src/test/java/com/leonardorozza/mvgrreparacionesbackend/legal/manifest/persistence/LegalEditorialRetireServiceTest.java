@@ -11,19 +11,17 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.SimpleTransactionStatus;
-import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -36,6 +34,10 @@ class LegalEditorialRetireServiceTest {
 
     private static final Instant OBSERVED_AT =
             Instant.parse("2026-08-30T12:00:00.123456Z");
+    private static final Instant TRANSACTION_AT =
+            Instant.parse("2026-08-30T11:59:59.123456Z");
+    private static final LegalEditorialTimeBoundary BOUNDARY =
+            new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT);
     private static final Instant HISTORICAL_APPLIED_AT =
             Instant.parse("2026-08-29T12:00:00.123456Z");
     private static final UUID PUBLICATION_ID =
@@ -54,9 +56,9 @@ class LegalEditorialRetireServiceTest {
         executeAndComplete(harness.gate, TransactionSynchronization.STATUS_COMMITTED);
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
-        LegalEditorialExecutionPlan plan = plan(true, OBSERVED_AT);
-        LegalEditorialApplyReceipt receipt = receipt(OBSERVED_AT);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        LegalEditorialExecutionPlan plan = plan(true, TRANSACTION_AT);
+        LegalEditorialApplyReceipt receipt = receipt(TRANSACTION_AT);
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
         when(harness.readinessCore.evaluate(release, OBSERVED_AT))
@@ -67,16 +69,14 @@ class LegalEditorialRetireServiceTest {
 
         assertSuccess(result, LegalEditorialApplyResult.Outcome.APPLIED, receipt);
         verify(harness.gate, times(1)).executeMutable(any());
-        verify(harness.jdbc, times(1)).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
+        verify(harness.jdbc, never()).queryForObject(anyString(), any(Class.class));
         InOrder order = inOrder(
                 harness.planner,
                 harness.retirementWriter,
                 harness.postStateVerifier,
                 harness.jdbc,
                 harness.readinessCore);
-        order.verify(harness.planner).planRetire(release, editorialPlan, OBSERVED_AT);
+        order.verify(harness.planner).planRetire(release, editorialPlan, BOUNDARY);
         order.verify(harness.retirementWriter).write(plan);
         order.verify(harness.postStateVerifier).verify(plan);
         order.verify(harness.jdbc).execute("SET CONSTRAINTS ALL IMMEDIATE");
@@ -95,7 +95,7 @@ class LegalEditorialRetireServiceTest {
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
         LegalEditorialExecutionPlan plan = plan(false, HISTORICAL_APPLIED_AT);
         LegalEditorialApplyReceipt receipt = receipt(HISTORICAL_APPLIED_AT);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(receipt);
 
@@ -123,7 +123,7 @@ class LegalEditorialRetireServiceTest {
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
         LegalEditorialExecutionPlan plan = plan(false, HISTORICAL_APPLIED_AT);
         when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
 
         LegalEditorialApplyResult result = harness.service()
@@ -134,6 +134,27 @@ class LegalEditorialRetireServiceTest {
     }
 
     @Test
+    void aForeignBoundaryWinsOverRetireSemanticsAndMapsToObservationFailure() {
+        Harness harness = new Harness();
+        executeAndRollbackOnFailure(harness.gate);
+        ValidatedRelease release = mock(ValidatedRelease.class);
+        ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
+        LegalEditorialExecutionPlan plan = plan(false, HISTORICAL_APPLIED_AT);
+        when(plan.transactionAt()).thenReturn(TRANSACTION_AT.minusSeconds(1));
+        when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
+                .thenReturn(LegalEditorialPlanResult.applicable(plan));
+
+        LegalEditorialApplyResult result = harness.service()
+                .applyRetire(release, editorialPlan);
+
+        assertError(result, LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED);
+        assertNoPostPlanningWork(harness);
+        verify(harness.commitReconciler, never())
+                .reconcileRetire(any(), any(), anyBoolean());
+    }
+
+    @Test
     void missingFailClosedAcknowledgementRemainsATypedBlockerBeforeAnyDml() {
         Harness harness = new Harness();
         executeAndRollbackOnFailure(harness.gate);
@@ -141,7 +162,7 @@ class LegalEditorialRetireServiceTest {
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
         LegalEditorialExecutionPlan plan = plan(false, HISTORICAL_APPLIED_AT);
         when(plan.acknowledgeFailClosedGap()).thenReturn(false);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
 
         LegalEditorialApplyResult result = harness.service()
@@ -162,7 +183,7 @@ class LegalEditorialRetireServiceTest {
         LegalEditorialExecutionPlan plan = plan(false, HISTORICAL_APPLIED_AT);
         when(plan.operationType())
                 .thenReturn(LegalEditorialExecutionPlan.OperationType.REPLACE);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
 
         LegalEditorialApplyResult result = harness.service()
@@ -178,10 +199,10 @@ class LegalEditorialRetireServiceTest {
         executeAndRollbackOnFailure(harness.gate);
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
-        LegalEditorialExecutionPlan plan = plan(true, OBSERVED_AT);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        LegalEditorialExecutionPlan plan = plan(true, TRANSACTION_AT);
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(OBSERVED_AT));
+        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(TRANSACTION_AT));
         when(harness.readinessCore.evaluate(release, OBSERVED_AT))
                 .thenReturn(LegalEditorialReadinessResult.ready(observation()));
 
@@ -201,10 +222,10 @@ class LegalEditorialRetireServiceTest {
         executeAndRollbackOnFailure(harness.gate);
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
-        LegalEditorialExecutionPlan plan = plan(true, OBSERVED_AT);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        LegalEditorialExecutionPlan plan = plan(true, TRANSACTION_AT);
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(OBSERVED_AT));
+        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(TRANSACTION_AT));
         when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(
                 LegalEditorialReadinessResult.error(List.of(LegalManifestIssue.at(
                         LegalManifestIssueCode.CONCURRENT_OPERATION,
@@ -227,10 +248,10 @@ class LegalEditorialRetireServiceTest {
                 new IllegalStateException("connection outcome unknown"));
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan editorialPlan = mock(ValidatedEditorialPlan.class);
-        LegalEditorialExecutionPlan plan = plan(true, OBSERVED_AT);
-        when(harness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        LegalEditorialExecutionPlan plan = plan(true, TRANSACTION_AT);
+        when(harness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
-        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(OBSERVED_AT));
+        when(harness.postStateVerifier.verify(plan)).thenReturn(receipt(TRANSACTION_AT));
         when(harness.readinessCore.evaluate(release, OBSERVED_AT)).thenReturn(notReady());
         when(harness.commitReconciler.reconcileRetire(
                 release,
@@ -284,6 +305,7 @@ class LegalEditorialRetireServiceTest {
                 "publication-retire",
                 PUBLICATION_ID,
                 "a".repeat(64)));
+        when(plan.transactionAt()).thenReturn(TRANSACTION_AT);
         when(plan.observedAt()).thenReturn(OBSERVED_AT);
         when(plan.expectedAppliedAt()).thenReturn(expectedAppliedAt);
         when(plan.expectedReadinessAfter())
@@ -387,10 +409,13 @@ class LegalEditorialRetireServiceTest {
             int completion,
             Throwable terminalFailure) {
         when(gate.executeMutable(any())).thenAnswer(invocation -> {
-            TransactionCallback callback = invocation.getArgument(0);
+            LegalManifestDatabaseGate.EditorialTransactionCallback callback =
+                    invocation.getArgument(0);
             beginSynchronizedTransaction();
             try {
-                Object value = callback.doInTransaction(new SimpleTransactionStatus());
+                Object value = callback.doInTransaction(
+                        new SimpleTransactionStatus(),
+                        BOUNDARY);
                 List<TransactionSynchronization> synchronizations =
                         TransactionSynchronizationManager.getSynchronizations();
                 synchronizations.forEach(sync -> sync.beforeCommit(false));
@@ -411,10 +436,13 @@ class LegalEditorialRetireServiceTest {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void executeAndRollbackOnFailure(LegalManifestDatabaseGate gate) {
         when(gate.executeMutable(any())).thenAnswer(invocation -> {
-            TransactionCallback callback = invocation.getArgument(0);
+            LegalManifestDatabaseGate.EditorialTransactionCallback callback =
+                    invocation.getArgument(0);
             beginSynchronizedTransaction();
             try {
-                return callback.doInTransaction(new SimpleTransactionStatus());
+                return callback.doInTransaction(
+                        new SimpleTransactionStatus(),
+                        BOUNDARY);
             } catch (RuntimeException | LinkageError failure) {
                 TransactionSynchronizationManager.getSynchronizations()
                         .forEach(sync -> sync.afterCompletion(
@@ -465,11 +493,6 @@ class LegalEditorialRetireServiceTest {
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
             when(commitReconciler.usesJdbc(jdbc)).thenReturn(true);
-            when(jdbc.queryForObject(
-                    "SELECT transaction_timestamp()",
-                    OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
-                            OBSERVED_AT,
-                            ZoneOffset.UTC));
         }
 
         private LegalEditorialApplyService service() {

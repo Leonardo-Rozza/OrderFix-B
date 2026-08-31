@@ -8,8 +8,6 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -48,7 +46,7 @@ public final class LegalEditorialPlanService {
     /** Plans the first promotion of one accredited sealed release. */
     public LegalEditorialPlanResult planPromote(ValidatedRelease target) {
         Objects.requireNonNull(target, "target");
-        return execute(observedAt -> planner.planPromote(target, observedAt));
+        return execute(boundary -> planner.planPromote(target, boundary));
     }
 
     /** Plans a complete replacement bound to one accredited immutable plan. */
@@ -63,7 +61,7 @@ public final class LegalEditorialPlanService {
             return LegalEditorialPlanResult.blocked(supportedScope.issues());
         }
         ValidatedEditorialPlan supportedPlan = supportedScope.value().orElseThrow();
-        return execute(observedAt -> planner.planReplace(target, supportedPlan, observedAt));
+        return execute(boundary -> planner.planReplace(target, supportedPlan, boundary));
     }
 
     /** Plans an explicit fail-closed retirement of the accredited current release. */
@@ -72,24 +70,17 @@ public final class LegalEditorialPlanService {
             ValidatedEditorialPlan editorialPlan) {
         Objects.requireNonNull(current, "current");
         Objects.requireNonNull(editorialPlan, "editorialPlan");
-        return execute(observedAt -> planner.planRetire(current, editorialPlan, observedAt));
+        return execute(boundary -> planner.planRetire(current, editorialPlan, boundary));
     }
 
     private LegalEditorialPlanResult execute(PlanOperation operation) {
         try {
             requireSharedJdbcSession();
-            return databaseGate.executeReadOnly(status -> operation.plan(
-                    readTransactionTimestamp()));
+            return databaseGate.executeReadOnly((status, boundary) ->
+                    operation.plan(boundary));
         } catch (RuntimeException | LinkageError failure) {
             return mappedFailure(failure);
         }
-    }
-
-    private Instant readTransactionTimestamp() {
-        OffsetDateTime timestamp = jdbc.queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        return Objects.requireNonNull(timestamp, "transaction_timestamp").toInstant();
     }
 
     private void requireSharedJdbcSession() {
@@ -127,6 +118,6 @@ public final class LegalEditorialPlanService {
 
     @FunctionalInterface
     private interface PlanOperation {
-        LegalEditorialPlanResult plan(Instant observedAt);
+        LegalEditorialPlanResult plan(LegalEditorialTimeBoundary boundary);
     }
 }

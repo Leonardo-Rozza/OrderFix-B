@@ -6,8 +6,6 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -43,10 +41,8 @@ public final class LegalEditorialReadinessService {
         Objects.requireNonNull(release, "release");
         try {
             requireSharedJdbcSession();
-            return databaseGate.executeReadOnly(status -> {
-                Instant observedAt = readTransactionTimestamp();
-                return core.evaluate(release, observedAt);
-            });
+            return databaseGate.executeReadOnly((status, boundary) ->
+                    core.evaluate(release, boundary.observedAt()));
         } catch (RuntimeException | LinkageError failure) {
             LegalManifestIssue mapped = failureMapper.map(failure);
             if (mapped.severity() != LegalManifestStatus.ERROR) {
@@ -56,13 +52,6 @@ public final class LegalEditorialReadinessService {
             }
             return LegalEditorialReadinessResult.error(List.of(mapped));
         }
-    }
-
-    private Instant readTransactionTimestamp() {
-        OffsetDateTime timestamp = jdbc.queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        return Objects.requireNonNull(timestamp, "transaction_timestamp").toInstant();
     }
 
     private void requireSharedJdbcSession() {

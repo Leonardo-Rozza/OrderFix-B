@@ -11,14 +11,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.SimpleTransactionStatus;
-import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
 import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,6 +35,10 @@ class LegalEditorialApplyServiceReconciliationTest {
 
     private static final Instant OBSERVED_AT =
             Instant.parse("2026-08-31T12:00:00.123456Z");
+    private static final Instant TRANSACTION_AT =
+            Instant.parse("2026-08-31T11:59:59.123456Z");
+    private static final LegalEditorialTimeBoundary BOUNDARY =
+            new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT);
     private static final UUID PUBLICATION_ID =
             UUID.fromString("00000000-0000-0000-0000-0000000009c0");
 
@@ -102,7 +103,7 @@ class LegalEditorialApplyServiceReconciliationTest {
         executeFailureAndComplete(
                 harness.mutableGate,
                 TransactionSynchronization.STATUS_UNKNOWN);
-        when(harness.planner.planPromote(target, OBSERVED_AT))
+        when(harness.planner.planPromote(target, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         doThrow(originalFailure).when(harness.promotionWriter).write(plan);
         when(harness.commitReconciler.reconcilePromote(target, true))
@@ -175,7 +176,7 @@ class LegalEditorialApplyServiceReconciliationTest {
         executeFailureAndComplete(
                 plannerFailure.mutableGate,
                 TransactionSynchronization.STATUS_UNKNOWN);
-        when(plannerFailure.planner.planPromote(failedTarget, OBSERVED_AT))
+        when(plannerFailure.planner.planPromote(failedTarget, BOUNDARY))
                 .thenThrow(failure);
 
         assertUnknown(plannerFailure.service().applyPromote(failedTarget));
@@ -189,7 +190,7 @@ class LegalEditorialApplyServiceReconciliationTest {
         executeFailureAndComplete(
                 crossOperation.mutableGate,
                 TransactionSynchronization.STATUS_UNKNOWN);
-        when(crossOperation.planner.planPromote(crossedTarget, OBSERVED_AT))
+        when(crossOperation.planner.planPromote(crossedTarget, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replacePlan));
 
         assertUnknown(crossOperation.service().applyPromote(crossedTarget));
@@ -251,7 +252,7 @@ class LegalEditorialApplyServiceReconciliationTest {
         LegalEditorialApplyReceipt replaceConfirmed = mock(LegalEditorialApplyReceipt.class);
         when(replace.replaceScopeGuard.validate(rawPlan))
                 .thenReturn(LegalManifestValidation.pass(supportedPlan));
-        when(replace.planner.planReplace(replaceTarget, supportedPlan, OBSERVED_AT))
+        when(replace.planner.planReplace(replaceTarget, supportedPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replaceExecution));
         when(replace.postStateVerifier.verify(replaceExecution)).thenReturn(
                 receipt(LegalEditorialApplyReceipt.OperationType.REPLACE));
@@ -288,7 +289,7 @@ class LegalEditorialApplyServiceReconciliationTest {
                 LegalEditorialExecutionPlan.OperationType.RETIRE,
                 true);
         LegalEditorialApplyReceipt retireConfirmed = mock(LegalEditorialApplyReceipt.class);
-        when(retire.planner.planRetire(current, retirementPlan, OBSERVED_AT))
+        when(retire.planner.planRetire(current, retirementPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(retireExecution));
         when(retire.postStateVerifier.verify(retireExecution)).thenReturn(
                 receipt(LegalEditorialApplyReceipt.OperationType.RETIRE));
@@ -335,7 +336,7 @@ class LegalEditorialApplyServiceReconciliationTest {
             ValidatedRelease target,
             LegalEditorialExecutionPlan plan,
             LegalEditorialApplyReceipt tentative) {
-        when(harness.planner.planPromote(target, OBSERVED_AT))
+        when(harness.planner.planPromote(target, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(plan));
         when(harness.postStateVerifier.verify(plan)).thenReturn(tentative);
         when(harness.readinessCore.evaluate(target, OBSERVED_AT)).thenReturn(ready());
@@ -351,8 +352,9 @@ class LegalEditorialApplyServiceReconciliationTest {
                 "publication-9c",
                 PUBLICATION_ID,
                 "a".repeat(64)));
+        when(plan.transactionAt()).thenReturn(TRANSACTION_AT);
         when(plan.observedAt()).thenReturn(OBSERVED_AT);
-        when(plan.expectedAppliedAt()).thenReturn(OBSERVED_AT);
+        when(plan.expectedAppliedAt()).thenReturn(TRANSACTION_AT);
         when(plan.expectedReadinessAfter()).thenReturn(
                 operation == LegalEditorialExecutionPlan.OperationType.RETIRE
                         ? LegalEditorialReadiness.NOT_READY
@@ -367,7 +369,7 @@ class LegalEditorialApplyServiceReconciliationTest {
         return new LegalEditorialApplyReceipt(
                 operation,
                 PUBLICATION_ID,
-                OBSERVED_AT,
+                TRANSACTION_AT,
                 operation == LegalEditorialApplyReceipt.OperationType.RETIRE
                         ? LegalEditorialReadiness.NOT_READY
                         : LegalEditorialReadiness.READY,
@@ -469,10 +471,13 @@ class LegalEditorialApplyServiceReconciliationTest {
             int completion,
             Throwable terminalFailure) {
         when(gate.executeMutable(any())).thenAnswer(invocation -> {
-            TransactionCallback callback = invocation.getArgument(0);
+            LegalManifestDatabaseGate.EditorialTransactionCallback callback =
+                    invocation.getArgument(0);
             beginSynchronizedTransaction();
             try {
-                Object value = callback.doInTransaction(new SimpleTransactionStatus());
+                Object value = callback.doInTransaction(
+                        new SimpleTransactionStatus(),
+                        BOUNDARY);
                 List<TransactionSynchronization> synchronizations =
                         TransactionSynchronizationManager.getSynchronizations();
                 synchronizations.forEach(sync -> sync.beforeCommit(false));
@@ -490,10 +495,13 @@ class LegalEditorialApplyServiceReconciliationTest {
             LegalManifestDatabaseGate gate,
             int completion) {
         when(gate.executeMutable(any())).thenAnswer(invocation -> {
-            TransactionCallback callback = invocation.getArgument(0);
+            LegalManifestDatabaseGate.EditorialTransactionCallback callback =
+                    invocation.getArgument(0);
             beginSynchronizedTransaction();
             try {
-                return callback.doInTransaction(new SimpleTransactionStatus());
+                return callback.doInTransaction(
+                        new SimpleTransactionStatus(),
+                        BOUNDARY);
             } catch (RuntimeException | LinkageError failure) {
                 TransactionSynchronizationManager.getSynchronizations()
                         .forEach(sync -> sync.afterCompletion(completion));
@@ -561,11 +569,6 @@ class LegalEditorialApplyServiceReconciliationTest {
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
             when(readinessCore.usesJdbc(jdbc)).thenReturn(true);
             when(commitReconciler.usesJdbc(jdbc)).thenReturn(true);
-            when(jdbc.queryForObject(
-                    "SELECT transaction_timestamp()",
-                    OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
-                            OBSERVED_AT,
-                            ZoneOffset.UTC));
         }
 
         private LegalEditorialApplyService service() {

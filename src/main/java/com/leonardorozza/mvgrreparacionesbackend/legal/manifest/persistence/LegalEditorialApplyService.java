@@ -9,8 +9,6 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditor
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -82,8 +80,8 @@ public final class LegalEditorialApplyService {
         return apply(
                 target,
                 promotionWriter,
-                observedAt -> requirePromotePlan(requireApplicable(
-                        planner.planPromote(target, observedAt))),
+                LegalEditorialExecutionPlan.OperationType.PROMOTE,
+                boundary -> requireApplicable(planner.planPromote(target, boundary)),
                 planConstructed -> commitReconciler.reconcilePromote(
                         target,
                         planConstructed));
@@ -104,8 +102,9 @@ public final class LegalEditorialApplyService {
         return apply(
                 target,
                 replacementWriter,
-                observedAt -> requireReplacePlan(requireApplicable(
-                        planner.planReplace(target, supportedPlan, observedAt))),
+                LegalEditorialExecutionPlan.OperationType.REPLACE,
+                boundary -> requireApplicable(
+                        planner.planReplace(target, supportedPlan, boundary)),
                 planConstructed -> commitReconciler.reconcileReplace(
                         target,
                         supportedPlan,
@@ -121,8 +120,9 @@ public final class LegalEditorialApplyService {
         return apply(
                 current,
                 retirementWriter,
-                observedAt -> requireRetirePlan(requireApplicable(
-                        planner.planRetire(current, editorialPlan, observedAt))),
+                LegalEditorialExecutionPlan.OperationType.RETIRE,
+                boundary -> requireApplicable(
+                        planner.planRetire(current, editorialPlan, boundary)),
                 planConstructed -> commitReconciler.reconcileRetire(
                         current,
                         editorialPlan,
@@ -132,20 +132,22 @@ public final class LegalEditorialApplyService {
     private LegalEditorialApplyResult apply(
             ValidatedRelease target,
             LegalEditorialMutationWriter writer,
+            LegalEditorialExecutionPlan.OperationType expectedOperation,
             PlanOperation operation,
             ReconciliationOperation reconciliation) {
         LegalEditorialTransactionState<ConfirmedApply> transactionState =
                 new LegalEditorialTransactionState<>();
         try {
             requireSharedJdbcSession(writer);
-            databaseGate.executeMutable(status -> {
+            databaseGate.executeMutable((status, boundary) -> {
                 transactionState.callbackStarted();
-                Instant observedAt = readTransactionTimestamp();
-                LegalEditorialExecutionPlan plan = operation.plan(observedAt);
+                LegalEditorialExecutionPlan plan = operation.plan(boundary);
+                requireExactTimeBoundary(plan, boundary);
+                plan = requireOperationPlan(plan, expectedOperation);
                 transactionState.planConstructed();
 
                 ConfirmedApply confirmed = plan.changeRequired()
-                        ? applyFresh(target, plan, observedAt, writer)
+                        ? applyFresh(target, plan, boundary, writer)
                         : confirmReplay(plan);
                 transactionState.receiptDelivered(confirmed);
                 return confirmed;
@@ -195,12 +197,14 @@ public final class LegalEditorialApplyService {
     private ConfirmedApply applyFresh(
             ValidatedRelease target,
             LegalEditorialExecutionPlan plan,
-            Instant observedAt,
+            LegalEditorialTimeBoundary boundary,
             LegalEditorialMutationWriter writer) {
         writer.write(plan);
         LegalEditorialApplyReceipt receipt = postStateVerifier.verify(plan);
         jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
-        LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, observedAt);
+        LegalEditorialReadinessResult readiness = readinessCore.evaluate(
+                target,
+                boundary.observedAt());
         requireExpectedPostcondition(readiness, receipt, plan);
         return new ConfirmedApply(
                 LegalEditorialApplyResult.Outcome.APPLIED,
@@ -265,6 +269,16 @@ public final class LegalEditorialApplyService {
         return plan;
     }
 
+    private static LegalEditorialExecutionPlan requireOperationPlan(
+            LegalEditorialExecutionPlan plan,
+            LegalEditorialExecutionPlan.OperationType expectedOperation) {
+        return switch (expectedOperation) {
+            case PROMOTE -> requirePromotePlan(plan);
+            case REPLACE -> requireReplacePlan(plan);
+            case RETIRE -> requireRetirePlan(plan);
+        };
+    }
+
     private static void requireExpectedPostcondition(
             LegalEditorialReadinessResult result,
             LegalEditorialApplyReceipt receipt,
@@ -293,11 +307,15 @@ public final class LegalEditorialApplyService {
         }
     }
 
-    private Instant readTransactionTimestamp() {
-        OffsetDateTime timestamp = jdbc.queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        return Objects.requireNonNull(timestamp, "transaction_timestamp").toInstant();
+    private static void requireExactTimeBoundary(
+            LegalEditorialExecutionPlan plan,
+            LegalEditorialTimeBoundary boundary) {
+        if (!Objects.equals(plan.transactionAt(), boundary.transactionAt())
+                || !Objects.equals(plan.observedAt(), boundary.observedAt())) {
+            throw new LegalEditorialOperationalException(
+                    LegalManifestIssueCode.EDITORIAL_OBSERVATION_FAILED,
+                    OBSERVATION_LOCATION);
+        }
     }
 
     private void requireSharedJdbcSession(LegalEditorialMutationWriter writer) {
@@ -414,7 +432,7 @@ public final class LegalEditorialApplyService {
 
     @FunctionalInterface
     private interface PlanOperation {
-        LegalEditorialExecutionPlan plan(Instant observedAt);
+        LegalEditorialExecutionPlan plan(LegalEditorialTimeBoundary boundary);
     }
 
     @FunctionalInterface

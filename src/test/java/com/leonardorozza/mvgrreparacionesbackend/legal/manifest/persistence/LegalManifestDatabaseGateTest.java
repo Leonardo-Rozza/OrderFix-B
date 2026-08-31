@@ -11,6 +11,9 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,6 +31,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class LegalManifestDatabaseGateTest {
+
+    private static final Instant TRANSACTION_AT =
+            Instant.parse("2026-08-31T12:00:00.123456Z");
+    private static final Instant OBSERVED_AT =
+            Instant.parse("2026-08-31T12:00:01.654321Z");
 
     @Test
     void ordersTimeoutsPreflightsEditorialLockAndCallback() {
@@ -59,6 +67,12 @@ class LegalManifestDatabaseGateTest {
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
         order.verify(callback).doInTransaction(any());
+        verify(jdbc, never()).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        verify(jdbc, never()).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
         verifyNoInteractions(lateMutation);
     }
 
@@ -114,8 +128,10 @@ class LegalManifestDatabaseGateTest {
                 "SELECT pg_catalog.current_setting('transaction_read_only')",
                 String.class)).thenReturn("off");
         LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
-        when(callback.doInTransaction(any())).thenReturn("receipt");
+        stubTimeBoundary(jdbc);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        when(callback.doInTransaction(any(), any())).thenReturn("receipt");
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -139,7 +155,15 @@ class LegalManifestDatabaseGateTest {
                 org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
-        order.verify(callback).doInTransaction(any());
+        order.verify(jdbc).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
+        order.verify(callback).doInTransaction(
+                any(),
+                eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
     }
 
     @Test
@@ -163,8 +187,10 @@ class LegalManifestDatabaseGateTest {
                 "SELECT pg_catalog.current_setting('transaction_read_only')",
                 String.class)).thenReturn("on");
         LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
-        when(callback.doInTransaction(any())).thenReturn("observation");
+        stubTimeBoundary(jdbc);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        when(callback.doInTransaction(any(), any())).thenReturn("observation");
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -188,7 +214,15 @@ class LegalManifestDatabaseGateTest {
                 org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
-        order.verify(callback).doInTransaction(any());
+        order.verify(jdbc).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
+        order.verify(callback).doInTransaction(
+                any(),
+                eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
     }
 
     @Test
@@ -205,8 +239,10 @@ class LegalManifestDatabaseGateTest {
                 String.class)).thenReturn("on");
         LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
         LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
-        when(callback.doInTransaction(any())).thenReturn("reconciled");
+        stubTimeBoundary(jdbc);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        when(callback.doInTransaction(any(), any())).thenReturn("reconciled");
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -231,7 +267,22 @@ class LegalManifestDatabaseGateTest {
                 org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
-        order.verify(callback).doInTransaction(any());
+        order.verify(jdbc).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
+        order.verify(callback).doInTransaction(
+                any(),
+                eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+    }
+
+    @Test
+    void editorialClockReadsFailClosedBeforeCallback() {
+        assertClockBoundaryRejected(null, null, false);
+        assertClockBoundaryRejected(TRANSACTION_AT, null, true);
+        assertClockBoundaryRejected(OBSERVED_AT, TRANSACTION_AT, true);
     }
 
     @Test
@@ -626,7 +677,8 @@ class LegalManifestDatabaseGateTest {
             TransactionTemplate transaction,
             DataSource jdbcDataSource) {
         JdbcTemplate jdbc = new JdbcTemplate(jdbcDataSource);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -672,7 +724,8 @@ class LegalManifestDatabaseGateTest {
                 "SELECT pg_catalog.current_setting('transaction_read_only')",
                 String.class)).thenReturn(readOnly);
         LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -702,7 +755,8 @@ class LegalManifestDatabaseGateTest {
                 "SELECT pg_catalog.current_setting('transaction_read_only')",
                 String.class)).thenReturn(readOnly);
         LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
-        TransactionCallback<String> callback = mock(TransactionCallback.class);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
         LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
                 transaction,
                 jdbc,
@@ -726,6 +780,64 @@ class LegalManifestDatabaseGateTest {
                 new JdbcTemplate(dataSource),
                 LegalDatabaseBudgets.production(),
                 List.of());
+    }
+
+    private static void assertClockBoundaryRejected(
+            Instant transactionAt,
+            Instant observedAt,
+            boolean secondClockExpected) {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingReadOnlyTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn("read committed");
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn("on");
+        when(jdbc.queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class)).thenReturn(transactionAt == null
+                        ? null
+                        : OffsetDateTime.ofInstant(transactionAt, ZoneOffset.UTC));
+        if (observedAt != null) {
+            when(jdbc.queryForObject(
+                    "SELECT statement_timestamp()",
+                    OffsetDateTime.class)).thenReturn(
+                            OffsetDateTime.ofInstant(observedAt, ZoneOffset.UTC));
+        }
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeReadOnly(callback))
+                .isInstanceOf(RuntimeException.class);
+        if (secondClockExpected) {
+            verify(jdbc).queryForObject(
+                    "SELECT statement_timestamp()",
+                    OffsetDateTime.class);
+        } else {
+            verify(jdbc, never()).queryForObject(
+                    "SELECT statement_timestamp()",
+                    OffsetDateTime.class);
+        }
+        verifyNoInteractions(callback);
+    }
+
+    private static void stubTimeBoundary(JdbcTemplate jdbc) {
+        when(jdbc.queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class)).thenReturn(
+                        OffsetDateTime.ofInstant(TRANSACTION_AT, ZoneOffset.UTC));
+        when(jdbc.queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class)).thenReturn(
+                        OffsetDateTime.ofInstant(OBSERVED_AT, ZoneOffset.UTC));
     }
 
     private static TransactionTemplate safeImportTransaction(

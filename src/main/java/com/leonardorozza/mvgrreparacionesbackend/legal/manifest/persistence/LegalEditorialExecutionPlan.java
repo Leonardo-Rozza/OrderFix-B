@@ -34,6 +34,7 @@ record LegalEditorialExecutionPlan(
         PublicationIdentity target,
         Optional<UUID> operationId,
         Optional<String> planSha256,
+        Instant transactionAt,
         Instant observedAt,
         Instant expectedAppliedAt,
         LegalEditorialReadiness expectedReadinessAfter,
@@ -98,8 +99,13 @@ record LegalEditorialExecutionPlan(
         operationId = Objects.requireNonNull(operationId, "operationId");
         planSha256 = Objects.requireNonNull(planSha256, "planSha256")
                 .map(value -> requireSha256(value, "planSha256"));
+        transactionAt = requirePostgresInstant(transactionAt, "transactionAt");
         observedAt = requirePostgresInstant(observedAt, "observedAt");
         expectedAppliedAt = requirePostgresInstant(expectedAppliedAt, "expectedAppliedAt");
+        if (transactionAt.isAfter(observedAt)) {
+            throw new IllegalArgumentException(
+                    "transactionAt no puede ser posterior a observedAt");
+        }
         if (expectedAppliedAt.isAfter(observedAt)) {
             throw new IllegalArgumentException(
                     "expectedAppliedAt no puede ser posterior a observedAt");
@@ -126,9 +132,9 @@ record LegalEditorialExecutionPlan(
                 expectedAppliedAt,
                 expectedPostState);
         if (changeRequired) {
-            if (!expectedAppliedAt.equals(observedAt)) {
+            if (!expectedAppliedAt.equals(transactionAt)) {
                 throw new IllegalArgumentException(
-                        "Una mutación fresca requiere expectedAppliedAt igual a observedAt");
+                        "Una mutación fresca requiere expectedAppliedAt igual a transactionAt");
             }
             if (mutationCommands.isEmpty()) {
                 throw new IllegalArgumentException(

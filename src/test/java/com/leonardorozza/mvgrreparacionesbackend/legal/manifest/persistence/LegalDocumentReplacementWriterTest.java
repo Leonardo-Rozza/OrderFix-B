@@ -836,6 +836,7 @@ class LegalDocumentReplacementWriterTest {
         when(plan.target()).thenReturn(targetPublication);
         when(plan.operationId()).thenReturn(Optional.of(id(701)));
         when(plan.planSha256()).thenReturn(Optional.of("e".repeat(64)));
+        when(plan.transactionAt()).thenReturn(OBSERVED_AT);
         when(plan.observedAt()).thenReturn(OBSERVED_AT);
         when(plan.expectedAppliedAt()).thenReturn(OBSERVED_AT);
         when(plan.expectedReadinessAfter()).thenReturn(LegalEditorialReadiness.READY);

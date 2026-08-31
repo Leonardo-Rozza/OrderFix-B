@@ -98,7 +98,7 @@ final class LegalEditorialRetirementWriter implements LegalEditorialMutationWrit
                 || required.planSha256().isEmpty()
                 || expected == null
                 || commands == null
-                || !required.expectedAppliedAt().equals(required.observedAt())
+                || !required.expectedAppliedAt().equals(required.transactionAt())
                 || !source.orElseThrow().publication().equals(required.target())) {
             throw mappingMismatch();
         }

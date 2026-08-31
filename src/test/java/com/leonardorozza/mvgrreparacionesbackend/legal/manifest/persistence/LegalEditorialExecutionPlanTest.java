@@ -66,6 +66,7 @@ class LegalEditorialExecutionPlanTest {
                         "target",
                         "operationId",
                         "planSha256",
+                        "transactionAt",
                         "observedAt",
                         "expectedAppliedAt",
                         "expectedReadinessAfter",
@@ -76,7 +77,7 @@ class LegalEditorialExecutionPlanTest {
     }
 
     @Test
-    void promoteCarriesOnlyDirectCommandsAndUsesOnePostgresTimestamp() {
+    void promoteCarriesOnlyDirectCommandsAndUsesTheTransactionTimestamp() {
         LegalEditorialExecutionPlan plan = promote(true);
 
         assertThat(plan.operationType())
@@ -87,7 +88,8 @@ class LegalEditorialExecutionPlanTest {
         assertThat(plan.expectedReadinessAfter()).isEqualTo(LegalEditorialReadiness.READY);
         assertThat(plan.acknowledgeFailClosedGap()).isFalse();
         assertThat(plan.changeRequired()).isTrue();
-        assertThat(plan.expectedAppliedAt()).isEqualTo(plan.observedAt());
+        assertThat(plan.expectedAppliedAt()).isEqualTo(plan.transactionAt());
+        assertThat(plan.transactionAt()).isEqualTo(plan.observedAt());
         assertThat(plan.expectedPostState().v27TriggerEffects().isEmpty()).isTrue();
         assertThat(plan.expectedPostState().replacementBatches()).isEmpty();
         assertThat(plan.deltaCounts()).isEqualTo(new LegalEditorialExecutionPlan.DeltaCounts(
@@ -108,6 +110,7 @@ class LegalEditorialExecutionPlanTest {
         LegalEditorialExecutionPlan replay = promote(false);
 
         assertThat(replay.changeRequired()).isFalse();
+        assertThat(replay.transactionAt()).isEqualTo(OTHER_AT);
         assertThat(replay.observedAt()).isEqualTo(OTHER_AT);
         assertThat(replay.expectedAppliedAt()).isEqualTo(OBSERVED_AT);
         assertThat(replay.expectedAppliedAt()).isBefore(replay.observedAt());
@@ -779,25 +782,97 @@ class LegalEditorialExecutionPlanTest {
     }
 
     @Test
-    void applicationTimeUsesPostgresPrecisionCannotBeFutureAndMatchesFreshObservation() {
+    void temporalBoundaryUsesPostgresPrecisionAndCannotObserveBeforeTransaction() {
         LegalEditorialExecutionPlan replay = promote(false);
-        LegalEditorialExecutionPlan fresh = promote(true);
 
-        assertThatThrownBy(() -> copyWithTimes(replay, OBSERVED_AT, OTHER_AT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("posterior");
         assertThatThrownBy(() -> copyWithTimes(
                 replay,
+                Instant.parse("2026-08-28T18:00:00.123456789Z"),
+                OTHER_AT,
+                OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("transactionAt")
+                .hasMessageContaining("microsegundos");
+        assertThatThrownBy(() -> copyWithTimes(
+                replay,
+                OBSERVED_AT,
+                Instant.parse("2026-08-28T18:00:01.123456789Z"),
+                OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("observedAt")
+                .hasMessageContaining("microsegundos");
+        assertThatThrownBy(() -> copyWithTimes(
+                replay,
+                PREEXISTING_AT,
                 OTHER_AT,
                 Instant.parse("2026-08-28T18:00:00.123456789Z")))
                 .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expectedAppliedAt")
                 .hasMessageContaining("microsegundos");
-        assertThatThrownBy(() -> copyWithTimes(replay, OTHER_AT, PREEXISTING_AT))
+        assertThatThrownBy(() -> copyWithTimes(
+                replay,
+                OTHER_AT,
+                OBSERVED_AT,
+                OBSERVED_AT))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("expectedAppliedAt");
-        assertThatThrownBy(() -> copyWithTimes(fresh, OTHER_AT, OBSERVED_AT))
+                .hasMessageContaining("transactionAt")
+                .hasMessageContaining("posterior");
+        assertThatThrownBy(() -> copyWithTimes(
+                replay,
+                OBSERVED_AT,
+                OTHER_AT,
+                Instant.parse("2026-08-28T18:00:02.123456Z")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("mutación fresca");
+                .hasMessageContaining("expectedAppliedAt")
+                .hasMessageContaining("posterior");
+    }
+
+    @Test
+    void freshMutationUsesTransactionAtAndAllowsLaterObservation() {
+        LegalEditorialExecutionPlan fresh = promote(true);
+
+        LegalEditorialExecutionPlan observedLater = copyWithTimes(
+                fresh,
+                OBSERVED_AT,
+                OTHER_AT,
+                OBSERVED_AT);
+
+        assertThat(observedLater.expectedAppliedAt())
+                .isEqualTo(observedLater.transactionAt());
+        assertThat(observedLater.observedAt()).isAfter(observedLater.transactionAt());
+        assertThatThrownBy(() -> copyWithTimes(
+                fresh,
+                PREEXISTING_AT,
+                OTHER_AT,
+                OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mutación fresca")
+                .hasMessageContaining("transactionAt");
+    }
+
+    @Test
+    void replayAllowsAppliedAtOnEitherSideOfTransactionWithinObservationBoundary() {
+        LegalEditorialExecutionPlan replay = promote(false);
+
+        LegalEditorialExecutionPlan transactionBeforeApplied = copyWithTimes(
+                replay,
+                PREEXISTING_AT,
+                OTHER_AT,
+                OBSERVED_AT);
+        LegalEditorialExecutionPlan transactionAfterApplied = copyWithTimes(
+                replay,
+                OTHER_AT,
+                OTHER_AT,
+                OBSERVED_AT);
+
+        assertThat(transactionBeforeApplied.transactionAt())
+                .isBefore(transactionBeforeApplied.expectedAppliedAt());
+        assertThat(transactionAfterApplied.transactionAt())
+                .isAfter(transactionAfterApplied.expectedAppliedAt());
+        assertThat(transactionBeforeApplied.expectedAppliedAt())
+                .isBeforeOrEqualTo(transactionBeforeApplied.observedAt());
+        assertThat(transactionAfterApplied.expectedAppliedAt())
+                .isBeforeOrEqualTo(transactionAfterApplied.observedAt());
     }
 
     @Test
@@ -925,6 +1000,7 @@ class LegalEditorialExecutionPlanTest {
                 target(),
                 Optional.empty(),
                 Optional.empty(),
+                OBSERVED_AT,
                 Instant.parse("2026-08-28T18:00:00.123456789Z"),
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
@@ -1441,6 +1517,7 @@ class LegalEditorialExecutionPlanTest {
                 Optional.empty(),
                 Optional.empty(),
                 changeRequired ? OBSERVED_AT : OTHER_AT,
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
                 false,
@@ -1549,6 +1626,7 @@ class LegalEditorialExecutionPlanTest {
                 target(),
                 Optional.of(OPERATION_ID),
                 Optional.of(PLAN_SHA),
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.READY,
@@ -1659,6 +1737,7 @@ class LegalEditorialExecutionPlanTest {
                 source().publication(),
                 Optional.of(OPERATION_ID),
                 Optional.of(PLAN_SHA),
+                changeRequired ? OBSERVED_AT : OTHER_AT,
                 changeRequired ? OBSERVED_AT : OTHER_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.NOT_READY,
@@ -1804,6 +1883,7 @@ class LegalEditorialExecutionPlanTest {
                 target,
                 operationId,
                 planSha256,
+                original.transactionAt(),
                 original.observedAt(),
                 original.expectedAppliedAt(),
                 expectedReadinessAfter,
@@ -1815,6 +1895,7 @@ class LegalEditorialExecutionPlanTest {
 
     private static LegalEditorialExecutionPlan copyWithTimes(
             LegalEditorialExecutionPlan original,
+            Instant transactionAt,
             Instant observedAt,
             Instant expectedAppliedAt) {
         return new LegalEditorialExecutionPlan(
@@ -1823,6 +1904,7 @@ class LegalEditorialExecutionPlanTest {
                 original.target(),
                 original.operationId(),
                 original.planSha256(),
+                transactionAt,
                 observedAt,
                 expectedAppliedAt,
                 original.expectedReadinessAfter(),

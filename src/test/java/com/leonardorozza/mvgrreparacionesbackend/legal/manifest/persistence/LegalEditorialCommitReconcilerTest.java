@@ -18,8 +18,6 @@ import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -42,6 +40,10 @@ class LegalEditorialCommitReconcilerTest {
 
     private static final Instant OBSERVED_AT =
             Instant.parse("2026-08-31T12:00:00.123456Z");
+    private static final Instant TRANSACTION_AT =
+            Instant.parse("2026-08-31T11:59:59.123456Z");
+    private static final LegalEditorialTimeBoundary BOUNDARY =
+            new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT);
 
     @AfterEach
     void clearThreadTransactionState() {
@@ -89,7 +91,7 @@ class LegalEditorialCommitReconcilerTest {
                 .noneMatch(LegalEditorialApplyReceipt.class::isAssignableFrom);
         assertThat(dependencyTypes)
                 .noneMatch(LegalEditorialExecutionPlan.class::isAssignableFrom);
-        assertThat(dependencyTypes).doesNotContain(Instant.class, OffsetDateTime.class);
+        assertThat(dependencyTypes).doesNotContain(Instant.class);
     }
 
     @Test
@@ -98,8 +100,9 @@ class LegalEditorialCommitReconcilerTest {
                 "src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialCommitReconciler.java"));
 
         assertThat(source)
-                .contains("SELECT transaction_timestamp()")
                 .doesNotContain(
+                        "transaction_timestamp",
+                        "statement_timestamp",
                         "LegalEditorialMutationWriter",
                         "LegalInitialPromotionCore",
                         "LegalDocumentReplacementWriter",
@@ -158,7 +161,7 @@ class LegalEditorialCommitReconcilerTest {
         LegalEditorialExecutionPlan plan = executionPlan(
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
                 true);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planPromote(release, BOUNDARY))
                 .thenAnswer(invocation -> {
                     assertThat(harness.boundaryActive).isTrue();
                     return LegalEditorialPlanResult.applicable(plan);
@@ -171,15 +174,13 @@ class LegalEditorialCommitReconcilerTest {
                 .isEqualTo(LegalEditorialCommitReconciler.Outcome.SOURCE_EXACT);
         assertThat(result.receipt()).isEmpty();
         verify(harness.gate, times(1)).executeEditorialReconciliation(any());
-        verify(harness.jdbc, times(1)).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        verify(harness.planner, times(1)).planPromote(release, OBSERVED_AT);
+        verify(harness.jdbc, never()).queryForObject(any(String.class), any(Class.class));
+        verify(harness.planner, times(1)).planPromote(release, BOUNDARY);
         verify(harness.postStateVerifier, never()).verify(any());
     }
 
     @Test
-    void replaceAndRetireUseTheirTypedInputsAndOneFreshTimestampEach() {
+    void replaceAndRetireUseTheirTypedInputsAndGateOwnedBoundaries() {
         Harness replaceHarness = new Harness();
         Harness retireHarness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
@@ -190,9 +191,9 @@ class LegalEditorialCommitReconcilerTest {
         LegalEditorialExecutionPlan freshRetire = executionPlan(
                 LegalEditorialExecutionPlan.OperationType.RETIRE,
                 true);
-        when(replaceHarness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
+        when(replaceHarness.planner.planReplace(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(freshReplace));
-        when(retireHarness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(retireHarness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(freshRetire));
 
         LegalEditorialCommitReconciler.Result replace = replaceHarness.reconciler()
@@ -204,14 +205,12 @@ class LegalEditorialCommitReconcilerTest {
                 .isEqualTo(LegalEditorialCommitReconciler.Outcome.SOURCE_EXACT);
         assertThat(retire.outcome())
                 .isEqualTo(LegalEditorialCommitReconciler.Outcome.SOURCE_EXACT);
-        verify(replaceHarness.planner).planReplace(release, editorialPlan, OBSERVED_AT);
-        verify(retireHarness.planner).planRetire(release, editorialPlan, OBSERVED_AT);
-        verify(replaceHarness.jdbc).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        verify(retireHarness.jdbc).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
+        verify(replaceHarness.planner).planReplace(release, editorialPlan, BOUNDARY);
+        verify(retireHarness.planner).planRetire(release, editorialPlan, BOUNDARY);
+        verify(replaceHarness.jdbc, never()).queryForObject(
+                any(String.class), any(Class.class));
+        verify(retireHarness.jdbc, never()).queryForObject(
+                any(String.class), any(Class.class));
     }
 
     @Test
@@ -222,7 +221,7 @@ class LegalEditorialCommitReconcilerTest {
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
                 false);
         LegalEditorialApplyReceipt receipt = receipt();
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planPromote(release, BOUNDARY))
                 .thenAnswer(invocation -> {
                     assertThat(harness.boundaryActive).isTrue();
                     return LegalEditorialPlanResult.applicable(replay);
@@ -257,9 +256,9 @@ class LegalEditorialCommitReconcilerTest {
                 LegalEditorialApplyReceipt.OperationType.REPLACE);
         LegalEditorialApplyReceipt retireReceipt = receipt(
                 LegalEditorialApplyReceipt.OperationType.RETIRE);
-        when(replaceHarness.planner.planReplace(release, editorialPlan, OBSERVED_AT))
+        when(replaceHarness.planner.planReplace(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replaceReplay));
-        when(retireHarness.planner.planRetire(release, editorialPlan, OBSERVED_AT))
+        when(retireHarness.planner.planRetire(release, editorialPlan, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(retireReplay));
         when(replaceHarness.postStateVerifier.verify(replaceReplay))
                 .thenReturn(replaceReceipt);
@@ -284,9 +283,9 @@ class LegalEditorialCommitReconcilerTest {
         Harness blockedHarness = new Harness();
         Harness errorHarness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
-        when(blockedHarness.planner.planPromote(release, OBSERVED_AT))
+        when(blockedHarness.planner.planPromote(release, BOUNDARY))
                 .thenReturn(blockedResult());
-        when(errorHarness.planner.planPromote(release, OBSERVED_AT))
+        when(errorHarness.planner.planPromote(release, BOUNDARY))
                 .thenReturn(errorResult());
 
         LegalEditorialCommitReconciler.Result blocked =
@@ -304,13 +303,13 @@ class LegalEditorialCommitReconcilerTest {
     void nullReplansAndLinkageFailuresRemainUnknownWithoutVerification() {
         ValidatedRelease release = mock(ValidatedRelease.class);
         Harness nullReplan = new Harness();
-        when(nullReplan.planner.planPromote(release, OBSERVED_AT)).thenReturn(null);
+        when(nullReplan.planner.planPromote(release, BOUNDARY)).thenReturn(null);
 
         assertUnknown(nullReplan.reconciler().reconcilePromote(release, true));
         verify(nullReplan.postStateVerifier, never()).verify(any());
 
         Harness linkageFailure = new Harness();
-        when(linkageFailure.planner.planPromote(release, OBSERVED_AT))
+        when(linkageFailure.planner.planPromote(release, BOUNDARY))
                 .thenThrow(new NoClassDefFoundError("missing reconciliation dependency"));
 
         assertUnknown(linkageFailure.reconciler().reconcilePromote(release, true));
@@ -324,7 +323,7 @@ class LegalEditorialCommitReconcilerTest {
         LegalEditorialExecutionPlan replay = executionPlan(
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
                 false);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planPromote(release, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replay));
         doThrow(new LegalEditorialOperationalException(
                 LegalManifestIssueCode.POSTCONDITION_NOT_READY,
@@ -338,7 +337,7 @@ class LegalEditorialCommitReconcilerTest {
     }
 
     @Test
-    void gatePlannerAndTimestampFailuresAllRemainUnknown() {
+    void gatePlannerAndBoundaryFailuresAllRemainUnknown() {
         ValidatedRelease release = mock(ValidatedRelease.class);
 
         Harness gateFailure = new Harness();
@@ -356,17 +355,16 @@ class LegalEditorialCommitReconcilerTest {
         verify(lockFailure.planner, never()).planPromote(any(), any());
 
         Harness plannerFailure = new Harness();
-        when(plannerFailure.planner.planPromote(release, OBSERVED_AT))
+        when(plannerFailure.planner.planPromote(release, BOUNDARY))
                 .thenThrow(new IllegalStateException("partial observation"));
         assertUnknown(plannerFailure.reconciler().reconcilePromote(release, true));
         verify(plannerFailure.postStateVerifier, never()).verify(any());
 
-        Harness missingTimestamp = new Harness();
-        org.mockito.Mockito.doReturn(null).when(missingTimestamp.jdbc).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        assertUnknown(missingTimestamp.reconciler().reconcilePromote(release, true));
-        verify(missingTimestamp.planner, never()).planPromote(any(), any());
+        Harness missingBoundary = new Harness();
+        doThrow(new NullPointerException("transaction_timestamp"))
+                .when(missingBoundary.gate).executeEditorialReconciliation(any());
+        assertUnknown(missingBoundary.reconciler().reconcilePromote(release, true));
+        verify(missingBoundary.planner, never()).planPromote(any(), any());
     }
 
     @Test
@@ -409,7 +407,7 @@ class LegalEditorialCommitReconcilerTest {
         LegalEditorialExecutionPlan replaceReplay = executionPlan(
                 LegalEditorialExecutionPlan.OperationType.REPLACE,
                 false);
-        when(crossed.planner.planPromote(release, OBSERVED_AT))
+        when(crossed.planner.planPromote(release, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replaceReplay));
         assertUnknown(crossed.reconciler().reconcilePromote(release, true));
         verify(crossed.postStateVerifier, never()).verify(any());
@@ -421,13 +419,41 @@ class LegalEditorialCommitReconcilerTest {
     }
 
     @Test
+    void plansFromAnotherTimeBoundaryRemainUnknownBeforeVerification() {
+        ValidatedRelease release = mock(ValidatedRelease.class);
+
+        Harness foreignTransaction = new Harness();
+        LegalEditorialExecutionPlan transactionMismatch = executionPlan(
+                LegalEditorialExecutionPlan.OperationType.PROMOTE,
+                false);
+        when(transactionMismatch.transactionAt())
+                .thenReturn(TRANSACTION_AT.minusSeconds(1));
+        when(foreignTransaction.planner.planPromote(release, BOUNDARY))
+                .thenReturn(LegalEditorialPlanResult.applicable(transactionMismatch));
+
+        assertUnknown(foreignTransaction.reconciler().reconcilePromote(release, true));
+        verify(foreignTransaction.postStateVerifier, never()).verify(any());
+
+        Harness foreignObservation = new Harness();
+        LegalEditorialExecutionPlan observationMismatch = executionPlan(
+                LegalEditorialExecutionPlan.OperationType.PROMOTE,
+                false);
+        when(observationMismatch.observedAt()).thenReturn(OBSERVED_AT.minusSeconds(1));
+        when(foreignObservation.planner.planPromote(release, BOUNDARY))
+                .thenReturn(LegalEditorialPlanResult.applicable(observationMismatch));
+
+        assertUnknown(foreignObservation.reconciler().reconcilePromote(release, true));
+        verify(foreignObservation.postStateVerifier, never()).verify(any());
+    }
+
+    @Test
     void aNullVerifierReceiptRemainsUnknown() {
         Harness harness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
         LegalEditorialExecutionPlan replay = executionPlan(
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
                 false);
-        when(harness.planner.planPromote(release, OBSERVED_AT))
+        when(harness.planner.planPromote(release, BOUNDARY))
                 .thenReturn(LegalEditorialPlanResult.applicable(replay));
         when(harness.postStateVerifier.verify(replay)).thenReturn(null);
 
@@ -466,6 +492,8 @@ class LegalEditorialCommitReconcilerTest {
         LegalEditorialExecutionPlan plan = mock(LegalEditorialExecutionPlan.class);
         when(plan.operationType()).thenReturn(operationType);
         when(plan.changeRequired()).thenReturn(changeRequired);
+        when(plan.transactionAt()).thenReturn(TRANSACTION_AT);
+        when(plan.observedAt()).thenReturn(OBSERVED_AT);
         return plan;
     }
 
@@ -490,7 +518,7 @@ class LegalEditorialCommitReconcilerTest {
         return new LegalEditorialApplyReceipt(
                 operationType,
                 UUID.fromString("00000000-0000-0000-0000-000000000901"),
-                OBSERVED_AT,
+                TRANSACTION_AT,
                 operationType == LegalEditorialApplyReceipt.OperationType.RETIRE
                         ? LegalEditorialReadiness.NOT_READY
                         : LegalEditorialReadiness.READY,
@@ -527,18 +555,14 @@ class LegalEditorialCommitReconcilerTest {
             when(gate.usesJdbc(jdbc)).thenReturn(true);
             when(planner.usesJdbc(jdbc)).thenReturn(true);
             when(postStateVerifier.usesJdbc(jdbc)).thenReturn(true);
-            when(jdbc.queryForObject(
-                    "SELECT transaction_timestamp()",
-                    OffsetDateTime.class)).thenAnswer(invocation -> {
-                        assertThat(boundaryActive).isTrue();
-                        return OffsetDateTime.ofInstant(OBSERVED_AT, ZoneOffset.UTC);
-                    });
             when(gate.executeEditorialReconciliation(any())).thenAnswer(invocation -> {
-                org.springframework.transaction.support.TransactionCallback<?> callback =
+                LegalManifestDatabaseGate.EditorialTransactionCallback<?> callback =
                         invocation.getArgument(0);
                 boundaryActive.set(true);
                 try {
-                    return callback.doInTransaction(new SimpleTransactionStatus());
+                    return callback.doInTransaction(
+                            new SimpleTransactionStatus(),
+                            BOUNDARY);
                 } finally {
                     boundaryActive.set(false);
                 }

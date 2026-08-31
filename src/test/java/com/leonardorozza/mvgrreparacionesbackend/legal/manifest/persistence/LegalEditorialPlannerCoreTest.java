@@ -50,6 +50,8 @@ class LegalEditorialPlannerCoreTest {
             Instant.parse("2026-08-28T18:00:00.123456Z");
     private static final Instant APPLIED_AT =
             Instant.parse("2026-08-27T18:00:00.123456Z");
+    private static final LegalEditorialTimeBoundary BOUNDARY =
+            new LegalEditorialTimeBoundary(OBSERVED_AT, OBSERVED_AT);
     private static final String TARGET_EXTERNAL_ID = "legal-ar-2026-08";
     private static final String TARGET_SHA = "a".repeat(64);
     private static final String SOURCE_EXTERNAL_ID = "legal-ar-2026-07";
@@ -158,7 +160,7 @@ class LegalEditorialPlannerCoreTest {
 
         LegalEditorialPlanResult result = harness.core().planPromote(
                 harness.release,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -176,6 +178,100 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void freshPromotionUsesTransactionTimeAndPublicObservationSeparately() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        LegalEditorialTimeBoundary boundary = new LegalEditorialTimeBoundary(
+                transactionAt,
+                OBSERVED_AT);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(freshSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(1, 0, 0, 0, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+
+        LegalEditorialPlanResult result = harness.core().planPromote(
+                harness.release,
+                boundary);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.executionPlan()).get().satisfies(plan -> {
+            assertThat(plan.transactionAt()).isEqualTo(transactionAt);
+            assertThat(plan.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(plan.expectedAppliedAt()).isEqualTo(transactionAt);
+            assertThat(plan.expectedPostState().documentTransitions())
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(transactionAt));
+        });
+    }
+
+    @Test
+    void freshPromotionKeepsEffectiveDateFailureWhenItCrossedDuringTheLockWait() {
+        LegalEditorialTimeBoundary boundary = new LegalEditorialTimeBoundary(
+                OBSERVED_AT.minusSeconds(120),
+                OBSERVED_AT);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(freshSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(1, 0, 0, 0, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+
+        LegalEditorialPlanResult result = harness.core().planPromote(
+                harness.release,
+                boundary);
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED);
+    }
+
+    @Test
+    void freshPromotionRequiresItsTargetSealAtOrBeforeTransactionTime() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        for (Instant sealedAt : List.of(transactionAt, transactionAt.plusSeconds(1))) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.publication(TARGET_EXTERNAL_ID)).thenReturn(Optional.of(
+                    new LegalEditorialPlannerCore.PublicationEvidence(
+                            TARGET_PUBLICATION_ID,
+                            TARGET_EXTERNAL_ID,
+                            TARGET_SHA,
+                            "SELLADO",
+                            sealedAt)));
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(freshSnapshot());
+            when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                    LegalEditorialReadinessResult.notReady(
+                            observation(1, 0, 0, 0, 0),
+                            List.of(LegalManifestIssue.at(
+                                    LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                    "database/state"))));
+
+            LegalEditorialPlanResult result = harness.core().planPromote(
+                    harness.release,
+                    new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+            if (sealedAt.equals(transactionAt)) {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+                assertThat(result.changeRequired()).contains(true);
+            } else {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+                assertThat(result.executionPlan()).isEmpty();
+                assertThat(result.issues())
+                        .extracting(LegalManifestIssue::code)
+                        .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+            }
+        }
+    }
+
+    @Test
     void exactPromotionPostStateIsRecognizedBeforeAnySourceClassification() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
         LegalEditorialPlannerCore.PlannerSnapshot snapshot = promotedSnapshot();
@@ -187,7 +283,7 @@ class LegalEditorialPlannerCoreTest {
 
         LegalEditorialPlanResult result = harness.core().planPromote(
                 harness.release,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
@@ -198,6 +294,30 @@ class LegalEditorialPlannerCoreTest {
             assertThat(plan.expectedPostState().documentTransitions())
                     .extracting(LegalEditorialExecutionPlan.DocumentTransition::occurredAt)
                     .containsOnly(APPLIED_AT);
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void promotionReplayCanBeObservedAfterACommitNewerThanTheTransaction() {
+        Instant transactionAt = APPLIED_AT.minusSeconds(1);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(promotedSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.ready(observation(1, 2, 0, 1, 0)));
+
+        LegalEditorialPlanResult result = harness.core().planPromote(
+                harness.release,
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(plan -> {
+            assertThat(plan.transactionAt()).isEqualTo(transactionAt);
+            assertThat(plan.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(plan.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(plan.mutationCommands().isEmpty()).isTrue();
         });
         verify(harness.readiness, never()).observeState(any(), any());
     }
@@ -241,7 +361,7 @@ class LegalEditorialPlannerCoreTest {
 
         LegalEditorialPlanResult result = harness.core().planPromote(
                 harness.release,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -256,7 +376,7 @@ class LegalEditorialPlannerCoreTest {
 
         assertThatThrownBy(() -> harness.core().planPromote(
                 harness.release,
-                OBSERVED_AT))
+                BOUNDARY))
                 .isInstanceOfSatisfying(
                         LegalEditorialBlockedException.class,
                         failure -> assertThat(failure.issue().code())
@@ -275,7 +395,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -313,7 +433,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -349,6 +469,122 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void freshReplacementUsesTransactionTimeForItsWholeDelta() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                compositeReplacementBatches());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                compositeReplacementSourceSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(6, 6, 0, 4, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.transactionAt()).isEqualTo(transactionAt);
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(transactionAt);
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(transactionAt));
+            assertThat(execution.expectedPostState().replacementBatches())
+                    .allSatisfy(batch -> {
+                        assertThat(batch.createdAt()).isEqualTo(transactionAt);
+                        assertThat(batch.sealedAt()).isEqualTo(transactionAt);
+                    });
+        });
+    }
+
+    @Test
+    void freshReplacementKeepsEffectiveDateFailureWhenItCrossedDuringTheLockWait() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(120);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                compositeReplacementBatches());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                compositeReplacementSourceSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.notReady(
+                        observation(6, 6, 0, 4, 0),
+                        List.of(LegalManifestIssue.at(
+                                LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                "database/state"))));
+        when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                sourceObservation(FINGERPRINT));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED);
+    }
+
+    @Test
+    void replacementSourceRequiresItsMembershipCausalityAtOrBeforeTransactionTime() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        for (Instant causalAt : List.of(transactionAt, transactionAt.plusSeconds(1))) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            ValidatedEditorialPlan token = replacementToken(
+                    List.of(),
+                    List.of(),
+                    compositeReplacementBatches());
+            stubReplacementPublications(harness);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    compositeReplacementSourceSnapshotAt(causalAt));
+            when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                    LegalEditorialReadinessResult.notReady(
+                            observation(6, 6, 0, 4, 0),
+                            List.of(LegalManifestIssue.at(
+                                    LegalManifestIssueCode.CURRENT_STATE_MISMATCH,
+                                    "database/state"))));
+            when(harness.readiness.observeState(SOURCE_EXTERNAL_ID, OBSERVED_AT)).thenReturn(
+                    sourceObservation(FINGERPRINT));
+
+            LegalEditorialPlanResult result = harness.core().planReplace(
+                    harness.release,
+                    token,
+                    new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+            if (causalAt.equals(transactionAt)) {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+                assertThat(result.changeRequired()).contains(true);
+            } else {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+                assertThat(result.executionPlan()).isEmpty();
+                assertThat(result.issues())
+                        .extracting(LegalManifestIssue::code)
+                        .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+            }
+        }
+    }
+
+    @Test
     void compositeSplitAndMergeReplayPreservesAtomicTimestampAndEmitsNoCommands() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
         ValidatedEditorialPlan token = replacementToken(
@@ -365,7 +601,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
@@ -395,6 +631,37 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void replacementReplayCanBeObservedAfterACommitNewerThanTheTransaction() {
+        Instant transactionAt = APPLIED_AT.minusSeconds(1);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        ValidatedEditorialPlan token = replacementToken(
+                List.of(),
+                List.of(),
+                compositeReplacementBatches());
+        stubReplacementPublications(harness);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                compositeReplacementPostSnapshot());
+        when(harness.readiness.evaluate(harness.release, OBSERVED_AT)).thenReturn(
+                LegalEditorialReadinessResult.ready(observation(6, 15, 0, 4, 2)));
+
+        LegalEditorialPlanResult result = harness.core().planReplace(
+                harness.release,
+                token,
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.transactionAt()).isEqualTo(transactionAt);
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
     void replacementMappingRejectsDatabaseTypeLocaleAndContextMismatchesBeforeMutation() {
         for (InvalidReplacementMapping scenario : invalidReplacementMappings()) {
             Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
@@ -410,7 +677,7 @@ class LegalEditorialPlannerCoreTest {
             LegalEditorialPlanResult result = harness.core().planReplace(
                     harness.release,
                     token,
-                    OBSERVED_AT);
+                    BOUNDARY);
 
             assertThat(result.status()).as(scenario.name())
                     .isEqualTo(LegalManifestStatus.BLOCKED);
@@ -443,7 +710,7 @@ class LegalEditorialPlannerCoreTest {
         assertThatThrownBy(() -> harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT))
+                BOUNDARY))
                 .isInstanceOfSatisfying(
                         LegalEditorialBlockedException.class,
                         failure -> assertThat(failure.issue().code())
@@ -491,7 +758,7 @@ class LegalEditorialPlannerCoreTest {
             LegalEditorialPlanResult result = harness.core().planRetire(
                     harness.release,
                     token,
-                    OBSERVED_AT);
+                    BOUNDARY);
 
             assertThat(result.status()).as(testCase.name())
                     .isEqualTo(LegalManifestStatus.BLOCKED);
@@ -518,7 +785,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -578,7 +845,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -629,7 +896,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -652,6 +919,112 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
+    void freshRetirementUsesTransactionTimeForItsCutover() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementSourceSnapshot());
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(true);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.transactionAt()).isEqualTo(transactionAt);
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(transactionAt);
+            assertThat(execution.expectedPostState().documentTransitions())
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(transactionAt));
+            assertThat(execution.expectedPostState().requirementTransitions())
+                    .allSatisfy(transition -> assertThat(transition.occurredAt())
+                            .isEqualTo(transactionAt));
+        });
+    }
+
+    @Test
+    void retirementSourceAllowsAffectedPointerAtTheFloorButRejectsOneAfterIt() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        for (Instant pointerAt : List.of(transactionAt, transactionAt.plusSeconds(1))) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    retirementSourceWithAffectedPointerAt(pointerAt));
+            stubRetirementFingerprint(harness);
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    mixedRetirementToken(),
+                    new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+            if (pointerAt.equals(transactionAt)) {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+                assertThat(result.changeRequired()).contains(true);
+            } else {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+                assertThat(result.executionPlan()).isEmpty();
+                assertThat(result.issues())
+                        .extracting(LegalManifestIssue::code)
+                        .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+            }
+        }
+    }
+
+    @Test
+    void retirementSourceAllowsSurvivorPointerAtTheFloorButRejectsOneAfterIt() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        for (Instant pointerAt : List.of(transactionAt, transactionAt.plusSeconds(1))) {
+            Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+            when(harness.reader.snapshot(
+                    any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                    retirementSourceWithSurvivorPointerAt(pointerAt));
+            stubRetirementFingerprint(harness);
+
+            LegalEditorialPlanResult result = harness.core().planRetire(
+                    harness.release,
+                    mixedRetirementToken(),
+                    new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+            if (pointerAt.equals(transactionAt)) {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+                assertThat(result.changeRequired()).contains(true);
+            } else {
+                assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+                assertThat(result.executionPlan()).isEmpty();
+                assertThat(result.issues())
+                        .extracting(LegalManifestIssue::code)
+                        .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+            }
+        }
+    }
+
+    @Test
+    void retirementSourceRejectsAReferencedHistoricalBatchSealAfterTransactionTime() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                retirementSourceWithHistoricalBatchSealAt(transactionAt.plusSeconds(1)));
+        stubRetirementFingerprint(harness);
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
+        assertThat(result.executionPlan()).isEmpty();
+        assertThat(result.issues())
+                .extracting(LegalManifestIssue::code)
+                .containsExactly(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+    }
+
+    @Test
     void aSecondRetirementPreservesAnExistingGapWithoutRecreatingItsProjections() {
         Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
         ValidatedEditorialPlan token = retirementToken(
@@ -665,7 +1038,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -697,10 +1070,11 @@ class LegalEditorialPlannerCoreTest {
     }
 
     @Test
-    void retirementSourceRejectsPrehistoryAtOrAfterTheObservationCut() {
+    void retirementSourceRequiresEveryMembershipTransitionBeforeTransactionTime() {
+        Instant transactionAt = OBSERVED_AT.minusSeconds(30);
         for (Instant invalidTransitionAt : List.of(
-                OBSERVED_AT,
-                OBSERVED_AT.plusSeconds(1))) {
+                transactionAt,
+                transactionAt.plusSeconds(1))) {
             Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
             when(harness.reader.snapshot(
                     any(), any(), anySet(), anySet(), anySet())).thenReturn(
@@ -710,7 +1084,7 @@ class LegalEditorialPlannerCoreTest {
             LegalEditorialPlanResult result = harness.core().planRetire(
                     harness.release,
                     retirementToken(List.of(documentRetirement()), List.of()),
-                    OBSERVED_AT);
+                    new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
 
             assertThat(result.status()).as(invalidTransitionAt.toString())
                     .isEqualTo(LegalManifestStatus.BLOCKED);
@@ -732,7 +1106,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 mixedRetirementToken(),
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -751,7 +1125,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 mixedRetirementToken(),
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
@@ -769,6 +1143,30 @@ class LegalEditorialPlannerCoreTest {
             assertThat(execution.expectedPostState().preexistingReplacementBatches())
                     .extracting(LegalEditorialExecutionPlan.ReplacementBatch::batchId)
                     .containsExactly(HISTORICAL_BATCH_ID);
+        });
+        verify(harness.readiness, never()).observeState(any(), any());
+    }
+
+    @Test
+    void retirementReplayCanBeObservedAfterACommitNewerThanTheTransaction() {
+        Instant transactionAt = APPLIED_AT.minusSeconds(1);
+        Harness harness = new Harness(ReviewStatus.APPROVED, ReviewStatus.APPROVED);
+        when(harness.reader.snapshot(
+                any(), any(), anySet(), anySet(), anySet())).thenReturn(
+                partialRetirementPostSnapshot());
+
+        LegalEditorialPlanResult result = harness.core().planRetire(
+                harness.release,
+                mixedRetirementToken(),
+                new LegalEditorialTimeBoundary(transactionAt, OBSERVED_AT));
+
+        assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
+        assertThat(result.changeRequired()).contains(false);
+        assertThat(result.executionPlan()).get().satisfies(execution -> {
+            assertThat(execution.transactionAt()).isEqualTo(transactionAt);
+            assertThat(execution.observedAt()).isEqualTo(OBSERVED_AT);
+            assertThat(execution.expectedAppliedAt()).isEqualTo(APPLIED_AT);
+            assertThat(execution.mutationCommands().isEmpty()).isTrue();
         });
         verify(harness.readiness, never()).observeState(any(), any());
     }
@@ -817,7 +1215,7 @@ class LegalEditorialPlannerCoreTest {
             LegalEditorialPlanResult result = harness.core().planRetire(
                     harness.release,
                     mixedRetirementToken(),
-                    OBSERVED_AT);
+                    BOUNDARY);
 
             assertThat(result.status()).as(corruption.getKey())
                     .isEqualTo(LegalManifestStatus.BLOCKED);
@@ -860,7 +1258,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 mixedRetirementToken(),
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -901,7 +1299,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planRetire(
                 harness.release,
                 mixedRetirementToken(),
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -922,7 +1320,7 @@ class LegalEditorialPlannerCoreTest {
             LegalEditorialPlanResult result = harness.core().planRetire(
                     harness.release,
                     mixedRetirementToken(),
-                    OBSERVED_AT);
+                    BOUNDARY);
 
             assertThat(result.status()).as(corruption.name())
                     .isEqualTo(LegalManifestStatus.BLOCKED);
@@ -997,7 +1395,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
@@ -1098,7 +1496,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -1185,7 +1583,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -1219,7 +1617,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(true);
@@ -1271,7 +1669,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.PASS);
         assertThat(result.changeRequired()).contains(false);
@@ -1333,7 +1731,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -1367,7 +1765,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -1442,7 +1840,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -1507,7 +1905,7 @@ class LegalEditorialPlannerCoreTest {
         LegalEditorialPlanResult result = harness.core().planReplace(
                 harness.release,
                 token,
-                OBSERVED_AT);
+                BOUNDARY);
 
         assertThat(result.status()).isEqualTo(LegalManifestStatus.BLOCKED);
         assertThat(result.executionPlan()).isEmpty();
@@ -1893,6 +2291,87 @@ class LegalEditorialPlannerCoreTest {
                 shiftedTransitions,
                 source.requirementTransitions(),
                 source.batches());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            retirementSourceWithAffectedPointerAt(Instant pointerAt) {
+        return retirementSourceWithPointerAt(retirementAffectedPointerKey(), pointerAt);
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            retirementSourceWithSurvivorPointerAt(Instant pointerAt) {
+        return retirementSourceWithPointerAt(retirementSurvivorPointerKey(), pointerAt);
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot retirementSourceWithPointerAt(
+            LegalEditorialExecutionPlan.RequiredSetPointerKey key,
+            Instant pointerAt) {
+        LegalEditorialPlannerCore.PlannerSnapshot source = partialRetirementSourceSnapshot();
+        List<LegalEditorialPlannerCore.PointerEvidence> pointers = source.activePointers().stream()
+                .map(pointer -> pointer.key().equals(key)
+                        ? new LegalEditorialPlannerCore.PointerEvidence(
+                                pointer.key(),
+                                pointer.requiredSetId(),
+                                pointer.publicationId(),
+                                pointer.revision(),
+                                pointerAt,
+                                pointer.memberVersionIds(),
+                                pointer.referencedDocumentVersionIds())
+                        : pointer)
+                .toList();
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                source.documents(),
+                source.requirements(),
+                source.targetScopes(),
+                source.activeSlots(),
+                pointers,
+                source.documentTransitions(),
+                source.requirementTransitions(),
+                source.batches());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            retirementSourceWithHistoricalBatchSealAt(Instant sealedAt) {
+        LegalEditorialPlannerCore.PlannerSnapshot source = partialRetirementSourceSnapshot();
+        LegalEditorialPlannerCore.BatchEvidence historical =
+                source.batches().get(HISTORICAL_BATCH_ID);
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> causalTransitions =
+                historical.causalTransitions().stream()
+                        .map(transition -> new LegalEditorialPlannerCore
+                                .DocumentTransitionEvidence(
+                                        transition.id(),
+                                        transition.versionId(),
+                                        transition.previousState(),
+                                        transition.newState(),
+                                        transition.reason(),
+                                        transition.replacementBatchId(),
+                                        sealedAt))
+                        .toList();
+        LegalEditorialPlannerCore.BatchEvidence shifted =
+                new LegalEditorialPlannerCore.BatchEvidence(
+                        historical.id(),
+                        historical.createdAt(),
+                        sealedAt,
+                        historical.predecessorIds(),
+                        historical.successors(),
+                        causalTransitions);
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                source.documents(),
+                source.requirements(),
+                source.targetScopes(),
+                source.activeSlots(),
+                source.activePointers(),
+                source.documentTransitions(),
+                source.requirementTransitions(),
+                Map.of(HISTORICAL_BATCH_ID, shifted));
     }
 
     private static LegalEditorialPlannerCore.PlannerSnapshot partialRetirementSnapshot(
@@ -2407,6 +2886,56 @@ class LegalEditorialPlannerCoreTest {
                                 HISTORICAL_ACTIVATION_AT)),
                 List.of(),
                 Map.of());
+    }
+
+    private static LegalEditorialPlannerCore.PlannerSnapshot
+            compositeReplacementSourceSnapshotAt(Instant causalAt) {
+        LegalEditorialPlannerCore.PlannerSnapshot source =
+                compositeReplacementSourceSnapshot();
+        java.util.LinkedHashMap<UUID, LegalEditorialPlannerCore.DocumentEvidence> documents =
+                new java.util.LinkedHashMap<>();
+        source.documents().forEach((id, document) -> documents.put(
+                id,
+                document.stateChangedAt() == null
+                        ? document
+                        : new LegalEditorialPlannerCore.DocumentEvidence(
+                                document.id(),
+                                document.lineId(),
+                                document.introductionPublicationId(),
+                                document.sha256(),
+                                document.effectiveAt(),
+                                document.state(),
+                                causalAt,
+                                document.lastReason(),
+                                document.replacementBatchId(),
+                                document.type(),
+                                document.locale(),
+                                document.contexts())));
+        List<LegalEditorialPlannerCore.DocumentTransitionEvidence> transitions =
+                source.documentTransitions().stream()
+                        .map(transition -> new LegalEditorialPlannerCore
+                                .DocumentTransitionEvidence(
+                                        transition.id(),
+                                        transition.versionId(),
+                                        transition.previousState(),
+                                        transition.newState(),
+                                        transition.reason(),
+                                        transition.replacementBatchId(),
+                                        causalAt))
+                        .toList();
+        return new LegalEditorialPlannerCore.PlannerSnapshot(
+                source.targetDocumentIds(),
+                source.targetRequirementIds(),
+                source.sourceDocumentIds(),
+                source.sourceRequirementIds(),
+                documents,
+                source.requirements(),
+                source.targetScopes(),
+                source.activeSlots(),
+                source.activePointers(),
+                transitions,
+                source.requirementTransitions(),
+                source.batches());
     }
 
     private static LegalEditorialPlannerCore.PlannerSnapshot

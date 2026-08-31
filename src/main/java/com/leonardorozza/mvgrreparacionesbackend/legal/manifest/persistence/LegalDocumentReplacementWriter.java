@@ -97,7 +97,7 @@ final class LegalDocumentReplacementWriter implements LegalEditorialMutationWrit
                 || required.planSha256().isEmpty()
                 || required.expectedReadinessAfter() != LegalEditorialReadiness.READY
                 || required.acknowledgeFailClosedGap()
-                || !required.expectedAppliedAt().equals(required.observedAt())
+                || !required.expectedAppliedAt().equals(required.transactionAt())
                 || source.orElseThrow().publication().publicationUuid()
                         .equals(required.target().publicationUuid())
                 || expected == null) {

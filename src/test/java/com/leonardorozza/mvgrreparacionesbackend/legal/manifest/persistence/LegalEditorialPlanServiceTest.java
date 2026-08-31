@@ -18,8 +18,6 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.lang.reflect.Modifier;
 import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -36,6 +34,10 @@ class LegalEditorialPlanServiceTest {
 
     private static final Instant OBSERVED_AT =
             Instant.parse("2026-08-28T18:00:00.123456Z");
+    private static final LegalEditorialTimeBoundary BOUNDARY =
+            new LegalEditorialTimeBoundary(
+                    Instant.parse("2026-08-28T17:59:59.123456Z"),
+                    OBSERVED_AT);
 
     @Test
     void constructorIsTheOnlyAssemblyPathAndRequiresTheExactEditorialPreflights() {
@@ -63,46 +65,42 @@ class LegalEditorialPlanServiceTest {
     }
 
     @Test
-    void promoteReadsExactlyOnePostLockTimestampAndPassesItUnchangedToCore() {
+    void promotePassesTheExactGateOwnedBoundaryToCore() {
         Harness harness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
         LegalEditorialPlanResult expected = blockedResult();
-        when(harness.planner.planPromote(release, OBSERVED_AT)).thenReturn(expected);
+        when(harness.planner.planPromote(release, BOUNDARY)).thenReturn(expected);
 
         LegalEditorialPlanResult result = harness.service().planPromote(release);
 
         assertThat(result).isSameAs(expected);
         verify(harness.gate, times(1)).executeReadOnly(any());
-        verify(harness.jdbc, times(1)).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        verify(harness.planner, times(1)).planPromote(release, OBSERVED_AT);
+        verify(harness.jdbc, never()).queryForObject(any(String.class), any(Class.class));
+        verify(harness.planner, times(1)).planPromote(release, BOUNDARY);
     }
 
     @Test
-    void replaceAndRetireUseTheSameCallerOwnedTimestampBoundary() {
+    void replaceAndRetireUseTheSameGateOwnedTimeBoundary() {
         Harness replaceHarness = new Harness();
         Harness retireHarness = new Harness();
         ValidatedRelease release = mock(ValidatedRelease.class);
         ValidatedEditorialPlan token = mock(ValidatedEditorialPlan.class);
         LegalEditorialPlanResult expected = blockedResult();
-        when(replaceHarness.planner.planReplace(release, token, OBSERVED_AT))
+        when(replaceHarness.planner.planReplace(release, token, BOUNDARY))
                 .thenReturn(expected);
-        when(retireHarness.planner.planRetire(release, token, OBSERVED_AT))
+        when(retireHarness.planner.planRetire(release, token, BOUNDARY))
                 .thenReturn(expected);
 
         assertThat(replaceHarness.service().planReplace(release, token)).isSameAs(expected);
         assertThat(retireHarness.service().planRetire(release, token)).isSameAs(expected);
 
-        verify(replaceHarness.jdbc).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
+        verify(replaceHarness.jdbc, never()).queryForObject(
+                any(String.class), any(Class.class));
         verify(replaceHarness.replaceScopeGuard).validate(token);
-        verify(retireHarness.jdbc).queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        verify(replaceHarness.planner).planReplace(release, token, OBSERVED_AT);
-        verify(retireHarness.planner).planRetire(release, token, OBSERVED_AT);
+        verify(retireHarness.jdbc, never()).queryForObject(
+                any(String.class), any(Class.class));
+        verify(replaceHarness.planner).planReplace(release, token, BOUNDARY);
+        verify(retireHarness.planner).planRetire(release, token, BOUNDARY);
     }
 
     @Test
@@ -229,15 +227,12 @@ class LegalEditorialPlanServiceTest {
             when(planner.usesJdbc(jdbc)).thenReturn(true);
             when(replaceScopeGuard.validate(any())).thenAnswer(invocation ->
                     LegalManifestValidation.pass(invocation.getArgument(0)));
-            when(jdbc.queryForObject(
-                    "SELECT transaction_timestamp()",
-                    OffsetDateTime.class)).thenReturn(OffsetDateTime.ofInstant(
-                            OBSERVED_AT,
-                            ZoneOffset.UTC));
             when(gate.executeReadOnly(any())).thenAnswer(invocation -> {
-                org.springframework.transaction.support.TransactionCallback<?> callback =
+                LegalManifestDatabaseGate.EditorialTransactionCallback<?> callback =
                         invocation.getArgument(0);
-                return callback.doInTransaction(new SimpleTransactionStatus());
+                return callback.doInTransaction(
+                        new SimpleTransactionStatus(),
+                        BOUNDARY);
             });
         }
 

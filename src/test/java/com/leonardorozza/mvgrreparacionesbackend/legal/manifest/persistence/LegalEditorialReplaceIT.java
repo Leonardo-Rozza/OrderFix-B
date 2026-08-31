@@ -617,6 +617,7 @@ class LegalEditorialReplaceIT {
                 original.target(),
                 original.operationId(),
                 original.planSha256(),
+                original.transactionAt(),
                 original.observedAt(),
                 original.expectedAppliedAt(),
                 original.expectedReadinessAfter(),

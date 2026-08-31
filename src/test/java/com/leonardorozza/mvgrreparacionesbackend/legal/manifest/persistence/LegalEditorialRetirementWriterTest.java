@@ -164,6 +164,7 @@ class LegalEditorialRetirementWriterTest {
         when(plan.target()).thenReturn(valid.target());
         when(plan.operationId()).thenReturn(valid.operationId());
         when(plan.planSha256()).thenReturn(valid.planSha256());
+        when(plan.transactionAt()).thenReturn(valid.transactionAt());
         when(plan.observedAt()).thenReturn(valid.observedAt());
         when(plan.expectedAppliedAt()).thenReturn(valid.expectedAppliedAt());
         when(plan.expectedPostState()).thenReturn(valid.expectedPostState());
@@ -454,6 +455,7 @@ class LegalEditorialRetirementWriterTest {
         when(plan.target()).thenReturn(valid.target());
         when(plan.operationId()).thenReturn(valid.operationId());
         when(plan.planSha256()).thenReturn(valid.planSha256());
+        when(plan.transactionAt()).thenReturn(valid.transactionAt());
         when(plan.observedAt()).thenReturn(valid.observedAt());
         when(plan.expectedAppliedAt()).thenReturn(valid.expectedAppliedAt());
         when(plan.expectedPostState()).thenReturn(expected);
@@ -658,6 +660,7 @@ class LegalEditorialRetirementWriterTest {
                 publication,
                 Optional.of(id(900)),
                 Optional.of("f".repeat(64)),
+                OBSERVED_AT,
                 OBSERVED_AT,
                 OBSERVED_AT,
                 LegalEditorialReadiness.NOT_READY,

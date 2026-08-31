@@ -96,9 +96,13 @@ final class LegalEditorialPlannerCore {
         }
     }
 
-    LegalEditorialPlanResult planPromote(ValidatedRelease target, Instant observedAt) {
+    LegalEditorialPlanResult planPromote(
+            ValidatedRelease target,
+            LegalEditorialTimeBoundary boundary) {
         Objects.requireNonNull(target, "target");
-        Instant timestamp = requirePostgresInstant(observedAt);
+        LegalEditorialTimeBoundary requiredBoundary = Objects.requireNonNull(
+                boundary,
+                "boundary");
         TargetAccreditation accredited = accreditTarget(
                 target,
                 target.plan().manifest().publicationId(),
@@ -109,7 +113,9 @@ final class LegalEditorialPlannerCore {
                 Set.of(),
                 Set.of(),
                 Set.of());
-        LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, timestamp);
+        LegalEditorialReadinessResult readiness = readinessCore.evaluate(
+                target,
+                requiredBoundary.observedAt());
         if (readiness.readiness() == LegalEditorialReadiness.ERROR) {
             return LegalEditorialPlanResult.error(readiness.issues());
         }
@@ -120,17 +126,22 @@ final class LegalEditorialPlannerCore {
             return LegalEditorialPlanResult.applicable(promotionPlan(
                     snapshot,
                     accredited.publication(),
-                    timestamp,
+                    requiredBoundary,
                     false));
         }
-        if (containsFutureEffectiveDocument(snapshot, timestamp)) {
+        if (containsFutureEffectiveDocument(snapshot, requiredBoundary.transactionAt())) {
             return blocked(LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED, STATE_LOCATION);
         }
         if (exactInitialPromotionSource(snapshot, observation, accredited)) {
+            if (!causalFloorAllows(
+                    requiredBoundary.transactionAt(),
+                    List.of(accredited.publication().sealedAt()))) {
+                return blocked(LegalManifestIssueCode.CURRENT_STATE_MISMATCH, STATE_LOCATION);
+            }
             return LegalEditorialPlanResult.applicable(promotionPlan(
                     snapshot,
                     accredited.publication(),
-                    timestamp,
+                    requiredBoundary,
                     true));
         }
         if (observation.documentTransitions() != 0
@@ -148,14 +159,16 @@ final class LegalEditorialPlannerCore {
     LegalEditorialPlanResult planReplace(
             ValidatedRelease target,
             ValidatedEditorialPlan validatedPlan,
-            Instant observedAt) {
+            LegalEditorialTimeBoundary boundary) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(validatedPlan, "validatedPlan");
+        LegalEditorialTimeBoundary requiredBoundary = Objects.requireNonNull(
+                boundary,
+                "boundary");
         var scopedPlan = REPLACE_SCOPE_GUARD.validate(validatedPlan);
         if (scopedPlan.value().isEmpty()) {
             return LegalEditorialPlanResult.blocked(scopedPlan.issues());
         }
-        Instant timestamp = requirePostgresInstant(observedAt);
         LegalEditorialPlanV1 plan = validatedPlan.plan();
         LegalEditorialPlanResult bindingFailure = requirePlanBinding(
                 target,
@@ -193,7 +206,9 @@ final class LegalEditorialPlannerCore {
             return blocked(LegalManifestIssueCode.REPLACEMENT_MAPPING_INVALID, MAPPING_LOCATION);
         }
 
-        LegalEditorialReadinessResult readiness = readinessCore.evaluate(target, timestamp);
+        LegalEditorialReadinessResult readiness = readinessCore.evaluate(
+                target,
+                requiredBoundary.observedAt());
         if (readiness.readiness() == LegalEditorialReadiness.ERROR) {
             return LegalEditorialPlanResult.error(readiness.issues());
         }
@@ -203,7 +218,7 @@ final class LegalEditorialPlannerCore {
                     validatedPlan,
                     sourcePublication.orElseThrow(),
                     targetAccreditation.publication(),
-                    timestamp,
+                    requiredBoundary,
                     Phase.POST_STATE);
             if (post.plan().isPresent()) {
                 return LegalEditorialPlanResult.applicable(post.plan().orElseThrow());
@@ -212,13 +227,16 @@ final class LegalEditorialPlannerCore {
 
         LegalEditorialReadinessObservation sourceObservation = readinessCore.observeState(
                 plan.expectedCurrentPublicationId(),
-                timestamp);
+                requiredBoundary.observedAt());
         if (!sourceObservation.publicationUuid().equals(Optional.of(sourcePublication.orElseThrow().id()))
                 || !sourceObservation.editorialStateFingerprint()
                         .equals(plan.expectedEditorialStateFingerprint())) {
             return blocked(LegalManifestIssueCode.SOURCE_FINGERPRINT_MISMATCH, SOURCE_LOCATION);
         }
-        if (containsFutureEffectiveDocument(snapshot, declared.targetDocumentIds(), timestamp)) {
+        if (containsFutureEffectiveDocument(
+                snapshot,
+                declared.targetDocumentIds(),
+                requiredBoundary.transactionAt())) {
             return blocked(LegalManifestIssueCode.EFFECTIVE_DATE_NOT_REACHED, STATE_LOCATION);
         }
 
@@ -227,7 +245,7 @@ final class LegalEditorialPlannerCore {
                 validatedPlan,
                 sourcePublication.orElseThrow(),
                 targetAccreditation.publication(),
-                timestamp,
+                requiredBoundary,
                 Phase.SOURCE_STATE);
         if (source.plan().isPresent()) {
             return LegalEditorialPlanResult.applicable(source.plan().orElseThrow());
@@ -238,10 +256,12 @@ final class LegalEditorialPlannerCore {
     LegalEditorialPlanResult planRetire(
             ValidatedRelease current,
             ValidatedEditorialPlan validatedPlan,
-            Instant observedAt) {
+            LegalEditorialTimeBoundary boundary) {
         Objects.requireNonNull(current, "current");
         Objects.requireNonNull(validatedPlan, "validatedPlan");
-        Instant timestamp = requirePostgresInstant(observedAt);
+        LegalEditorialTimeBoundary requiredBoundary = Objects.requireNonNull(
+                boundary,
+                "boundary");
         LegalEditorialPlanV1 plan = validatedPlan.plan();
         LegalEditorialPlanResult bindingFailure = requirePlanBinding(
                 current,
@@ -271,7 +291,7 @@ final class LegalEditorialPlannerCore {
                 snapshot,
                 validatedPlan,
                 accredited.publication(),
-                timestamp,
+                requiredBoundary,
                 Phase.POST_STATE);
         if (post.plan().isPresent()) {
             return LegalEditorialPlanResult.applicable(post.plan().orElseThrow());
@@ -279,7 +299,7 @@ final class LegalEditorialPlannerCore {
 
         LegalEditorialReadinessObservation sourceObservation = readinessCore.observeState(
                 plan.expectedCurrentPublicationId(),
-                timestamp);
+                requiredBoundary.observedAt());
         if (!sourceObservation.publicationUuid().equals(Optional.of(accredited.publication().id()))
                 || !sourceObservation.editorialStateFingerprint()
                         .equals(plan.expectedEditorialStateFingerprint())) {
@@ -289,7 +309,7 @@ final class LegalEditorialPlannerCore {
                 snapshot,
                 validatedPlan,
                 accredited.publication(),
-                timestamp,
+                requiredBoundary,
                 Phase.SOURCE_STATE);
         if (source.plan().isPresent()) {
             return LegalEditorialPlanResult.applicable(source.plan().orElseThrow());
@@ -444,10 +464,10 @@ final class LegalEditorialPlannerCore {
     private static LegalEditorialExecutionPlan promotionPlan(
             PlannerSnapshot snapshot,
             PublicationEvidence target,
-            Instant observedAt,
+            LegalEditorialTimeBoundary boundary,
             boolean changeRequired) {
         Instant transitionAt = changeRequired
-                ? observedAt
+                ? boundary.transactionAt()
                 : oneOperationTimestamp(
                         snapshot,
                         Set.copyOf(snapshot.targetDocumentIds()),
@@ -535,7 +555,8 @@ final class LegalEditorialPlannerCore {
                 identity(target),
                 Optional.empty(),
                 Optional.empty(),
-                observedAt,
+                boundary.transactionAt(),
+                boundary.observedAt(),
                 transitionAt,
                 LegalEditorialReadiness.READY,
                 false,
@@ -629,14 +650,22 @@ final class LegalEditorialPlannerCore {
             ValidatedEditorialPlan validated,
             PublicationEvidence source,
             PublicationEvidence target,
-            Instant observedAt,
+            LegalEditorialTimeBoundary boundary,
             Phase phase) {
         LegalEditorialPlanV1 plan = validated.plan();
         if (!replacementStateMatches(snapshot, plan, source, target, phase)) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
+        if (phase == Phase.SOURCE_STATE
+                && !replacementCausalFloorAllows(
+                        snapshot,
+                        source,
+                        target,
+                        boundary.transactionAt())) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         Instant operationAt = phase == Phase.SOURCE_STATE
-                ? observedAt
+                ? boundary.transactionAt()
                 : inferReplacementTimestamp(snapshot, plan).orElse(null);
         if (operationAt == null) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
@@ -891,7 +920,8 @@ final class LegalEditorialPlannerCore {
                 identity(target),
                 Optional.of(validated.operationId()),
                 Optional.of(validated.editorialPlanSha256()),
-                observedAt,
+                boundary.transactionAt(),
+                boundary.observedAt(),
                 operationAt,
                 LegalEditorialReadiness.READY,
                 false,
@@ -904,10 +934,13 @@ final class LegalEditorialPlannerCore {
             PlannerSnapshot snapshot,
             ValidatedEditorialPlan validated,
             PublicationEvidence current,
-            Instant observedAt,
+            LegalEditorialTimeBoundary boundary,
             Phase phase) {
         LegalEditorialPlanV1 plan = validated.plan();
-        if (!retirementStateMatches(snapshot, plan, observedAt, phase)) {
+        Instant classificationAt = phase == Phase.SOURCE_STATE
+                ? boundary.transactionAt()
+                : boundary.observedAt();
+        if (!retirementStateMatches(snapshot, plan, classificationAt, phase)) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
         Optional<RetirementProjection> classifiedProjection = retirementProjection(
@@ -919,8 +952,15 @@ final class LegalEditorialPlannerCore {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
         }
         RetirementProjection projection = classifiedProjection.orElseThrow();
+        if (phase == Phase.SOURCE_STATE
+                && !retirementCausalFloorAllows(
+                        snapshot,
+                        current,
+                        boundary.transactionAt())) {
+            return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
+        }
         Instant operationAt = phase == Phase.SOURCE_STATE
-                ? observedAt
+                ? boundary.transactionAt()
                 : inferRetirementTimestamp(snapshot, plan).orElse(null);
         if (operationAt == null) {
             return PlanAttempt.failure(LegalManifestIssueCode.CURRENT_STATE_MISMATCH);
@@ -1035,7 +1075,8 @@ final class LegalEditorialPlannerCore {
                 identity(current),
                 Optional.of(validated.operationId()),
                 Optional.of(validated.editorialPlanSha256()),
-                observedAt,
+                boundary.transactionAt(),
+                boundary.observedAt(),
                 operationAt,
                 LegalEditorialReadiness.NOT_READY,
                 true,
@@ -1132,7 +1173,7 @@ final class LegalEditorialPlannerCore {
     private static boolean retirementStateMatches(
             PlannerSnapshot snapshot,
             LegalEditorialPlanV1 plan,
-            Instant observedAt,
+            Instant classificationAt,
             Phase phase) {
         Set<UUID> targetDocumentIds = Set.copyOf(snapshot.targetDocumentIds());
         Set<UUID> targetRequirementIds = Set.copyOf(snapshot.targetRequirementIds());
@@ -1150,20 +1191,20 @@ final class LegalEditorialPlannerCore {
                 .map(RequirementRetirement::requirementVersionId)
                 .collect(Collectors.toUnmodifiableSet());
         if (phase == Phase.SOURCE_STATE) {
-            boolean documentTransitionAtOrAfterObservation =
+            boolean documentTransitionAtOrAfterCut =
                     snapshot.documentTransitions().stream()
                             .filter(transition -> targetDocumentIds.contains(
                                     transition.versionId()))
                             .anyMatch(transition ->
-                                    !transition.occurredAt().isBefore(observedAt));
-            boolean requirementTransitionAtOrAfterObservation =
+                                    !transition.occurredAt().isBefore(classificationAt));
+            boolean requirementTransitionAtOrAfterCut =
                     snapshot.requirementTransitions().stream()
                             .filter(transition -> targetRequirementIds.contains(
                                     transition.versionId()))
                             .anyMatch(transition ->
-                                    !transition.occurredAt().isBefore(observedAt));
-            if (documentTransitionAtOrAfterObservation
-                    || requirementTransitionAtOrAfterObservation) {
+                                    !transition.occurredAt().isBefore(classificationAt));
+            if (documentTransitionAtOrAfterCut
+                    || requirementTransitionAtOrAfterCut) {
                 return false;
             }
         }
@@ -1220,7 +1261,7 @@ final class LegalEditorialPlannerCore {
                 return false;
             }
             Instant cutover = operationAt.orElseThrow();
-            if (cutover.isAfter(observedAt)) {
+            if (cutover.isAfter(classificationAt)) {
                 return false;
             }
             boolean incompatibleDocumentTransition = snapshot.documentTransitions().stream()
@@ -1571,6 +1612,104 @@ final class LegalEditorialPlannerCore {
                 && Objects.equals(transition.replacementBatchId(), batchId);
     }
 
+    private static boolean replacementCausalFloorAllows(
+            PlannerSnapshot snapshot,
+            PublicationEvidence source,
+            PublicationEvidence target,
+            Instant transactionAt) {
+        Set<UUID> documentIds = new LinkedHashSet<>(snapshot.sourceDocumentIds());
+        documentIds.addAll(snapshot.targetDocumentIds());
+        Set<UUID> requirementIds = new LinkedHashSet<>(snapshot.sourceRequirementIds());
+        requirementIds.addAll(snapshot.targetRequirementIds());
+        Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> currentPointers =
+                snapshot.activePointers().stream()
+                        .map(PointerEvidence::key)
+                        .collect(Collectors.toUnmodifiableSet());
+        return sourceCausalFloorAllows(
+                snapshot,
+                List.of(source, target),
+                documentIds,
+                requirementIds,
+                currentPointers,
+                transactionAt);
+    }
+
+    private static boolean retirementCausalFloorAllows(
+            PlannerSnapshot snapshot,
+            PublicationEvidence current,
+            Instant transactionAt) {
+        Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> currentPointers =
+                snapshot.activePointers().stream()
+                        .map(PointerEvidence::key)
+                        .collect(Collectors.toUnmodifiableSet());
+        return sourceCausalFloorAllows(
+                snapshot,
+                List.of(current),
+                Set.copyOf(snapshot.sourceDocumentIds()),
+                Set.copyOf(snapshot.sourceRequirementIds()),
+                currentPointers,
+                transactionAt);
+    }
+
+    private static boolean sourceCausalFloorAllows(
+            PlannerSnapshot snapshot,
+            Collection<PublicationEvidence> publications,
+            Set<UUID> documentIds,
+            Set<UUID> requirementIds,
+            Set<LegalEditorialExecutionPlan.RequiredSetPointerKey> consumedPointers,
+            Instant transactionAt) {
+        List<Instant> evidence = new ArrayList<>();
+        publications.forEach(publication -> addIfPresent(evidence, publication.sealedAt()));
+
+        Set<UUID> referencedBatchIds = new LinkedHashSet<>();
+        documentIds.stream()
+                .map(snapshot.documents()::get)
+                .filter(Objects::nonNull)
+                .forEach(document -> {
+                    addIfPresent(evidence, document.stateChangedAt());
+                    addIfPresent(referencedBatchIds, document.replacementBatchId());
+                });
+        requirementIds.stream()
+                .map(snapshot.requirements()::get)
+                .filter(Objects::nonNull)
+                .forEach(requirement -> addIfPresent(evidence, requirement.stateChangedAt()));
+
+        snapshot.documentTransitions().stream()
+                .filter(transition -> documentIds.contains(transition.versionId()))
+                .forEach(transition -> {
+                    evidence.add(transition.occurredAt());
+                    addIfPresent(referencedBatchIds, transition.replacementBatchId());
+                });
+        snapshot.requirementTransitions().stream()
+                .filter(transition -> requirementIds.contains(transition.versionId()))
+                .forEach(transition -> evidence.add(transition.occurredAt()));
+        snapshot.activePointers().stream()
+                .filter(pointer -> consumedPointers.contains(pointer.key()))
+                .forEach(pointer -> addIfPresent(evidence, pointer.updatedAt()));
+
+        snapshot.batches().values().stream()
+                .filter(batch -> referencedBatchIds.contains(batch.id())
+                        || batch.predecessorIds().stream().anyMatch(documentIds::contains)
+                        || batch.successors().stream()
+                                .map(LegalEditorialExecutionPlan.ReplacementSuccessor
+                                        ::documentVersionId)
+                                .anyMatch(documentIds::contains))
+                .forEach(batch -> addIfPresent(evidence, batch.sealedAt()));
+        return causalFloorAllows(transactionAt, evidence);
+    }
+
+    private static <T> void addIfPresent(Collection<T> values, T value) {
+        if (value != null) {
+            values.add(value);
+        }
+    }
+
+    private static boolean causalFloorAllows(
+            Instant transactionAt,
+            Collection<Instant> evidence) {
+        return evidence.stream().noneMatch(timestamp -> timestamp.isAfter(transactionAt));
+    }
+
     private static Optional<Instant> inferReplacementTimestamp(
             PlannerSnapshot snapshot,
             LegalEditorialPlanV1 plan) {
@@ -1739,20 +1878,20 @@ final class LegalEditorialPlannerCore {
 
     private static boolean containsFutureEffectiveDocument(
             PlannerSnapshot snapshot,
-            Instant observedAt) {
+            Instant eligibilityAt) {
         return containsFutureEffectiveDocument(
                 snapshot,
                 Set.copyOf(snapshot.targetDocumentIds()),
-                observedAt);
+                eligibilityAt);
     }
 
     private static boolean containsFutureEffectiveDocument(
             PlannerSnapshot snapshot,
             Set<UUID> targetIds,
-            Instant observedAt) {
+            Instant eligibilityAt) {
         return targetIds.stream().map(snapshot.documents()::get)
                 .filter(Objects::nonNull)
-                .anyMatch(document -> document.effectiveAt().isAfter(observedAt));
+                .anyMatch(document -> document.effectiveAt().isAfter(eligibilityAt));
     }
 
     private static void addDirectActivatedDocument(
@@ -2683,15 +2822,6 @@ final class LegalEditorialPlannerCore {
             LegalManifestIssueCode code,
             String location) {
         return LegalEditorialPlanResult.blocked(List.of(LegalManifestIssue.at(code, location)));
-    }
-
-    private static Instant requirePostgresInstant(Instant value) {
-        Instant required = Objects.requireNonNull(value, "observedAt");
-        if (required.getNano() % 1_000 != 0) {
-            throw new IllegalArgumentException(
-                    "observedAt supera la precisión de PostgreSQL");
-        }
-        return required;
     }
 
     private enum Phase {

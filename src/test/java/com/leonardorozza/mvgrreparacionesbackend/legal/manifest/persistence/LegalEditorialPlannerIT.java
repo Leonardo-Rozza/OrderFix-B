@@ -105,8 +105,10 @@ class LegalEditorialPlannerIT {
             assertThat(delta.directRequirementTransitions())
                     .isEqualTo(target.release().requirementCount() * 2);
         });
-        assertThat(result.executionPlan()).get().satisfies(plan ->
-                assertThat(plan.expectedAppliedAt()).isEqualTo(plan.observedAt()));
+        assertThat(result.executionPlan()).get().satisfies(plan -> {
+            assertThat(plan.expectedAppliedAt()).isEqualTo(plan.transactionAt());
+            assertThat(plan.transactionAt()).isBeforeOrEqualTo(plan.observedAt());
+        });
         assertThat(result.issues()).isEmpty();
     }
 
@@ -209,7 +211,8 @@ class LegalEditorialPlannerIT {
             assertThat(delta.requiredSetPointerDeletes()).isEqualTo(1);
         });
         assertThat(result.executionPlan()).get().satisfies(execution -> {
-            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.observedAt());
+            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.transactionAt());
+            assertThat(execution.transactionAt()).isBeforeOrEqualTo(execution.observedAt());
             assertThat(execution.expectedPostState().documentStates())
                     .hasSize(sourceDocuments.size())
                     .filteredOn(state -> state.documentVersionId().equals(retired.id()))
@@ -391,7 +394,8 @@ class LegalEditorialPlannerIT {
             assertThat(delta.requiredSetPointerInserts()).isPositive();
         });
         assertThat(result.executionPlan()).get().satisfies(execution -> {
-            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.observedAt());
+            assertThat(execution.expectedAppliedAt()).isEqualTo(execution.transactionAt());
+            assertThat(execution.transactionAt()).isBeforeOrEqualTo(execution.observedAt());
             assertThat(execution.expectedPostState().preexistingDocumentTransitions())
                     .isNotEmpty();
             assertThat(execution.expectedPostState().preexistingRequirementTransitions())

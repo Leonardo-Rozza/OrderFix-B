@@ -3,9 +3,11 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -50,14 +52,16 @@ final class LegalManifestDatabaseGate {
      * keeps apply operations separate from the legacy import entry point while sharing the exact
      * timeout and cooperative-lock protocol.</p>
      */
-    <T> T executeMutable(TransactionCallback<T> protectedCallback) {
+    <T> T executeMutable(EditorialTransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireCommitOutcomeSafe();
         return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
             requireEffectiveMutableTransaction();
             enterProtectedGraphAfterStatementBudget();
-            return protectedCallback.doInTransaction(status);
+            return protectedCallback.doInTransaction(
+                    status,
+                    readEditorialTimeBoundary());
         });
     }
 
@@ -68,26 +72,46 @@ final class LegalManifestDatabaseGate {
      * before any preflight or graph read. The protected callback then uses the same preflights,
      * budgets and cooperative advisory lock as import and dry-run.</p>
      */
-    <T> T executeReadOnly(TransactionCallback<T> protectedCallback) {
+    <T> T executeReadOnly(EditorialTransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireReadOnlyBoundary();
         return executeAccreditedReadOnly(protectedCallback);
     }
 
     /** Executes one commit reconciliation after accrediting its stricter read-only boundary. */
-    <T> T executeEditorialReconciliation(TransactionCallback<T> protectedCallback) {
+    <T> T executeEditorialReconciliation(
+            EditorialTransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireReadOnlyBoundary();
         return executeAccreditedReadOnly(protectedCallback);
     }
 
-    private <T> T executeAccreditedReadOnly(TransactionCallback<T> protectedCallback) {
+    private <T> T executeAccreditedReadOnly(
+            EditorialTransactionCallback<T> protectedCallback) {
         return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
             requireEffectiveReadOnlyTransaction();
             enterProtectedGraphAfterStatementBudget();
-            return protectedCallback.doInTransaction(status);
+            return protectedCallback.doInTransaction(
+                    status,
+                    readEditorialTimeBoundary());
         });
+    }
+
+    private LegalEditorialTimeBoundary readEditorialTimeBoundary() {
+        OffsetDateTime transactionAt = Objects.requireNonNull(
+                jdbc.queryForObject(
+                        "SELECT transaction_timestamp()",
+                        OffsetDateTime.class),
+                "transaction_timestamp");
+        OffsetDateTime observedAt = Objects.requireNonNull(
+                jdbc.queryForObject(
+                        "SELECT statement_timestamp()",
+                        OffsetDateTime.class),
+                "statement_timestamp");
+        return new LegalEditorialTimeBoundary(
+                transactionAt.toInstant(),
+                observedAt.toInstant());
     }
 
     /**
@@ -239,5 +263,12 @@ final class LegalManifestDatabaseGate {
             throw new IllegalArgumentException("Timeout PostgreSQL no permitido");
         }
         jdbc.execute("SET LOCAL " + setting + " TO '" + seconds + "s'");
+    }
+
+    @FunctionalInterface
+    interface EditorialTransactionCallback<T> {
+        T doInTransaction(
+                TransactionStatus status,
+                LegalEditorialTimeBoundary boundary);
     }
 }

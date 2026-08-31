@@ -6,8 +6,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
-import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -44,7 +42,7 @@ final class LegalEditorialCommitReconciler {
         return reconcile(
                 planConstructed,
                 LegalEditorialExecutionPlan.OperationType.PROMOTE,
-                observedAt -> planner.planPromote(target, observedAt));
+                boundary -> planner.planPromote(target, boundary));
     }
 
     Result reconcileReplace(
@@ -56,7 +54,7 @@ final class LegalEditorialCommitReconciler {
         return reconcile(
                 planConstructed,
                 LegalEditorialExecutionPlan.OperationType.REPLACE,
-                observedAt -> planner.planReplace(target, editorialPlan, observedAt));
+                boundary -> planner.planReplace(target, editorialPlan, boundary));
     }
 
     Result reconcileRetire(
@@ -68,7 +66,7 @@ final class LegalEditorialCommitReconciler {
         return reconcile(
                 planConstructed,
                 LegalEditorialExecutionPlan.OperationType.RETIRE,
-                observedAt -> planner.planRetire(current, editorialPlan, observedAt));
+                boundary -> planner.planRetire(current, editorialPlan, boundary));
     }
 
     boolean usesJdbc(JdbcTemplate candidate) {
@@ -87,12 +85,11 @@ final class LegalEditorialCommitReconciler {
         }
         try {
             requireSharedJdbcGraph();
-            Result observed = databaseGate.executeEditorialReconciliation(status -> {
-                Instant observedAt = readTransactionTimestamp();
-                return classify(
-                        expectedOperation,
-                        operation.plan(observedAt));
-            });
+            Result observed = databaseGate.executeEditorialReconciliation(
+                    (status, boundary) -> classify(
+                            expectedOperation,
+                            boundary,
+                            operation.plan(boundary)));
             return observed == null ? Result.unknown() : observed;
         } catch (RuntimeException | LinkageError inconclusiveFailure) {
             return Result.unknown();
@@ -101,6 +98,7 @@ final class LegalEditorialCommitReconciler {
 
     private Result classify(
             LegalEditorialExecutionPlan.OperationType expectedOperation,
+            LegalEditorialTimeBoundary boundary,
             LegalEditorialPlanResult replanned) {
         if (replanned == null
                 || replanned.outcome() != LegalEditorialPlanResult.Outcome.APPLICABLE) {
@@ -111,7 +109,9 @@ final class LegalEditorialCommitReconciler {
             return Result.unknown();
         }
         LegalEditorialExecutionPlan plan = optionalPlan.orElseThrow();
-        if (plan.operationType() != expectedOperation) {
+        if (plan.operationType() != expectedOperation
+                || !Objects.equals(plan.transactionAt(), boundary.transactionAt())
+                || !Objects.equals(plan.observedAt(), boundary.observedAt())) {
             return Result.unknown();
         }
         if (plan.changeRequired()) {
@@ -119,13 +119,6 @@ final class LegalEditorialCommitReconciler {
         }
         LegalEditorialApplyReceipt receipt = postStateVerifier.verify(plan);
         return receipt == null ? Result.unknown() : Result.postExact(receipt);
-    }
-
-    private Instant readTransactionTimestamp() {
-        OffsetDateTime timestamp = jdbc.queryForObject(
-                "SELECT transaction_timestamp()",
-                OffsetDateTime.class);
-        return Objects.requireNonNull(timestamp, "transaction_timestamp").toInstant();
     }
 
     private boolean previousTransactionStillBound() {
@@ -181,6 +174,6 @@ final class LegalEditorialCommitReconciler {
 
     @FunctionalInterface
     private interface ReplanOperation {
-        LegalEditorialPlanResult plan(Instant observedAt);
+        LegalEditorialPlanResult plan(LegalEditorialTimeBoundary boundary);
     }
 }
