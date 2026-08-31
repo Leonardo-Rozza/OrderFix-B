@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,6 +66,7 @@ class LegalManifestCliProcessIT {
     private static final String PROCESS_SECRET = "ordenfix-process-secret-must-not-leak";
     private static final String JVM_OPTION_BOUNDARY_MARKER =
             "ordenfix.cli.jvm-option-boundary=verified";
+    private static final Duration PROCESS_TIMEOUT = Duration.ofSeconds(75);
     private static final String STDOUT_FAILURE_AGENT_CLASS_PATH =
             "com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/"
                     + "LegalCliStdoutFailureAgent";
@@ -546,7 +548,8 @@ class LegalManifestCliProcessIT {
                 List.of(),
                 arguments,
                 environment,
-                StdoutMode.CAPTURE);
+                StdoutMode.CAPTURE,
+                PROCESS_TIMEOUT);
         assertThat(result.timedOut())
                 .as("watchdog del proceso legal-cli")
                 .isFalse();
