@@ -65,6 +65,9 @@ class LegalManifestCliProcessIT {
     private static final String PROCESS_SECRET = "ordenfix-process-secret-must-not-leak";
     private static final String JVM_OPTION_BOUNDARY_MARKER =
             "ordenfix.cli.jvm-option-boundary=verified";
+    private static final String STDOUT_FAILURE_AGENT_CLASS_PATH =
+            "com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/"
+                    + "LegalCliStdoutFailureAgent";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> REPORT_FIELDS = List.of(
             "reportVersion",
@@ -740,14 +743,33 @@ class LegalManifestCliProcessIT {
             assertThat(jar.getManifest())
                     .withFailMessage("El artefacto %s no contiene MANIFEST.MF", jarPath)
                     .isNotNull();
-            assertThat(jar.getManifest().getMainAttributes().getValue("Start-Class"))
+            var attributes = jar.getManifest().getMainAttributes();
+            assertThat(attributes.getValue("Start-Class"))
                     .as("Start-Class de %s", jarPath.getFileName())
                     .isEqualTo(expectedStartClass);
+            assertThat(attributes.getValue("Premain-Class"))
+                    .as("Premain-Class de %s", jarPath.getFileName())
+                    .isNull();
+            assertThat(attributes.getValue("Agent-Class"))
+                    .as("Agent-Class de %s", jarPath.getFileName())
+                    .isNull();
+            assertThat(attributes.getValue("Launcher-Agent-Class"))
+                    .as("Launcher-Agent-Class de %s", jarPath.getFileName())
+                    .isNull();
             assertThat(jar.stream()
                     .map(entry -> entry.getName())
                     .filter(LegalManifestCliProcessIT::isSecretProperties)
                     .toList())
                     .as("application-secret.properties dentro de %s", jarPath.getFileName())
+                    .isEmpty();
+            assertThat(jar.stream()
+                    .map(entry -> entry.getName())
+                    .filter(entryName -> entryName.endsWith(
+                                    STDOUT_FAILURE_AGENT_CLASS_PATH + ".class")
+                            || entryName.contains(
+                                    STDOUT_FAILURE_AGENT_CLASS_PATH + "$"))
+                    .toList())
+                    .as("agente test-only dentro de %s", jarPath.getFileName())
                     .isEmpty();
         }
     }

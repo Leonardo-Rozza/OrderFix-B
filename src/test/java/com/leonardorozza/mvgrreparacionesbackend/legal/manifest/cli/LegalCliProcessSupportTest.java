@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,14 +27,28 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
 
 import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardOpenOption.CREATE_NEW;
+import static java.nio.file.StandardOpenOption.WRITE;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LegalCliProcessSupportTest {
+
+    private static final String STDOUT_FAILURE_AGENT_CLASS =
+            "com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli."
+                    + "LegalCliStdoutFailureAgent";
+    private static final String STDOUT_FAILURE_AGENT_ENTRY =
+            STDOUT_FAILURE_AGENT_CLASS.replace('.', '/') + ".class";
+    private static final String STDOUT_CONTRACT = "0123456789";
 
     @TempDir
     private Path temporaryDirectory;
@@ -88,6 +104,42 @@ class LegalCliProcessSupportTest {
         assertThat(result.stderrBytes()).hasSize(result.captureLimitBytes());
         assertThat(result.stdoutBytes()).containsOnly((byte) 'o');
         assertThat(result.stderrBytes()).containsOnly((byte) 'e');
+    }
+
+    @Test
+    void capturesCompleteZeroAndExactPartialStdoutDeterministically() throws Exception {
+        Path agentDirectory = Files.createDirectory(
+                temporaryDirectory.resolve("agent jar with spaces"));
+        Path agentJar = createStdoutFailureAgentJar(agentDirectory);
+
+        ProcessResult complete = executeStdoutContract(List.of());
+        ProcessResult empty = executeStdoutContract(List.of(
+                javaAgentArgument(agentJar, 0)), agentJar);
+        ProcessResult partial = executeStdoutContract(List.of(
+                javaAgentArgument(agentJar, 7)), agentJar);
+
+        assertThat(complete.exitCode()).isZero();
+        assertThat(complete.timedOut()).isFalse();
+        assertThat(complete.stdout()).isEqualTo(STDOUT_CONTRACT);
+        assertThat(complete.stderrBytes()).isEmpty();
+        assertThat(complete.stdoutLimitExceeded()).isFalse();
+        assertThat(complete.stderrLimitExceeded()).isFalse();
+
+        assertThat(empty.exitCode()).isEqualTo(3);
+        assertThat(empty.timedOut()).isFalse();
+        assertThat(empty.stdoutBytes()).isEmpty();
+        assertThat(empty.stderrBytes()).isEmpty();
+        assertThat(empty.stdoutLimitExceeded()).isFalse();
+        assertThat(empty.stderrLimitExceeded()).isFalse();
+
+        assertThat(partial.exitCode()).isEqualTo(3);
+        assertThat(partial.timedOut()).isFalse();
+        assertThat(partial.stdoutBytes()).containsExactly(
+                Arrays.copyOf(STDOUT_CONTRACT.getBytes(StandardCharsets.US_ASCII), 7));
+        assertThat(partial.stdout()).isEqualTo("0123456");
+        assertThat(partial.stderrBytes()).isEmpty();
+        assertThat(partial.stdoutLimitExceeded()).isFalse();
+        assertThat(partial.stderrLimitExceeded()).isFalse();
     }
 
     @Test
@@ -314,15 +366,84 @@ class LegalCliProcessSupportTest {
                 StdoutMode.CAPTURE);
     }
 
+    private ProcessResult executeStdoutContract(List<String> jvmArguments) throws Exception {
+        return executeStdoutContract(jvmArguments, null);
+    }
+
+    private ProcessResult executeStdoutContract(
+            List<String> jvmArguments,
+            Path agentJar) throws Exception {
+        return LegalCliProcessSupport.execute(
+                probeCommand(jvmArguments, agentJar, "stdout-contract"),
+                temporaryDirectory,
+                Map.of(),
+                StdoutMode.CAPTURE);
+    }
+
     private static List<String> probeCommand(String mode, String... arguments) {
+        return probeCommand(List.of(), null, mode, arguments);
+    }
+
+    private static List<String> probeCommand(
+            List<String> jvmArguments,
+            Path firstClasspathEntry,
+            String mode,
+            String... arguments) {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.addAll(jvmArguments);
         command.add("-cp");
-        command.add(System.getProperty("java.class.path"));
+        String classpath = System.getProperty("java.class.path");
+        command.add(firstClasspathEntry == null
+                ? classpath
+                : firstClasspathEntry + File.pathSeparator + classpath);
         command.add(ProcessProbe.class.getName());
         command.add(mode);
         command.addAll(List.of(arguments));
         return List.copyOf(command);
+    }
+
+    private static String javaAgentArgument(Path agentJar, int prefixBytes) {
+        return "-javaagent:" + agentJar.toAbsolutePath() + "=" + prefixBytes;
+    }
+
+    private static Path createStdoutFailureAgentJar(Path directory) throws IOException {
+        InputStream classBytes = LegalCliProcessSupportTest.class
+                .getClassLoader()
+                .getResourceAsStream(STDOUT_FAILURE_AGENT_ENTRY);
+        if (classBytes == null) {
+            throw new AssertionError(
+                    "No se encontraron los bytes compilados del agente de stdout");
+        }
+
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().putValue(
+                "Premain-Class",
+                STDOUT_FAILURE_AGENT_CLASS);
+        Path agentJar = directory.resolve("stdout failure agent.jar");
+        try (classBytes;
+             JarOutputStream output = new JarOutputStream(
+                     Files.newOutputStream(agentJar, CREATE_NEW, WRITE),
+                     manifest)) {
+            JarEntry classEntry = new JarEntry(STDOUT_FAILURE_AGENT_ENTRY);
+            classEntry.setTime(0L);
+            output.putNextEntry(classEntry);
+            classBytes.transferTo(output);
+            output.closeEntry();
+        }
+
+        try (JarFile packagedAgent = new JarFile(agentJar.toFile())) {
+            assertThat(packagedAgent.getManifest()
+                    .getMainAttributes()
+                    .getValue("Premain-Class"))
+                    .isEqualTo(STDOUT_FAILURE_AGENT_CLASS);
+            assertThat(packagedAgent.stream().map(JarEntry::getName).toList())
+                    .containsExactlyInAnyOrder(
+                            "META-INF/MANIFEST.MF",
+                            STDOUT_FAILURE_AGENT_ENTRY);
+        }
+        return agentJar;
     }
 
     private static void awaitMarker(Path marker, WatchService signals) throws Exception {
@@ -421,6 +542,13 @@ class LegalCliProcessSupportTest {
                                 .append('\n');
                     }
                     System.out.write(output.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                case "stdout-contract" -> {
+                    System.out.write("0123".getBytes(StandardCharsets.US_ASCII));
+                    System.out.flush();
+                    System.out.write("456789".getBytes(StandardCharsets.US_ASCII));
+                    System.out.flush();
+                    System.exit(System.out.checkError() ? 3 : 0);
                 }
                 default -> throw new IllegalArgumentException("Modo probe desconocido: " + args[0]);
             }
