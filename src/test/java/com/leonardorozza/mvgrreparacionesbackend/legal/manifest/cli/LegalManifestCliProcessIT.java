@@ -5,6 +5,9 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.Artifacts;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.ProcessResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.StdoutMode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalEditorialPlanValidator;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -15,39 +18,24 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
-import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
 
 @Testcontainers
 class LegalManifestCliProcessIT {
 
-    private static final String BUILD_DIRECTORY_PROPERTY = "ordenfix.build.directory";
-    private static final String BUILD_FINAL_NAME_PROPERTY = "ordenfix.build.final-name";
-    private static final String DEFAULT_BUILD_DIRECTORY = "target";
-    private static final String DEFAULT_BUILD_FINAL_NAME =
-            "mvgr-reparaciones-backend-0.0.1-SNAPSHOT";
     private static final String GOLDEN_MANIFEST =
             "/legal/manifest/release-valid-v1/publication-manifest.json";
     private static final String GOLDEN_MANIFEST_SHA256 =
@@ -77,8 +65,6 @@ class LegalManifestCliProcessIT {
     private static final String PROCESS_SECRET = "ordenfix-process-secret-must-not-leak";
     private static final String JVM_OPTION_BOUNDARY_MARKER =
             "ordenfix.cli.jvm-option-boundary=verified";
-    private static final Duration PROCESS_TIMEOUT = Duration.ofSeconds(75);
-    private static final int MAX_CAPTURE_BYTES = 1_048_576;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> REPORT_FIELDS = List.of(
             "reportVersion",
@@ -122,33 +108,13 @@ class LegalManifestCliProcessIT {
             "code",
             "location",
             "message");
-    private static final List<String> ENVIRONMENT_TO_REMOVE = List.of(
-            "SPRING_DATASOURCE_URL",
-            "SPRING_DATASOURCE_USERNAME",
-            "SPRING_DATASOURCE_PASSWORD",
-            "SPRING_DATASOURCE_DRIVER_CLASS_NAME",
-            "SPRING_APPLICATION_JSON",
-            "SPRING_CONFIG_ADDITIONAL_LOCATION",
-            "SPRING_CONFIG_IMPORT",
-            "SPRING_CONFIG_LOCATION",
-            "SPRING_CONFIG_NAME",
-            "SPRING_PROFILES_ACTIVE",
-            "JAVA_TOOL_OPTIONS",
-            "JDK_JAVA_OPTIONS",
-            "_JAVA_OPTIONS",
-            LegalEditorialEnvironment.ENABLED_VARIABLE);
-
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("ordenfix_legal_manifest_cli_process")
             .withUsername("ordenfix")
             .withPassword("ordenfix");
 
-    private static Path normalJar;
-    private static Path legalCliJar;
-    private static Path javaExecutable;
-    private static Path buildDirectory;
-    private static String buildFinalName;
+    private static Artifacts artifacts;
 
     @TempDir
     private Path temporaryDirectory;
@@ -158,31 +124,7 @@ class LegalManifestCliProcessIT {
 
     @BeforeAll
     static void locateRequiredArtifacts() {
-        Path projectDirectory = Path.of(System.getProperty("user.dir"))
-                .toAbsolutePath()
-                .normalize();
-        Path configuredBuildDirectory = Path.of(System.getProperty(
-                BUILD_DIRECTORY_PROPERTY,
-                DEFAULT_BUILD_DIRECTORY));
-        buildDirectory = configuredBuildDirectory.isAbsolute()
-                ? configuredBuildDirectory.normalize()
-                : projectDirectory.resolve(configuredBuildDirectory).normalize();
-        buildFinalName = System.getProperty(
-                BUILD_FINAL_NAME_PROPERTY,
-                DEFAULT_BUILD_FINAL_NAME);
-
-        normalJar = buildDirectory.resolve(buildFinalName + ".jar");
-        legalCliJar = buildDirectory.resolve(buildFinalName + "-legal-cli.jar");
-        javaExecutable = Path.of(System.getProperty("java.home"), "bin", "java")
-                .toAbsolutePath()
-                .normalize();
-
-        requirePackagedArtifact(normalJar, "jar normal");
-        requirePackagedArtifact(legalCliJar, "jar legal-cli");
-        assertThat(javaExecutable)
-                .withFailMessage("No se encontró el ejecutable Java de java.home en %s", javaExecutable)
-                .isRegularFile()
-                .isExecutable();
+        artifacts = LegalCliProcessSupport.locateArtifacts();
     }
 
     @BeforeEach
@@ -208,8 +150,8 @@ class LegalManifestCliProcessIT {
     @Test
     void packagedArtifactsDeclareTheirOwnStartClassAndExcludeSecretProperties()
             throws IOException {
-        assertJarContract(normalJar, NORMAL_START_CLASS);
-        assertJarContract(legalCliJar, LEGAL_CLI_START_CLASS);
+        assertJarContract(artifacts.normalJar(), NORMAL_START_CLASS);
+        assertJarContract(artifacts.legalCliJar(), LEGAL_CLI_START_CLASS);
         assertSinglePackagedImportStartClass();
     }
 
@@ -573,18 +515,7 @@ class LegalManifestCliProcessIT {
             boolean configureDatabase,
             List<String> arguments,
             Map<String, String> environmentOverrides) throws Exception {
-        List<String> processCommand = new ArrayList<>(List.of(
-                javaExecutable.toString(),
-                "-jar",
-                legalCliJar.toString()));
-        processCommand.addAll(arguments);
-        ProcessBuilder processBuilder = new ProcessBuilder(processCommand);
-        processBuilder.directory(temporaryDirectory.toFile());
-        processBuilder.redirectErrorStream(false);
-        Map<String, String> environment = processBuilder.environment();
-        ENVIRONMENT_TO_REMOVE.forEach(environment::remove);
-        environment.keySet().removeIf(name -> name != null
-                && name.startsWith("ORDENFIX_LEGAL_EDITOR_DB_"));
+        Map<String, String> environment = new LinkedHashMap<>();
         environment.put("ORDENFIX_CLI_PROCESS_SECRET", PROCESS_SECRET);
         environment.put("LOGGING_CONFIG", "file:/private/ordenfix-hostile-logback.xml");
         environment.put("LOGGING_LEVEL_ROOT", "TRACE");
@@ -606,32 +537,17 @@ class LegalManifestCliProcessIT {
         }
         environment.putAll(environmentOverrides);
 
-        Process process = processBuilder.start();
-        ExecutorService readers = Executors.newFixedThreadPool(2);
-        Future<CapturedOutput> standardOutput = readers.submit(
-                () -> capture(process.getInputStream()));
-        Future<CapturedOutput> standardError = readers.submit(
-                () -> capture(process.getErrorStream()));
-        try {
-            if (!process.waitFor(PROCESS_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-                process.destroy();
-                if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                    process.waitFor(2, TimeUnit.SECONDS);
-                }
-                fail("El proceso legal-cli superó el timeout de %s", PROCESS_TIMEOUT);
-            }
-            CapturedOutput stdout = standardOutput.get(5, TimeUnit.SECONDS);
-            CapturedOutput stderr = standardError.get(5, TimeUnit.SECONDS);
-            return new ProcessResult(
-                    process.exitValue(),
-                    decodeUtf8(stdout.bytes()),
-                    decodeUtf8(stderr.bytes()),
-                    stdout.limitExceeded(),
-                    stderr.limitExceeded());
-        } finally {
-            readers.shutdownNow();
-        }
+        ProcessResult result = LegalCliProcessSupport.executeJar(
+                artifacts,
+                temporaryDirectory,
+                List.of(),
+                arguments,
+                environment,
+                StdoutMode.CAPTURE);
+        assertThat(result.timedOut())
+                .as("watchdog del proceso legal-cli")
+                .isFalse();
+        return result;
     }
 
     private List<String> retireArguments(String command) throws Exception {
@@ -818,33 +734,6 @@ class LegalManifestCliProcessIT {
         assertThat(fieldNames).containsExactlyElementsOf(expectedFields);
     }
 
-    private static CapturedOutput capture(InputStream input) throws IOException {
-        try (InputStream source = input;
-             ByteArrayOutputStream captured = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            boolean limitExceeded = false;
-            int read;
-            while ((read = source.read(buffer)) != -1) {
-                int remaining = MAX_CAPTURE_BYTES - captured.size();
-                if (remaining > 0) {
-                    captured.write(buffer, 0, Math.min(remaining, read));
-                }
-                if (read > remaining) {
-                    limitExceeded = true;
-                }
-            }
-            return new CapturedOutput(captured.toByteArray(), limitExceeded);
-        }
-    }
-
-    private static String decodeUtf8(byte[] bytes) throws CharacterCodingException {
-        return StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString();
-    }
-
     private static void assertJarContract(Path jarPath, String expectedStartClass)
             throws IOException {
         try (JarFile jar = new JarFile(jarPath.toFile())) {
@@ -865,7 +754,7 @@ class LegalManifestCliProcessIT {
 
     private static void assertSinglePackagedImportStartClass() throws IOException {
         List<Path> importArtifacts = new ArrayList<>();
-        try (Stream<Path> candidates = Files.list(buildDirectory)) {
+        try (Stream<Path> candidates = Files.list(artifacts.buildDirectory())) {
             for (Path candidate : candidates
                     .filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().endsWith(".jar"))
@@ -883,7 +772,7 @@ class LegalManifestCliProcessIT {
         }
         assertThat(importArtifacts)
                 .as("artefactos cuyo Start-Class expone el importador legal")
-                .containsExactly(legalCliJar.toAbsolutePath().normalize());
+                .containsExactly(artifacts.legalCliJar().toAbsolutePath().normalize());
     }
 
     private static boolean isSecretProperties(String entryName) {
@@ -916,26 +805,4 @@ class LegalManifestCliProcessIT {
         }
     }
 
-    private static void requirePackagedArtifact(Path artifact, String description) {
-        assertThat(artifact)
-                .withFailMessage(
-                        "No se encontró el %s en %s. Ejecute `./mvnw package` o "
-                                + "`./mvnw verify` para construir ambos artefactos antes de esta IT; "
-                                + "si usa rutas personalizadas, defina -D%s y -D%s.",
-                        description,
-                        artifact,
-                        BUILD_DIRECTORY_PROPERTY,
-                        BUILD_FINAL_NAME_PROPERTY)
-                .isRegularFile();
-    }
-
-    private record CapturedOutput(byte[] bytes, boolean limitExceeded) { }
-
-    private record ProcessResult(
-            int exitCode,
-            String stdout,
-            String stderr,
-            boolean stdoutLimitExceeded,
-            boolean stderrLimitExceeded
-    ) { }
 }
