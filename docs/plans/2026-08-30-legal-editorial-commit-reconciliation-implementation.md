@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: plan derivado del diseño aprobado; Subcorte 9A pendiente
+Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B pendiente
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -41,7 +41,7 @@ superficie pública.
 
 ## Subcorte 9A — Estado transaccional editorial
 
-Estado: pendiente.
+Estado: completado el 2026-08-30.
 
 ### Objetivo
 
@@ -80,6 +80,25 @@ git status --short
 Commit:
 
     feat(legal): modela estado transaccional editorial
+
+### Evidencia del Subcorte 9A
+
+- El ciclo TDD comenzó con una falla de compilación esperada porque
+  `LegalEditorialTransactionState` todavía no existía; la implementación posterior fue la mínima
+  necesaria para cerrar el contrato del facade.
+- El facade package-private delega la frontera transaccional al completion core y sólo agrega el
+  marcador booleano monótono `planConstructed`. No conserva execution plan, postestado, deltas,
+  timestamp tentativo ni metadata JDBC.
+- El receipt tentativo permanece oculto hasta una confirmación autoritativa. Rollback confirmado
+  produce `NOT_PERSISTED`; completion ambigua conserva `UNKNOWN`; las transiciones inválidas
+  fallan temprano sin avanzar evidencia válida.
+- Puerta focal con Amazon Corretto 21.0.10: 32/32 pruebas verdes —12 del nuevo facade, 8 del core y
+  12 del wrapper de import—. Suite unitaria completa fresca: 4.205/4.205, sin fallos, errores ni
+  omitidos.
+- Las revisiones adversariales de implementación, alcance, pruebas y documentación cerraron sin
+  hallazgos P1, P2 o P3 pendientes. `git diff --check` quedó limpio.
+- 9A no modifica apply, reconciliación, JDBC, import, V27/V28, schemas, grants, API, frontend ni
+  contratos públicos. No hubo push ni deploy.
 
 ## Subcorte 9B — Reconciliador SELECT-only
 

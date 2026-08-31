@@ -3,7 +3,8 @@
 Fecha: 2026-08-27
 
 Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 8 completados;
-Corte 9 con diseño y plan específico registrados, Subcorte 9A pendiente; Cortes 10 y 11 pendientes
+Corte 9 con diseño y plan específico registrados, Subcorte 9A completado y 9B pendiente; Cortes 10
+y 11 pendientes
 
 Diseño aprobado:
 
@@ -1109,7 +1110,8 @@ Commits locales atómicos de los subcortes 8A–8G:
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
-Estado: en ejecución; diseño y plan específico registrados, Subcorte 9A pendiente.
+Estado: en ejecución; diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30
+y 9B pendiente.
 
 Diseño específico aprobado:
 
@@ -1123,6 +1125,10 @@ Plan detallado de ejecución:
 El plan detallado gobierna el inventario exacto de archivos, el orden TDD, las puertas y los siete
 commits 9A, 9B, 9C, 9D1, 9D2, 9E y 9F. Ante cualquier diferencia, prevalece sobre el bosquejo
 prospectivo de este documento.
+
+9A ya acredita el facade transaccional editorial marker-only, con receipt tentativo redactado,
+32 pruebas focales y 4.205 unitarias completas verdes. La integración SELECT-only comienza en 9B;
+apply, JDBC, import y contratos públicos todavía permanecen sin cambios.
 
 ### Objetivo
 
