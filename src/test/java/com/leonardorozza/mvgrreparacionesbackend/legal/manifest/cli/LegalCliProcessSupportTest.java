@@ -5,6 +5,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProc
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -201,13 +202,31 @@ class LegalCliProcessSupportTest {
     }
 
     @Test
-    void removesInheritedImportAndEditorialDatabaseControlChannels() {
+    void retainsOnlyTheMinimalRuntimeEnvironment() {
         Map<String, String> environment = new HashMap<>();
         environment.put("JAVA_TOOL_OPTIONS", "-Dspring.datasource.url=jdbc:hostile");
         environment.put("JDK_JAVA_OPTIONS", "-Dspring.datasource.username=hostile");
         environment.put("_JAVA_OPTIONS", "-Dspring.datasource.password=hostile");
+        environment.put("JAVA_HOME", "/private/hostile-jdk");
+        environment.put("JRE_HOME", "/private/hostile-jre");
+        environment.put("CLASSPATH", "/private/hostile-classes");
+        environment.put("JAVA_OPTS", "-javaagent:/private/hostile-java-agent.jar");
+        environment.put("HOME", "/private/hostile-home");
+        environment.put("USERPROFILE", "C:\\private\\hostile-profile");
+        environment.put("BASH_ENV", "/private/hostile-bashrc");
+        environment.put("ENV", "/private/hostile-shrc");
+        environment.put("MAVEN_OPTS", "-javaagent:/private/hostile.jar");
+        environment.put("GRADLE_OPTS", "-javaagent:/private/hostile-gradle-agent.jar");
+        environment.put("LD_PRELOAD", "/private/hostile.so");
+        environment.put("DYLD_INSERT_LIBRARIES", "/private/hostile.dylib");
+        environment.put("GLIBC_TUNABLES", "glibc.malloc.check=3");
+        environment.put("TZ", "hostile/timezone");
+        environment.put("HTTPS_PROXY", "http://hostile-proxy.invalid");
+        environment.put("PGPASSWORD", "hostile-postgres-secret");
         environment.put("SPRING_DATASOURCE_PASSWORD", "hostile");
         environment.put("SPRING_CONFIG_IMPORT", "file:/private/hostile.properties");
+        environment.put("SPRING_MAIN_WEB_APPLICATION_TYPE", "servlet");
+        environment.put("LOGGING_CONFIG", "file:/private/hostile-logback.xml");
         environment.put(LegalImportEnvironment.ENABLED_VARIABLE, "true");
         environment.put("ORDENFIX_LEGAL_IMPORT_DB_PASSWORD", "hostile-import");
         environment.put(LegalEditorialEnvironment.ENABLED_VARIABLE, "true");
@@ -216,14 +235,74 @@ class LegalCliProcessSupportTest {
         environment.put(
                 "ORDENFIX_LEGAL_EDITOR_DB_PASSWORD_FILE",
                 "/private/hostile-editor-secret");
-        environment.put("ORDENFIX_UNRELATED", "preserved");
+        environment.put("ORDENFIX_UNRELATED", "hostile");
         environment.put("PATH", "/usr/bin");
+        environment.put("TMPDIR", "/runtime/tmpdir");
+        environment.put("TMP", "/runtime/tmp");
+        environment.put("TEMP", "/runtime/temp");
+        environment.put("LANG", "es_AR.UTF-8");
+        environment.put("LC_ALL", "C");
+        environment.put("LC_MESSAGES", "es_AR.UTF-8");
+        environment.put("SystemRoot", "C:\\Windows");
+        environment.put("WINDIR", "C:\\Windows");
+        environment.put("COMSPEC", "C:\\Windows\\System32\\cmd.exe");
+        environment.put("PATHEXT", ".COM;.EXE;.BAT;.CMD");
 
-        LegalCliProcessSupport.sanitizeInheritedEnvironment(environment);
+        LegalCliProcessSupport.sanitizeInheritedEnvironment(
+                environment,
+                temporaryDirectory);
 
-        assertThat(environment).containsExactlyInAnyOrderEntriesOf(Map.of(
-                "ORDENFIX_UNRELATED", "preserved",
-                "PATH", "/usr/bin"));
+        Map<String, String> expected = new HashMap<>();
+        List<String> expectedPath = new ArrayList<>();
+        expectedPath.add(Path.of(System.getProperty("java.home"), "bin")
+                .toAbsolutePath()
+                .normalize()
+                .toString());
+        if (File.separatorChar == '\\') {
+            expectedPath.add("C:\\Windows\\System32");
+            expectedPath.add("C:\\Windows");
+            expected.put("SystemRoot", "C:\\Windows");
+        } else {
+            expectedPath.add("/usr/bin");
+            expectedPath.add("/bin");
+            expected.put("LANG", "C.UTF-8");
+            expected.put("LC_ALL", "C.UTF-8");
+        }
+        expected.put("PATH", String.join(File.pathSeparator, expectedPath));
+        String temporaryPath = temporaryDirectory.toAbsolutePath().normalize().toString();
+        expected.put("TMPDIR", temporaryPath);
+        expected.put("TMP", temporaryPath);
+        expected.put("TEMP", temporaryPath);
+
+        assertThat(environment).containsExactlyInAnyOrderEntriesOf(expected);
+    }
+
+    @Test
+    void appliesExplicitOverridesAfterMinimalizingTheInheritedEnvironment() throws Exception {
+        Path explicitTemporaryDirectory = Files.createDirectory(
+                temporaryDirectory.resolve("explicit temp"));
+        ProcessResult result = LegalCliProcessSupport.execute(
+                probeCommand(
+                        "environment",
+                        "PATH",
+                        "TMPDIR",
+                        "HOME",
+                        "ORDENFIX_UNRELATED"),
+                temporaryDirectory,
+                Map.of(
+                        "PATH", "/explicit/bin",
+                        "TMPDIR", explicitTemporaryDirectory.toString(),
+                        "HOME", "/explicit/home",
+                        "ORDENFIX_UNRELATED", "explicit"),
+                StdoutMode.CAPTURE);
+
+        assertThat(result.exitCode()).isZero();
+        assertThat(result.stdout()).isEqualTo(
+                "PATH=/explicit/bin\n"
+                        + "TMPDIR=" + explicitTemporaryDirectory + "\n"
+                        + "HOME=/explicit/home\n"
+                        + "ORDENFIX_UNRELATED=explicit\n");
+        assertThat(result.stderr()).isEmpty();
     }
 
     private ProcessResult executeProbe(String mode) throws Exception {
@@ -332,6 +411,16 @@ class LegalCliProcessSupportTest {
                         Path.of(args[1]),
                         "started",
                         StandardCharsets.UTF_8);
+                case "environment" -> {
+                    StringBuilder output = new StringBuilder();
+                    for (int index = 1; index < args.length; index++) {
+                        output.append(args[index])
+                                .append('=')
+                                .append(System.getenv(args[index]))
+                                .append('\n');
+                    }
+                    System.out.write(output.toString().getBytes(StandardCharsets.UTF_8));
+                }
                 default -> throw new IllegalArgumentException("Modo probe desconocido: " + args[0]);
             }
             System.out.flush();

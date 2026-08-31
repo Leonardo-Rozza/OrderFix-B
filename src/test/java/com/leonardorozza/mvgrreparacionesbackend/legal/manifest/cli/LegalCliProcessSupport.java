@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -33,23 +34,9 @@ final class LegalCliProcessSupport {
     private static final Duration CAPTURE_COMPLETION_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration READER_SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
     private static final int MAX_CAPTURE_BYTES = 1_048_576;
+    private static final boolean WINDOWS = File.separatorChar == '\\';
+    private static final String POSIX_LOCALE = "C.UTF-8";
     static final String READER_THREAD_PREFIX = "ordenfix-legal-cli-reader-";
-    private static final List<String> ENVIRONMENT_TO_REMOVE = List.of(
-            "SPRING_DATASOURCE_URL",
-            "SPRING_DATASOURCE_USERNAME",
-            "SPRING_DATASOURCE_PASSWORD",
-            "SPRING_DATASOURCE_DRIVER_CLASS_NAME",
-            "SPRING_APPLICATION_JSON",
-            "SPRING_CONFIG_ADDITIONAL_LOCATION",
-            "SPRING_CONFIG_IMPORT",
-            "SPRING_CONFIG_LOCATION",
-            "SPRING_CONFIG_NAME",
-            "SPRING_PROFILES_ACTIVE",
-            "JAVA_TOOL_OPTIONS",
-            "JDK_JAVA_OPTIONS",
-            "_JAVA_OPTIONS",
-            LegalImportEnvironment.ENABLED_VARIABLE,
-            LegalEditorialEnvironment.ENABLED_VARIABLE);
 
     private LegalCliProcessSupport() { }
 
@@ -191,7 +178,7 @@ final class LegalCliProcessSupport {
         processBuilder.directory(validatedWorkingDirectory.toFile());
         processBuilder.redirectErrorStream(false);
         Map<String, String> environment = processBuilder.environment();
-        sanitizeInheritedEnvironment(environment);
+        sanitizeInheritedEnvironment(environment, validatedWorkingDirectory);
         environment.putAll(validatedEnvironmentOverrides);
 
         long started = System.nanoTime();
@@ -260,11 +247,60 @@ final class LegalCliProcessSupport {
         }
     }
 
-    static void sanitizeInheritedEnvironment(Map<String, String> environment) {
-        ENVIRONMENT_TO_REMOVE.forEach(environment::remove);
-        environment.keySet().removeIf(name -> name != null
-                && (name.startsWith("ORDENFIX_LEGAL_IMPORT_DB_")
-                    || name.startsWith("ORDENFIX_LEGAL_EDITOR_DB_")));
+    static void sanitizeInheritedEnvironment(
+            Map<String, String> environment,
+            Path workingDirectory) {
+        Objects.requireNonNull(environment, "environment");
+        Path validatedWorkingDirectory = Objects.requireNonNull(
+                        workingDirectory,
+                        "workingDirectory")
+                .toAbsolutePath()
+                .normalize();
+        String systemRoot = inheritedValue(environment, "SystemRoot");
+
+        environment.clear();
+        environment.put("PATH", stableRuntimePath(systemRoot));
+        String temporaryPath = validatedWorkingDirectory.toString();
+        environment.put("TMPDIR", temporaryPath);
+        environment.put("TMP", temporaryPath);
+        environment.put("TEMP", temporaryPath);
+        if (WINDOWS) {
+            if (systemRoot != null && !systemRoot.isBlank()) {
+                environment.put("SystemRoot", systemRoot);
+            }
+        } else {
+            environment.put("LANG", POSIX_LOCALE);
+            environment.put("LC_ALL", POSIX_LOCALE);
+        }
+    }
+
+    private static String inheritedValue(
+            Map<String, String> environment,
+            String expectedName) {
+        return environment.entrySet().stream()
+                .filter(entry -> entry.getKey() != null
+                        && entry.getKey().equalsIgnoreCase(expectedName))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static String stableRuntimePath(String systemRoot) {
+        List<String> entries = new ArrayList<>();
+        entries.add(Path.of(System.getProperty("java.home"), "bin")
+                .toAbsolutePath()
+                .normalize()
+                .toString());
+        if (WINDOWS) {
+            if (systemRoot != null && !systemRoot.isBlank()) {
+                entries.add(Path.of(systemRoot, "System32").toString());
+                entries.add(Path.of(systemRoot).toString());
+            }
+        } else {
+            entries.add("/usr/bin");
+            entries.add("/bin");
+        }
+        return String.join(File.pathSeparator, entries);
     }
 
     private static CapturedOutput capture(InputStream input) throws IOException {
