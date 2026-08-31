@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: aprobado por el usuario; implementación en curso — 9A, 9B y 9C completados al 2026-08-31
+Estado: aprobado por el usuario y completado el 2026-08-31; Subcortes 9A a 9F acreditados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -12,12 +12,13 @@ Plan maestro:
 
 ## Contexto
 
-Los apply editoriales PROMOTE, REPLACE y RETIRE ya distinguen commit confirmado, rollback
-confirmado y finalización indeterminada. Cuando el transaction manager no puede acreditar el
-resultado después de entrar en la frontera de commit, el contrato actual devuelve
-`UNKNOWN/persisted=null`, oculta el receipt tentativo y exige un retry manual exacto.
+Antes del Corte 9, los apply editoriales PROMOTE, REPLACE y RETIRE ya distinguían commit
+confirmado, rollback confirmado y finalización indeterminada. Cuando el transaction manager no
+podía acreditar el resultado después de entrar en la frontera de commit, el contrato devolvía
+directamente `UNKNOWN/persisted=null`, ocultaba el receipt tentativo y exigía un retry manual
+exacto.
 
-Corte 9 agrega una observación automática y conservadora dentro de esa misma invocación. No
+Corte 9 incorporó una observación automática y conservadora dentro de esa misma invocación. No
 reintenta la mutación: espera que la transacción original se desvincule, abre una frontera nueva de
 solo lectura, toma el mismo advisory lock y clasifica el estado real de PostgreSQL. La evidencia
 debe ser autoritativa; si no lo es, `UNKNOWN` se conserva.
@@ -231,3 +232,10 @@ misma invocación sólo cuando existe evidencia PostgreSQL autoritativa; la no p
 acreditada mediante source exacto se distingue de un estado parcial; toda incertidumbre restante
 conserva UNKNOWN; no se duplica DML; el importador y los reportes históricos permanecen
 compatibles; y no se modifica V27, API, frontend, deploy ni la superficie pública.
+
+Estado del criterio: satisfecho el 2026-08-31. La implementación, la evidencia ejecutable, los
+conteos finales y los siete commits locales de 9A a 9F se registran en
+`docs/plans/2026-08-30-legal-editorial-commit-reconciliation-implementation.md`. Corte 9 no cierra
+por sí solo la Fase 2.3C ni habilita producción pública: concurrencia, capacidad y procesos JAR
+exhaustivos permanecen en Corte 10; runbooks, staging y coordinación cross-repo permanecen en
+Corte 11.

@@ -2,9 +2,9 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 8 completados;
-Corte 9 con diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30 y
-9B/9C/9D1/9D2 completados el 2026-08-31; 9E y 9F pendientes; Cortes 10 y 11 pendientes
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 9 completados;
+Corte 9 cerrado el 2026-08-31 mediante 9A, 9B, 9C, 9D1, 9D2, 9E y 9F; Cortes 10 y 11
+pendientes
 
 Diseño aprobado:
 
@@ -1110,8 +1110,7 @@ Commits locales atómicos de los subcortes 8A–8G:
 
 ## Corte 9 — Reconciliación y UNKNOWN
 
-Estado: en ejecución; diseño y plan específico registrados, Subcorte 9A completado el 2026-08-30,
-9B, 9C, 9D1 y 9D2 completados el 2026-08-31; 9E y 9F pendientes.
+Estado: completado el 2026-08-31; Subcortes 9A, 9B, 9C, 9D1, 9D2, 9E y 9F acreditados.
 
 Diseño específico aprobado:
 
@@ -1120,7 +1119,8 @@ Diseño específico aprobado:
 
 Plan detallado de ejecución:
 
-- `docs/plans/2026-08-30-legal-editorial-commit-reconciliation-implementation.md`.
+- `docs/plans/2026-08-30-legal-editorial-commit-reconciliation-implementation.md`;
+- commit local de planificación `61704d5`.
 
 El plan detallado gobierna el inventario exacto de archivos, el orden TDD, las puertas y los siete
 commits 9A, 9B, 9C, 9D1, 9D2, 9E y 9F. Ante cualquier diferencia, prevalece sobre el bosquejo
@@ -1147,7 +1147,12 @@ SQLState `55P03`, verifier fallido y planner `BLOCKED/ERROR`. Las invocaciones a
 reconciliador SELECT-only no ejecuta DML. Su puerta fresca cerró 4.231 unitarias y 16 integraciones
 —7 de apply failure, 5 de reconciliación concluyente y 4 de regresión import— sobre PostgreSQL
 16.14 con las 27 migraciones. Import, V27/V28, API, frontend y contratos públicos permanecen sin
-cambios; 9E y 9F continúan pendientes.
+cambios. 9E congela los contratos de identidad y redacción de `UNKNOWN`, receipt tentativo,
+`ALREADY_APPLIED`, códigos de salida, stdout truncado en la lógica unitaria y compatibilidad
+v1/v2/import. Su puerta focal cerró 128/128; el lifecycle limpio cerró 4.239 unitarias y 13
+integraciones, y la repetición completa cerró 4.239/4.239, todo sin fallos, errores ni omitidos.
+Los cambios de 9E se limitaron a cuatro archivos de pruebas; producción y los formatos públicos
+permanecieron intactos.
 
 ### Objetivo
 
@@ -1198,15 +1203,33 @@ Cubrir todas las completion states, pérdida de ACK, rollback sin ACK, session k
 source exacto, postestado exacto, parcial, nueva conexión/mismo lock, retry sin duplicados y regresión
 import v2.
 
+### Evidencia de cierre del Corte 9
+
+- La puerta focal de 9F cerró 226/226 pruebas en 4,68 s de pared, sin fallos, errores ni omitidos.
+- El `clean verify` cerró 4.239 unitarias y 133 integraciones en 294,04 s de pared, sin fallos,
+  errores ni omitidos, sobre Amazon Corretto 21.0.10, PostgreSQL 16.14 y Flyway 11.14.1 con las 27
+  migraciones hasta V27.
+- La repetición completa cerró 4.239/4.239 unitarias en 38,63 s de pared, sin fallos, errores ni
+  omitidos; el launcher pasó `sh -n`.
+- La matriz acredita completion states, nueva transacción read-only con el mismo advisory lock,
+  postestado exacto, source exacto, incertidumbre conservadora, receipt confirmado releído y cero
+  DML duplicado. PROMOTE, REPLACE, RETIRE, readiness, planificación, reportes v1/v2/v3 e import v2
+  permanecen verdes.
+- Corte 9 queda completo sin modificar V27/V28, migraciones, schemas, grants, API, controllers,
+  JPA, frontend, runbooks ni integración pública. No hubo push ni deploy.
+- Corte 9 no cierra la Fase 2.3C ni habilita producción pública. Concurrencia, capacidad, procesos
+  reales exhaustivos y stdout truncado en el JAR editorial real permanecen en Corte 10; el runbook,
+  cierre cross-repo y cierre de fase permanecen en Corte 11.
+
 Las puertas focales y la matriz final fresca están congeladas en el plan detallado. Corte 9 se
 registra en estos commits locales:
 
-    feat(legal): modela estado transaccional editorial
-    feat(legal): clasifica evidencia de commits ambiguos
-    fix(legal): reconcilia apply editorial ambiguo
-    test(legal): acredita commits editoriales reconciliados
-    test(legal): preserva incertidumbre editorial
-    test(legal): conserva contratos al reconciliar commits
+    a05728a feat(legal): modela estado transaccional editorial
+    34b6ecf feat(legal): clasifica evidencia de commits ambiguos
+    78eafa7 fix(legal): reconcilia apply editorial ambiguo
+    cc890e9 test(legal): acredita commits editoriales reconciliados
+    7455aab test(legal): preserva incertidumbre editorial
+    60f5e54 test(legal): conserva contratos al reconciliar commits
     docs(legal): cierra reconciliacion editorial
 
 ## Corte 10 — Concurrencia, capacidad y procesos reales
@@ -1253,6 +1276,8 @@ Modificar/reutilizar:
 - jar real con READY/NOT_READY, APPLICABLE/BLOCKED, APPLIED/ALREADY_APPLIED y
   APPLIED+NOT_READY;
 - JSON único, stderr sanitizado, canaries, system properties hostiles;
+- stdout ausente o truncado en el JAR editorial real conserva exit 3 sin fabricar un segundo
+  envelope;
 - ausencia de web, Flyway, JPA y schedulers;
 - rol editorial restringido e importador todavía incapaz de promover;
 - Start-Class y contenido de ambos jars;
@@ -1427,7 +1452,7 @@ Commit backend:
 2.3C cierra sólo si:
 
 - los siete comandos cumplen sus matrices;
-- READY/NOT_READY y APPLIED/ALREADY/BLOCKED/ERROR/UNKNOWN están acreditados;
+- READY/NOT_READY y APPLIED/ALREADY_APPLIED/BLOCKED/ERROR/UNKNOWN están acreditados;
 - primera promoción, cutover, split/merge y retiro funcionan sobre V27;
 - replay exacto no duplica transiciones;
 - source y poststate distinguen rollback, conflicto y UNKNOWN;

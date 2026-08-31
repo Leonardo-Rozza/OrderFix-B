@@ -2,8 +2,7 @@
 
 Fecha: 2026-08-30
 
-Estado: ejecución en curso; Subcorte 9A completado el 2026-08-30 y 9B/9C/9D1/9D2 completados el
-2026-08-31; 9E y 9F pendientes
+Estado: completado el 2026-08-31; Subcortes 9A, 9B, 9C, 9D1, 9D2, 9E y 9F acreditados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -435,7 +434,7 @@ Commit:
 
 ## Subcorte 9E — Contratos y regresiones
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -485,9 +484,28 @@ Commit:
 
     test(legal): conserva contratos al reconciliar commits
 
+### Evidencia del Subcorte 9E
+
+- El commit local `60f5e54` agregó ocho ejecuciones de regresión en cuatro archivos de pruebas
+  autorizados. No modificó producción ni el formato público.
+- UNKNOWN conserva el release validado y, cuando corresponde, el plan validado después del cierre
+  del contexto y de un fallo de serialización para PROMOTE, REPLACE y RETIRE. Los resultados
+  terminales ERROR y UNKNOWN mantienen exit 3 y distinguen `persisted=false` de `persisted=null`.
+- El reporte rechaza receipts tentativos envenenados para las tres operaciones. Dos identidades
+  externas REPLACE distintas pueden proyectar el mismo resultado ALREADY_APPLIED conservando la
+  identidad de cada input, sin atribuir autoría al commit histórico.
+- El golden ALREADY_APPLIED congela forma, orden y ubicación de la identidad bajo `plan`. Un stdout
+  parcialmente escrito después de un APPLIED confirmado devuelve exit 3 sin intentar un segundo
+  envelope UNKNOWN.
+- La puerta focal cerró 128/128 pruebas; la suite unitaria completa, 4.239/4.239; y la regresión de
+  import, 13/13 integraciones, sin fallos, errores ni omitidos. Los goldens históricos v1/v2, JSON
+  v3 y el contrato import v2 permanecieron compatibles.
+- `git diff --check` quedó limpio. No hubo cambios de producción, V27/V28, API, frontend, runbooks,
+  push o deploy.
+
 ## Subcorte 9F — Puerta integral y cierre documental
 
-Estado: pendiente.
+Estado: completado el 2026-08-31.
 
 ### Objetivo
 
@@ -523,6 +541,40 @@ Commit:
 
     docs(legal): cierra reconciliacion editorial
 
+### Evidencia del Subcorte 9F
+
+- La puerta se ejecutó explícitamente con Amazon Corretto 21.0.10 y Maven 3.9.11. PostgreSQL 16.14
+  aplicó mediante Flyway 11.14.1 las 27 migraciones hasta V27.
+- La matriz focal cerró 226/226 pruebas, sin fallos, errores ni omitidos, en 4,68 s de pared. El
+  `clean verify` fresco cerró 4.239/4.239 unitarias y 133/133 integraciones de las 16 suites
+  autorizadas, también sin fallos, errores ni omitidos, en 294,04 s de pared. La repetición
+  independiente `./mvnw test` cerró 4.239/4.239 en 38,63 s de pared.
+- La matriz integral reacreditó PROMOTE, REPLACE y RETIRE; planner, split/merge, readiness,
+  privilegios e aislamiento; reconciliación concluyente e incertidumbre; import y procesos CLI.
+  Los reportes v1/v2/v3, import v2 y los códigos de salida permanecieron compatibles.
+- La reconciliación ocurre en otra transacción `REQUIRES_NEW`, `READ_COMMITTED` y read-only, con
+  una nueva sesión/lease y el mismo advisory lock. El reconciliador se invoca una sola vez, no
+  llama writers ni reintenta DML; snapshots JSONB exactos de las 19 tablas editoriales y estados
+  de secuencia acreditan ausencia de healing y de DML duplicado.
+- `sh -n scripts/legal-manifest-editor.sh` y `git diff --check` terminaron limpios. Las auditorías
+  independientes de alcance, diseño y plan maestro no encontraron bloqueos ni expansión
+  funcional.
+- 9F modifica únicamente los tres documentos autorizados. No cambia producción, tests, V27/V28,
+  schemas, grants, API, frontend, runbooks ni integración pública; no hubo push ni deploy.
+- La inyección de stdout truncado en un JAR editorial real, los procesos editoriales exhaustivos,
+  capacidad y concurrencia permanecen en Corte 10. Runbooks, staging y coordinación cross-repo
+  permanecen en Corte 11; la Fase 2.3C y la salida pública siguen abiertas.
+
+Commits locales atómicos de Corte 9:
+
+    a05728a feat(legal): modela estado transaccional editorial
+    34b6ecf feat(legal): clasifica evidencia de commits ambiguos
+    78eafa7 fix(legal): reconcilia apply editorial ambiguo
+    cc890e9 test(legal): acredita commits editoriales reconciliados
+    7455aab test(legal): preserva incertidumbre editorial
+    60f5e54 test(legal): conserva contratos al reconciliar commits
+    docs(legal): cierra reconciliacion editorial
+
 ## Criterio de cierre
 
 Corte 9 termina únicamente cuando 9A, 9B, 9C, 9D1, 9D2, 9E y 9F están acreditados en siete commits
@@ -530,3 +582,6 @@ locales separados; la pérdida de ACK converge dentro de la misma invocación cu
 postestado exacto; source exacto acredita no persistencia; toda evidencia parcial conserva
 UNKNOWN; no se reintenta DML; import y reportes históricos continúan compatibles; y no hubo
 cambios de V27, API, frontend, push o deploy.
+
+Estado del criterio: satisfecho el 2026-08-31. Corte 9 está cerrado en siete commits locales
+atómicos; Cortes 10 y 11 y la Fase 2.3C permanecen abiertos.
