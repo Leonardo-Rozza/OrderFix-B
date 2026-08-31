@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Shared subprocess boundary for packaged legal CLI integration tests. */
 final class LegalCliProcessSupport {
@@ -28,7 +29,11 @@ final class LegalCliProcessSupport {
     private static final String DEFAULT_BUILD_FINAL_NAME =
             "mvgr-reparaciones-backend-0.0.1-SNAPSHOT";
     private static final Duration PROCESS_TIMEOUT = Duration.ofSeconds(90);
+    private static final Duration TERMINATION_GRACE = Duration.ofSeconds(2);
+    private static final Duration CAPTURE_COMPLETION_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration READER_SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
     private static final int MAX_CAPTURE_BYTES = 1_048_576;
+    static final String READER_THREAD_PREFIX = "ordenfix-legal-cli-reader-";
     private static final List<String> ENVIRONMENT_TO_REMOVE = List.of(
             "SPRING_DATASOURCE_URL",
             "SPRING_DATASOURCE_USERNAME",
@@ -89,6 +94,24 @@ final class LegalCliProcessSupport {
             List<String> cliArguments,
             Map<String, String> environmentOverrides,
             StdoutMode stdoutMode) throws Exception {
+        return executeJar(
+                artifacts,
+                workingDirectory,
+                jvmArguments,
+                cliArguments,
+                environmentOverrides,
+                stdoutMode,
+                PROCESS_TIMEOUT);
+    }
+
+    static ProcessResult executeJar(
+            Artifacts artifacts,
+            Path workingDirectory,
+            List<String> jvmArguments,
+            List<String> cliArguments,
+            Map<String, String> environmentOverrides,
+            StdoutMode stdoutMode,
+            Duration timeout) throws Exception {
         List<String> command = new ArrayList<>();
         command.add(artifacts.javaExecutable().toString());
         command.addAll(List.copyOf(jvmArguments));
@@ -99,7 +122,8 @@ final class LegalCliProcessSupport {
                 command,
                 workingDirectory,
                 environmentOverrides,
-                stdoutMode);
+                stdoutMode,
+                timeout);
     }
 
     static ProcessResult execute(
@@ -107,39 +131,113 @@ final class LegalCliProcessSupport {
             Path workingDirectory,
             Map<String, String> environmentOverrides,
             StdoutMode stdoutMode) throws Exception {
-        ProcessBuilder processBuilder = new ProcessBuilder(List.copyOf(command));
-        processBuilder.directory(workingDirectory.toFile());
+        return execute(
+                command,
+                workingDirectory,
+                environmentOverrides,
+                stdoutMode,
+                PROCESS_TIMEOUT);
+    }
+
+    static ProcessResult execute(
+            List<String> command,
+            Path workingDirectory,
+            Map<String, String> environmentOverrides,
+            StdoutMode stdoutMode,
+            Duration timeout) throws Exception {
+        return execute(
+                command,
+                workingDirectory,
+                environmentOverrides,
+                stdoutMode,
+                timeout,
+                null);
+    }
+
+    static ProcessResult executeAfterCheckpoint(
+            List<String> command,
+            Path workingDirectory,
+            Map<String, String> environmentOverrides,
+            StdoutMode stdoutMode,
+            Duration timeout,
+            ProcessCheckpoint checkpoint) throws Exception {
+        return execute(
+                command,
+                workingDirectory,
+                environmentOverrides,
+                stdoutMode,
+                timeout,
+                Objects.requireNonNull(checkpoint, "checkpoint"));
+    }
+
+    private static ProcessResult execute(
+            List<String> command,
+            Path workingDirectory,
+            Map<String, String> environmentOverrides,
+            StdoutMode stdoutMode,
+            Duration timeout,
+            ProcessCheckpoint checkpoint) throws Exception {
+        List<String> validatedCommand = List.copyOf(
+                Objects.requireNonNull(command, "command"));
+        Path validatedWorkingDirectory = Objects.requireNonNull(
+                workingDirectory,
+                "workingDirectory");
+        Map<String, String> validatedEnvironmentOverrides = Map.copyOf(
+                Objects.requireNonNull(environmentOverrides, "environmentOverrides"));
+        StdoutMode validatedStdoutMode = Objects.requireNonNull(stdoutMode, "stdoutMode");
+        long timeoutNanos = requirePositiveTimeoutNanos(timeout);
+
+        ProcessBuilder processBuilder = new ProcessBuilder(validatedCommand);
+        processBuilder.directory(validatedWorkingDirectory.toFile());
         processBuilder.redirectErrorStream(false);
         Map<String, String> environment = processBuilder.environment();
         sanitizeInheritedEnvironment(environment);
-        environment.putAll(Map.copyOf(environmentOverrides));
+        environment.putAll(validatedEnvironmentOverrides);
 
         long started = System.nanoTime();
         Process process = processBuilder.start();
-        if (stdoutMode == StdoutMode.CLOSE_IMMEDIATELY) {
-            process.getInputStream().close();
-        }
-        int readerCount = stdoutMode == StdoutMode.CAPTURE ? 2 : 1;
-        ExecutorService readers = Executors.newFixedThreadPool(readerCount);
-        Future<CapturedOutput> standardOutput = stdoutMode == StdoutMode.CAPTURE
-                ? readers.submit(() -> capture(process.getInputStream()))
-                : null;
-        Future<CapturedOutput> standardError = readers.submit(
-                () -> capture(process.getErrorStream()));
+        ExecutorService readers = null;
+        Future<CapturedOutput> standardOutput = null;
+        Future<CapturedOutput> standardError = null;
+        Throwable primaryFailure = null;
         try {
-            if (!process.waitFor(PROCESS_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-                process.destroy();
-                if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                    process.waitFor(2, TimeUnit.SECONDS);
-                }
-                throw new AssertionError(
-                        "El proceso legal-cli superó el timeout de " + PROCESS_TIMEOUT);
+            process.getOutputStream().close();
+            if (validatedStdoutMode == StdoutMode.CLOSE_IMMEDIATELY) {
+                process.getInputStream().close();
             }
+            int readerCount = validatedStdoutMode == StdoutMode.CAPTURE ? 2 : 1;
+            readers = newReaderExecutor(readerCount, process.pid());
+            standardOutput = validatedStdoutMode == StdoutMode.CAPTURE
+                    ? readers.submit(() -> capture(process.getInputStream()))
+                    : null;
+            standardError = readers.submit(() -> capture(process.getErrorStream()));
+
+            long waitStarted = started;
+            if (checkpoint != null) {
+                checkpoint.await(process);
+                waitStarted = System.nanoTime();
+            }
+            long remaining = remainingNanos(waitStarted, timeoutNanos);
+            boolean completed = !process.isAlive();
+            if (!completed && remaining > 0L) {
+                completed = process.waitFor(remaining, TimeUnit.NANOSECONDS);
+            }
+            boolean timedOut = !completed;
+            if (timedOut) {
+                terminateAndAwait(process);
+            }
+            if (process.isAlive()) {
+                throw new AssertionError("El proceso legal-cli no entregó un exit final");
+            }
+            long captureDeadline = System.nanoTime()
+                    + CAPTURE_COMPLETION_TIMEOUT.toNanos();
             CapturedOutput stdout = standardOutput == null
                     ? CapturedOutput.empty()
-                    : standardOutput.get(5, TimeUnit.SECONDS);
-            CapturedOutput stderr = standardError.get(5, TimeUnit.SECONDS);
+                    : awaitCapture(standardOutput, captureDeadline, "stdout");
+            CapturedOutput stderr = awaitCapture(
+                    Objects.requireNonNull(standardError, "standardError"),
+                    captureDeadline,
+                    "stderr");
             return new ProcessResult(
                     process.exitValue(),
                     stdout.bytes(),
@@ -148,9 +246,17 @@ final class LegalCliProcessSupport {
                     stderr.limitExceeded(),
                     MAX_CAPTURE_BYTES,
                     Duration.ofNanos(System.nanoTime() - started),
-                    false);
+                    timedOut);
+        } catch (Exception | Error failure) {
+            primaryFailure = failure;
+            throw failure;
         } finally {
-            readers.shutdownNow();
+            cleanupProcess(
+                    process,
+                    standardOutput,
+                    standardError,
+                    readers,
+                    primaryFailure);
         }
     }
 
@@ -180,6 +286,170 @@ final class LegalCliProcessSupport {
         }
     }
 
+    private static ExecutorService newReaderExecutor(int readerCount, long processId) {
+        AtomicInteger index = new AtomicInteger();
+        return Executors.newFixedThreadPool(readerCount, task -> {
+            Thread reader = new Thread(
+                    task,
+                    READER_THREAD_PREFIX + processId + "-" + index.incrementAndGet());
+            reader.setDaemon(true);
+            return reader;
+        });
+    }
+
+    private static CapturedOutput awaitCapture(
+            Future<CapturedOutput> capture,
+            long deadline,
+            String streamName) throws Exception {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0L) {
+            throw new AssertionError(
+                    "Se agotó el plazo común al capturar " + streamName);
+        }
+        return capture.get(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private static long requirePositiveTimeoutNanos(Duration timeout) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout debe ser positivo");
+        }
+        try {
+            return timeout.toNanos();
+        } catch (ArithmeticException failure) {
+            throw new IllegalArgumentException("timeout excede el rango soportado", failure);
+        }
+    }
+
+    private static long remainingNanos(long started, long timeoutNanos) {
+        long elapsed = System.nanoTime() - started;
+        if (elapsed < 0L || elapsed >= timeoutNanos) {
+            return 0L;
+        }
+        return timeoutNanos - elapsed;
+    }
+
+    private static void terminateAndAwait(Process process) throws InterruptedException {
+        process.destroy();
+        if (process.waitFor(TERMINATION_GRACE.toNanos(), TimeUnit.NANOSECONDS)) {
+            return;
+        }
+        process.destroyForcibly();
+        if (!process.waitFor(TERMINATION_GRACE.toNanos(), TimeUnit.NANOSECONDS)) {
+            throw new AssertionError("No se pudo terminar el proceso legal-cli vencido");
+        }
+    }
+
+    private static void terminateForCleanup(Process process) {
+        if (!process.isAlive()) {
+            return;
+        }
+        boolean interrupted = false;
+        process.destroy();
+        long gracefulDeadline = System.nanoTime() + TERMINATION_GRACE.toNanos();
+        while (process.isAlive() && System.nanoTime() < gracefulDeadline) {
+            try {
+                process.waitFor(50, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException exception) {
+                interrupted = true;
+            }
+        }
+        if (process.isAlive()) {
+            process.destroyForcibly();
+            long forcedDeadline = System.nanoTime() + TERMINATION_GRACE.toNanos();
+            while (process.isAlive() && System.nanoTime() < forcedDeadline) {
+                try {
+                    process.waitFor(50, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException exception) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (process.isAlive()) {
+            throw new AssertionError("El cleanup no pudo terminar el proceso legal-cli");
+        }
+    }
+
+    private static void cleanupProcess(
+            Process process,
+            Future<?> standardOutput,
+            Future<?> standardError,
+            ExecutorService readers,
+            Throwable primaryFailure) {
+        List<Throwable> cleanupFailures = new ArrayList<>();
+        runCleanup(cleanupFailures, () -> terminateForCleanup(process));
+        runCleanup(cleanupFailures, () -> process.getOutputStream().close());
+        runCleanup(cleanupFailures, () -> process.getInputStream().close());
+        runCleanup(cleanupFailures, () -> process.getErrorStream().close());
+        runCleanup(cleanupFailures, () -> cancelIfRunning(standardOutput));
+        runCleanup(cleanupFailures, () -> cancelIfRunning(standardError));
+        runCleanup(cleanupFailures, () -> shutdownReaders(readers));
+
+        if (cleanupFailures.isEmpty()) {
+            return;
+        }
+        if (primaryFailure != null) {
+            cleanupFailures.forEach(primaryFailure::addSuppressed);
+            return;
+        }
+        Throwable firstFailure = cleanupFailures.getFirst();
+        cleanupFailures.stream()
+                .skip(1L)
+                .forEach(firstFailure::addSuppressed);
+        rethrowCleanupFailure(firstFailure);
+    }
+
+    private static void runCleanup(
+            List<Throwable> failures,
+            CleanupAction action) {
+        try {
+            action.run();
+        } catch (Throwable failure) {
+            failures.add(failure);
+        }
+    }
+
+    private static void rethrowCleanupFailure(Throwable failure) {
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        throw new AssertionError("Falló el cleanup del proceso legal-cli", failure);
+    }
+
+    private static void cancelIfRunning(Future<?> future) {
+        if (future != null && !future.isDone()) {
+            future.cancel(true);
+        }
+    }
+
+    private static void shutdownReaders(ExecutorService readers) {
+        if (readers == null) {
+            return;
+        }
+        readers.shutdownNow();
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + READER_SHUTDOWN_TIMEOUT.toNanos();
+        while (!readers.isTerminated() && System.nanoTime() < deadline) {
+            try {
+                readers.awaitTermination(50, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException exception) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (!readers.isTerminated()) {
+            throw new AssertionError("Los lectores del proceso legal-cli no terminaron");
+        }
+    }
+
     private static String decodeUtf8(byte[] bytes, String streamName) {
         try {
             return StandardCharsets.UTF_8.newDecoder()
@@ -203,6 +473,16 @@ final class LegalCliProcessSupport {
     enum StdoutMode {
         CAPTURE,
         CLOSE_IMMEDIATELY
+    }
+
+    @FunctionalInterface
+    interface ProcessCheckpoint {
+        void await(Process process) throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface CleanupAction {
+        void run() throws Exception;
     }
 
     record Artifacts(

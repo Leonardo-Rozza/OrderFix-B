@@ -7,12 +7,26 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -75,6 +89,118 @@ class LegalCliProcessSupportTest {
     }
 
     @Test
+    void reportsTimeoutOnlyAfterFinalTerminationAndReaderCleanup() throws Exception {
+        Duration timeout = Duration.ofMillis(250);
+        Path marker = temporaryDirectory.resolve("timeout-ready");
+        Path shutdownMarker = temporaryDirectory.resolve("timeout-shutdown-hook");
+
+        ProcessResult result;
+        try (WatchService signals = marker.getFileSystem().newWatchService()) {
+            temporaryDirectory.register(signals, ENTRY_CREATE, ENTRY_MODIFY);
+            result = LegalCliProcessSupport.executeAfterCheckpoint(
+                    probeCommand(
+                            "block-force",
+                            marker.toString(),
+                            shutdownMarker.toString()),
+                    temporaryDirectory,
+                    Map.of(),
+                    StdoutMode.CAPTURE,
+                    timeout,
+                    process -> awaitMarker(marker, signals));
+        }
+
+        assertThat(result.timedOut()).isTrue();
+        assertThat(result.exitCode()).isNotZero();
+        assertThat(result.wallDuration())
+                .isGreaterThanOrEqualTo(timeout)
+                .isLessThan(Duration.ofSeconds(12));
+        assertThat(shutdownMarker).hasContent("entered");
+        assertThat(result.stdout()).isEqualTo("READY\n");
+        assertThat(result.stderr()).startsWith("PID=").endsWith("\n");
+        long childPid = Long.parseLong(result.stderr().strip().substring("PID=".length()));
+        assertThat(ProcessHandle.of(childPid)
+                .map(ProcessHandle::isAlive)
+                .orElse(false)).isFalse();
+        assertThat(activeReaderThreads()).isEmpty();
+    }
+
+    @Test
+    void interruptionStillTerminatesProcessAndReadersBeforePropagating() throws Exception {
+        Path marker = temporaryDirectory.resolve("interrupt-ready");
+        Path shutdownMarker = temporaryDirectory.resolve("interrupt-shutdown-hook");
+        CountDownLatch checkpointReached = new CountDownLatch(1);
+        AtomicReference<Thread> workerThread = new AtomicReference<>();
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+
+        try (WatchService signals = marker.getFileSystem().newWatchService()) {
+            temporaryDirectory.register(signals, ENTRY_CREATE, ENTRY_MODIFY);
+            Future<Throwable> execution = worker.submit(() -> {
+                workerThread.set(Thread.currentThread());
+                try {
+                    LegalCliProcessSupport.executeAfterCheckpoint(
+                            probeCommand(
+                                    "block-force",
+                                    marker.toString(),
+                                    shutdownMarker.toString()),
+                            temporaryDirectory,
+                            Map.of(),
+                            StdoutMode.CAPTURE,
+                            Duration.ofSeconds(30),
+                            process -> {
+                                awaitMarker(marker, signals);
+                                checkpointReached.countDown();
+                            });
+                    return null;
+                } catch (Throwable failure) {
+                    return failure;
+                }
+            });
+
+            assertThat(checkpointReached.await(5, TimeUnit.SECONDS)).isTrue();
+            workerThread.get().interrupt();
+            assertThat(execution.get(15, TimeUnit.SECONDS))
+                    .isInstanceOf(InterruptedException.class);
+        } finally {
+            worker.shutdownNow();
+            assertThat(worker.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+
+        long childPid = Long.parseLong(Files.readString(marker, StandardCharsets.UTF_8));
+        assertThat(ProcessHandle.of(childPid)
+                .map(ProcessHandle::isAlive)
+                .orElse(false)).isFalse();
+        assertThat(shutdownMarker).hasContent("entered");
+        assertThat(activeReaderThreads()).isEmpty();
+    }
+
+    @Test
+    void rejectsInvalidExecutionConfigurationBeforeStartingTheChild() {
+        Path marker = temporaryDirectory.resolve("must-not-start");
+        List<String> command = probeCommand("mark", marker.toString());
+
+        assertThatThrownBy(() -> LegalCliProcessSupport.execute(
+                command,
+                temporaryDirectory,
+                Map.of(),
+                null,
+                Duration.ofSeconds(1)))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("stdoutMode");
+        assertThat(marker).doesNotExist();
+
+        assertThatThrownBy(() -> LegalCliProcessSupport.execute(
+                command,
+                temporaryDirectory,
+                Map.of(),
+                StdoutMode.CAPTURE,
+                Duration.ofSeconds(Long.MAX_VALUE)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("timeout excede el rango soportado")
+                .hasCauseInstanceOf(ArithmeticException.class);
+        assertThat(marker).doesNotExist();
+    }
+
+    @Test
     void removesInheritedImportAndEditorialDatabaseControlChannels() {
         Map<String, String> environment = new HashMap<>();
         environment.put("JAVA_TOOL_OPTIONS", "-Dspring.datasource.url=jdbc:hostile");
@@ -108,14 +234,42 @@ class LegalCliProcessSupportTest {
                 StdoutMode.CAPTURE);
     }
 
-    private static List<String> probeCommand(String mode) {
+    private static List<String> probeCommand(String mode, String... arguments) {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
         command.add(ProcessProbe.class.getName());
         command.add(mode);
+        command.addAll(List.of(arguments));
         return List.copyOf(command);
+    }
+
+    private static void awaitMarker(Path marker, WatchService signals) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!Files.isRegularFile(marker)) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0L) {
+                throw new AssertionError("El proceso hijo no publicó su checkpoint");
+            }
+            WatchKey key = signals.poll(remaining, TimeUnit.NANOSECONDS);
+            if (key == null) {
+                throw new AssertionError("El proceso hijo no publicó su checkpoint");
+            }
+            key.pollEvents();
+            if (!key.reset()) {
+                throw new AssertionError("El watcher del checkpoint dejó de ser válido");
+            }
+        }
+    }
+
+    private static List<String> activeReaderThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(Thread::isAlive)
+                .map(Thread::getName)
+                .filter(name -> name.startsWith(LegalCliProcessSupport.READER_THREAD_PREFIX))
+                .sorted()
+                .toList();
     }
 
     public static final class ProcessProbe {
@@ -139,6 +293,45 @@ class LegalCliProcessSupportTest {
                     System.out.write(stdout);
                     System.err.write(stderr);
                 }
+                case "block-force" -> {
+                    long processId = ProcessHandle.current().pid();
+                    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                        try {
+                            Files.writeString(
+                                    Path.of(args[2]),
+                                    "entered",
+                                    StandardCharsets.UTF_8);
+                            new CountDownLatch(1).await();
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                        } catch (Exception exception) {
+                            throw new IllegalStateException(
+                                    "No se pudo publicar el shutdown hook",
+                                    exception);
+                        }
+                    }, "ordenfix-process-probe-shutdown-blocker"));
+                    System.out.write("READY\n".getBytes(StandardCharsets.UTF_8));
+                    System.err.write(("PID=" + processId + "\n")
+                            .getBytes(StandardCharsets.UTF_8));
+                    System.out.flush();
+                    System.err.flush();
+                    Path marker = Path.of(args[1]);
+                    Path pendingMarker = marker.resolveSibling(
+                            marker.getFileName() + ".pending");
+                    Files.writeString(
+                            pendingMarker,
+                            Long.toString(processId),
+                            StandardCharsets.UTF_8);
+                    Files.move(
+                            pendingMarker,
+                            marker,
+                            StandardCopyOption.ATOMIC_MOVE);
+                    new CountDownLatch(1).await();
+                }
+                case "mark" -> Files.writeString(
+                        Path.of(args[1]),
+                        "started",
+                        StandardCharsets.UTF_8);
                 default -> throw new IllegalArgumentException("Modo probe desconocido: " + args[0]);
             }
             System.out.flush();
