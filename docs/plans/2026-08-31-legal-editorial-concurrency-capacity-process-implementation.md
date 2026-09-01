@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: 10A, 10B, 10C y 10D cerrados; 10E y 10F pendientes
+Estado: 10A, 10B, 10C, 10D y 10E cerrados; 10F pendiente
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -677,7 +677,7 @@ postestado PostgreSQL independiente queda expresamente reservada al subcorte 10E
 
 ## Subcorte 10E — Matriz del JAR editorial
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31.
 
 ### Objetivo
 
@@ -752,8 +752,9 @@ abre una nueva API pública de tests.
 14. Para cada salida completa exigir bytes UTF-8, un objeto JSON seguido por un LF, schema v3,
     `status/outcome/persisted/readiness/exit` exactos, stderr allowlisteado y ausencia de paths,
     SQL, stack traces, passwords y canaries.
-15. Comparar SHA-256 de manifest, Markdown y plan antes/después. Acreditar ausencia de web, Flyway,
-    JPA, runners, schedulers y agente test-only en ambos JAR.
+15. Comparar SHA-256 de manifest, Markdown y plan antes/después. Acreditar que el proceso legal no
+    activa web, Flyway, JPA, runners ni schedulers, y que el agente test-only está ausente de ambos
+    JAR.
 16. Registrar nombre, hash, Start-Class y ausencia de `application-secret.properties` para ambos
     artefactos.
 
@@ -766,13 +767,130 @@ git diff --check
 git status --short
 ~~~
 
-Commit:
+Commits locales:
 
-    test(legal): acredita jar editorial
+- `ab2a917 test(legal): prepara fixture de procesos editoriales`;
+- `2f5985f test(legal): acredita ciclo promote empaquetado`;
+- `bc83eaa test(legal): construye planes de procesos editoriales`;
+- `0d40ae1 test(legal): acredita lifecycle editorial empaquetado`;
+- `0b7f7f5 test(legal): prepara seguridad editorial empaquetada`;
+- `9629a99 test(legal): acredita seguridad del jar editorial`;
+- `8e6062b test(legal): comparte agente de falla stdout`;
+- `2efc19f test(legal): acredita commit sin salida editorial`.
 
 ### Evidencia de cierre 10E
 
-Pendiente.
+#### Lifecycle empaquetado y postestado
+
+`LegalEditorialProcessIT` migra una base efímera dedicada PostgreSQL `16.14` hasta V27, crea los
+roles importador y editorial exactos y localiza los dos JAR producidos por Maven. Los releases,
+Markdown y planes viven bajo una ruta `@TempDir` con espacios; confirmations y SHA-256 se calculan
+con los validadores reales. El snapshot owner descubre dinámicamente las `25` tablas y `13`
+secuencias `legal_%` y conserva filas completas ordenadas, `last_value` e `is_called`.
+
+La matriz funcional real quedó congelada así:
+
+| Operación | Exit / status / outcome | Readiness | Delta o estado autoritativo |
+|---|---|---|---|
+| import source | `0 / PASS / IMPORTED` | n/a | publicación sellada, `11` documentos y `6` requisitos |
+| readiness inicial | `2 / BLOCKED` | `NOT_READY` | sin mutación |
+| plan-promote | `0 / PASS / APPLICABLE` | `READY` esperado | delta `22/0/12/0/21/0/0/0/8/0` |
+| apply-promote | `0 / PASS / APPLIED` | `READY` | estado `11/6/22/12/21/8/0` |
+| replay promote | `0 / PASS / ALREADY_APPLIED` | `READY` | mismo receipt y snapshot íntegro |
+| plan-promote target incompatible | `2 / BLOCKED / BLOCKED` | n/a | `INITIAL_PROJECTION_ALREADY_EXISTS`, sin mutación |
+| plan-replace `1→1` | `0 / PASS / APPLICABLE` | `READY` esperado | delta `1/2/6/18/18/3/3/8/8/1` |
+| apply-replace | `0 / PASS / APPLIED` | `READY` | estado `11/6/22/12/21/8/1` |
+| replay replace | `0 / PASS / ALREADY_APPLIED` | `READY` | mismo receipt y snapshot íntegro |
+| plan-retire mixto | `0 / PASS / APPLICABLE` | `NOT_READY` esperado | delta `1/0/1/2/0/0/0/4/0/0` |
+| apply-retire | `0 / PASS / APPLIED` | `NOT_READY` | estado `11/6/23/13/19/4/1` |
+| replay retire | `0 / PASS / ALREADY_APPLIED` | `NOT_READY` | mismo receipt y snapshot íntegro |
+
+El reemplazo reutiliza `10` documentos, reemplaza uno `1→1`, reutiliza `4` requisitos y reemplaza
+`2`. El retiro elimina `aviso-clientes-taller` y `customer-photo-attestation`. Cada apply se
+contrasta campo a campo con SQL owner independiente; cada plan exige el delta exacto y ausencia de
+mutación; cada replay conserva filas y secuencias completas. Los SHA-256 de ambos releases, sus
+Markdown y los dos planes permanecen iguales antes y después.
+
+#### Roles, configuración hostil y datos HTTP
+
+Sobre un REPLACE realmente aplicable se sembró, en una sola transacción owner, un agregado de
+aceptación/idempotencia que deja filas no vacías en las seis tablas HTTP protegidas y avanza sus
+tres identity sequences. Después se ejecutó el JAR con:
+
+| Credencial o drift | Resultado | Postestado |
+|---|---|---|
+| rol importador | `3 / ERROR / ROLE_PRIVILEGE_DRIFT` | snapshot íntegro idéntico |
+| owner de la base | `3 / ERROR / ROLE_PRIVILEGE_DRIFT` | snapshot íntegro idéntico |
+| editorial con `SELECT` extra sobre una secuencia | `3 / ERROR / ROLE_PRIVILEGE_DRIFT` | snapshot íntegro idéntico |
+| editorial cambiado temporalmente a `INHERIT` | `3 / ERROR / ROLE_PRIVILEGE_DRIFT` | snapshot íntegro idéntico |
+
+Los dos drifts temporales se restauran en `finally` y el verificador del rol mínimo vuelve a pasar.
+Las negativas directas/no-op y el aislamiento permanecen cubiertos por las regresiones incluidas
+en la puerta final.
+
+Cada una de `spring.datasource.url`, `username`, `password` y `driver-class-name` fue inyectada
+como `-D` en una JVM nueva. Las cuatro terminaron `3 / ERROR`, `persisted=false` y
+`EDITORIAL_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN`. Una conexión owner persistente leyó el contador
+acumulativo `pg_stat_database.sessions` antes y después: no se abrió ninguna sesión DB nueva. El
+snapshot owner y el árbol de release también quedaron idénticos.
+
+El launcher real `scripts/legal-manifest-editor.sh` ejecutó readiness y apply-promote con
+`JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` hostiles. Readiness produjo
+`BLOCKED + NOT_READY`; apply produjo `PASS + APPLIED + READY`. No apareció ningún mensaje pre-main,
+stderr quedó vacío, los argumentos con rutas espaciadas llegaron intactos y ninguno de los cuatro
+canarios se filtró.
+
+#### Pérdida total y parcial de stdout
+
+El agente Java test-only se empaqueta bajo `@TempDir` con `CREATE_NEW`; el helper valida JAR
+regular, ruta absoluta sin `=`, `prefixBytes >= 0`, `Premain-Class` y el inventario exacto de dos
+entradas. Tres estados frescos demostraron que el commit ocurre antes de entregar el reporte:
+
+| Frontera de salida | Exit / stdout / stderr | Evidencia DB previa al retry | Retry |
+|---|---|---|---|
+| agente `N=0` | `3 / 0 bytes / vacío` | `11/6/22/12/21/8/0` | `ALREADY_APPLIED`, snapshot idéntico |
+| agente `N=78` | `3 / 78 bytes exactos / vacío` | `11/6/22/12/21/8/0` | `ALREADY_APPLIED`, snapshot idéntico |
+| pipe `CLOSE_IMMEDIATELY` suplementario | `3 / no capturado / vacío` | `11/6/22/12/21/8/0` | `ALREADY_APPLIED`, snapshot idéntico |
+
+El prefijo de `78` bytes es exactamente
+`{"reportVersion":3,"command":"apply-promote","status":"PASS","persisted":true,`:
+no es JSON parseable, contiene una sola `{`, no tiene LF, `UNKNOWN` ni segundo envelope. Exit `3`
+no se interpretó como rollback; sólo SQL owner y el retry exacto acreditan el commit.
+
+#### Artefactos, puerta y auditoría
+
+La puerta limpia se ejecutó con Amazon Corretto `21.0.10+7-LTS`, Maven `3.9.11`, Flyway
+`11.14.1`, Testcontainers `2.0.5` y PostgreSQL `16.14` (`postgres:16-alpine`). Flyway validó y
+aplicó `27` migraciones hasta V27.
+
+| Artefacto de la puerta limpia | SHA-256 | Start-Class |
+|---|---|---|
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar` | `ac0085fedc420c80f6db84b3880829b07c4d7b93d763f339a077143a96175519` | `com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication` |
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar` | `23fa44f96c83a9e5c3d816a3a38842307513729f09dc78bbef89a7f1fe91cdca` | `com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestCli` |
+
+Ningún manifest declara `Premain-Class`, `Agent-Class` o `Launcher-Agent-Class`; ninguno de los
+JAR contiene `LegalCliStdoutFailureAgent` ni `application-secret.properties`. Ambos fat JAR
+conservan dependencias web/Flyway/JPA por diseño del empaquetado compartido: la garantía correcta
+es su **no activación en runtime**, acreditada por `LegalManifestCliIsolationIT` `3/3`, junto con
+la ausencia de runners y schedulers activos.
+
+Comando fresco:
+
+~~~bash
+./mvnw clean -Dtest=LegalCliProcessSupportTest,LegalManifestEditorLauncherTest -Dit.test=LegalEditorialProcessIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT,LegalManifestImportProcessIT,LegalEditorialPrivilegeVerifierIT,LegalImportPrivilegeVerifierIT verify
+~~~
+
+Resultado: Surefire `11/11`; Failsafe `48/48` —ProcessIT `7`, isolation `3`, CLI process `12`,
+import process `9`, privilegios editoriales `8` y privilegios importador `9`—; cero fallos,
+errores u omitidos; `BUILD SUCCESS`; tiempo Maven observado `2:30`. También pasaron
+`sh -n scripts/legal-manifest-editor.sh` y `git diff --check`.
+
+Hubo dos rojos de fixture durante el desarrollo: el plan confinado rechazó la representación
+lógica `/var` del temporal macOS y se corrigió usando su `toRealPath()`; luego un helper AssertJ
+rechazó un vararg vacío de canarios y se volvió condicional. Ninguno exigió tocar producción. Las
+auditorías independientes de lifecycle, seguridad/launcher y stdout cerraron sin hallazgos
+P0–P3. No hubo flaky, skipped, retry automático, push, deploy, cambio frontend, V28 ni promoción
+de contenido legal real.
 
 ## Subcorte 10F — Puerta final y documentación
 
@@ -807,7 +925,7 @@ No modificar frontend, runbooks, `FRONTEND_INTEGRATION.md`, `README.md`, código
 6. Memoria reproducible o razón explícita para no fijarla.
 7. Matriz JAR con estado, outcome, readiness, exit, JSON, stderr, canaries, rol y postestado DB.
 8. Nombre/hash/Start-Class/contenido de ambos JAR y ausencia de secretos/agente de test.
-9. Launcher real, tres canales JVM limpiados, ausencia de web/Flyway/JPA/runners/schedulers y
+9. Launcher real, tres canales JVM limpiados, no activación de web/Flyway/JPA/runners/schedulers y
    tablas de snapshots/aceptación/idempotencia HTTP intactas.
 10. Confirmación de que no hubo push, deploy, cambio frontend, V28 ni promoción de contenido real.
 
@@ -874,7 +992,7 @@ ausente sí bloquea el cierre.
 | 10B | `test(legal): acredita fallos editoriales` |
 | 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989` |
 | 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97` |
-| 10E | `test(legal): acredita jar editorial` |
+| 10E | `ab2a917`, `2f5985f`, `bc83eaa`, `0d40ae1`, `0b7f7f5`, `9629a99`, `8e6062b`, `2efc19f` |
 | 10F | `docs(legal): cierra corte de procesos reales` |
 
 ## Criterio de cierre

@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado por el usuario el 2026-08-31; 10A–10D cerrados y 10E–10F pendientes
+Estado: aprobado por el usuario el 2026-08-31; 10A–10E cerrados y 10F pendiente
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -288,10 +288,19 @@ registrada en el plan de implementación.
 
 ### 10E — Matriz del JAR editorial
 
+Estado: cerrado el 2026-08-31.
+
 Crear `LegalEditorialProcessIT` y ejecutar todas las completion states aprobadas, incluido el
 fallo de stdout real. El commit esperado es:
 
     test(legal): acredita jar editorial
+
+La implementación se dividió en ocho commits test-only entre `ab2a917` y `2efc19f`: fixture de
+procesos, PROMOTE, planes, lifecycle completo, fixture de seguridad, roles/launcher, agente stdout
+compartido y commit con salida perdida. La puerta limpia acreditó `11` unitarias y `48`
+integraciones, sin fallos, errores ni omitidos. No fue necesario modificar Java productivo,
+migraciones, grants, `pom.xml`, launcher, frontend ni contratos públicos. La evidencia detallada,
+incluidos estados PostgreSQL, artefactos y SHA-256, queda en el plan de implementación.
 
 ### 10F — Puerta y documentación
 
