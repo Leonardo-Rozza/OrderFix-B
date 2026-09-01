@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: aprobado por el usuario el 2026-08-31; 10A–10E cerrados y 10F pendiente
+Estado: completado el 2026-08-31; 10A–10F cerrados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -11,16 +11,19 @@ Plan maestro:
 - `docs/plans/2026-08-27-legal-manifest-promotion-implementation.md`.
 
 Este documento refina la única fila y el único commit que el plan maestro reservaba para Corte 10.
-La aprobación del usuario amplía exclusivamente la documentación para registrar los subcortes
-10A–10F; no autoriza Java productivo, migraciones, `pom.xml`, API ni frontend. Corte 10 permanece
-backend-only y la puerta frontend continúa diferida a Corte 11.
+La autorización inicial limitaba el corte a pruebas y documentación. La carrera reproducible de
+10A activó la regla de parada: el microdiseño post-lock se aprobó por separado y produjo la única
+excepción productiva del corte, `9f00cb6 fix(legal): separa el reloj editorial post-lock`. 10D y
+10E siguieron siendo test-only; no se modificaron migraciones, `pom.xml`, API ni frontend. Corte
+10 permanece backend-only y la puerta frontend continúa diferida a Corte 11.
 
 ## Contexto
 
 Los Cortes 4 a 9 acreditaron el flujo editorial interno de PROMOTE, REPLACE y RETIRE, incluidos
 rol restringido, split/merge, retiro fail-closed y reconciliación conservadora de commits
 ambiguos. La cobertura actual demuestra los contratos principales con pruebas unitarias e
-integraciones PostgreSQL, pero todavía no cierra tres riesgos de operación real:
+integraciones PostgreSQL, pero al iniciar Corte 10 todavía no cerraba tres riesgos de operación
+real:
 
 1. carreras entre operadores que intentan mutar el mismo estado;
 2. capacidad máxima y cantidad acotada de round trips JDBC;
@@ -65,8 +68,8 @@ puerta focal verde y se registra en un commit local atómico. No se hace push ni
 
 ## Fuera de alcance inicial
 
-- Java productivo, salvo que una prueba de capacidad revele una brecha concreta y el usuario
-  apruebe un diseño separado;
+- Java productivo, salvo que una brecha reproducible de un subcorte active la regla de parada y el
+  usuario apruebe un diseño separado; 10A.1 fue la única excepción aplicada;
 - nuevas migraciones, índices, grants, roles o cambios en V27/V28;
 - cambios en `pom.xml`, Start-Class o contenido funcional de los JAR;
 - endpoints, controllers, JPA, scheduler, API pública o frontend;
@@ -77,9 +80,9 @@ puerta focal verde y se registra en un commit local atómico. No se hace push ni
 El launcher POSIX sólo puede modificarse si una prueba focal roja demuestra una brecha real. No se
 agregan flags, hooks ni switches productivos destinados exclusivamente a tests.
 
-Si 10C demuestra N+1, batching insuficiente o una lectura no acotada, el subcorte se detiene con
-evidencia reproducible. La corrección productiva se diseña y aprueba como commit separado antes de
-reanudar la acreditación de capacidad.
+Si un subcorte demuestra una brecha productiva —N+1, batching insuficiente, lectura no acotada o
+una carrera causal—, se detiene con evidencia reproducible. La corrección se diseña y aprueba como
+microcorte separado antes de reanudar la acreditación. Esa regla se ejerció una sola vez en 10A.1.
 
 ## Invariantes comunes
 
@@ -252,6 +255,8 @@ La matriz mínima del JAR real incluye:
 
 ### 10A — Concurrencia editorial
 
+Estado: cerrado el 2026-08-31, incluido el microcorte productivo 10A.1 aprobado por separado.
+
 Crear `LegalEditorialConcurrencyIT` y reutilizar sólo los fixtures necesarios. El commit esperado
 es:
 
@@ -259,12 +264,16 @@ es:
 
 ### 10B — Fallos y recuperación
 
+Estado: cerrado el 2026-08-31 sin cambios productivos.
+
 Crear `LegalEditorialFailureIT` y consolidar la matriz dispersa sin eliminar las pruebas focales
 existentes. El commit esperado es:
 
     test(legal): acredita fallos editoriales
 
 ### 10C — Capacidad
+
+Estado: cerrado el 2026-08-31 sin brecha productiva.
 
 Crear `LegalEditorialCapacityIT`, instrumentar round trips desde tests y congelar métricas reales.
 El commit esperado es:
@@ -304,9 +313,11 @@ incluidos estados PostgreSQL, artefactos y SHA-256, queda en el plan de implemen
 
 ### 10F — Puerta y documentación
 
-Ejecutar las puertas focales, el verify completo, registrar métricas y cerrar el Corte 10 en el
-plan maestro, reemplazando su resumen de un único commit por la evidencia real de 10A–10F. El
-commit esperado es:
+Estado: cerrado el 2026-08-31.
+
+Se ejecutaron las puertas focales y el verify completo, se registraron las métricas y se cerró el
+Corte 10 en el plan maestro, reemplazando su resumen de un único commit por la evidencia real de
+10A–10F. El commit de cierre es:
 
     docs(legal): cierra corte de procesos reales
 
@@ -343,10 +354,10 @@ conteos de pruebas, duraciones, caps JDBC y cualquier incidente reproducible.
 
 ## Criterio de cierre
 
-Corte 10 queda cerrado cuando las carreras aprobadas se serializan sin doble confirmación, los
+Corte 10 quedó cerrado porque las carreras aprobadas se serializan sin doble confirmación, los
 fallos reales no fabrican éxito, el fixture máximo cumple presupuestos y caps congelados, y el JAR
 editorial completo opera con PostgreSQL 16 y rol restringido a través del launcher real. La salida
-de proceso debe conservar JSON único y semántica fail-closed incluso ante pérdida de stdout.
+de proceso conserva JSON único y semántica fail-closed incluso ante pérdida de stdout.
 
 El cierre de Corte 10 no habilita por sí solo producción pública. El runbook, la coordinación
 cross-repo y el cierre de la Fase 2.3C permanecen en Corte 11; V28, API pública, aceptación,

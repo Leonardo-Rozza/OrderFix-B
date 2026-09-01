@@ -2,9 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 9 completados;
-Corte 9 cerrado el 2026-08-31 mediante 9A, 9B, 9C, 9D1, 9D2, 9E y 9F; Cortes 10 y 11
-pendientes
+Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 10 completados;
+Corte 10 cerrado el 2026-08-31 mediante 10A, 10B, 10C, 10D, 10E y 10F; Corte 11 pendiente
 
 Diseño aprobado:
 
@@ -44,15 +43,17 @@ push.
 9. Readiness y plan son readOnly=true, usan advisory lock y SELECT simples. Nunca ejecutan
    SELECT FOR UPDATE/SHARE ni legal_validar_publicacion_sellada(uuid).
 10. Apply abre exactamente un gate REQUIRES_NEW/READ_COMMITTED. PlannerCore y ReadinessCore reciben
-    su misma sesión JDBC y el transaction_timestamp caller-owned; no abren gates ni leen otro
-    instante.
+    la misma sesión JDBC y la frontera dual caller-owned adquirida después del advisory lock; no
+    abren gates ni leen relojes.
 11. Ninguna lectura de estado mutable ocurre antes de adquirir el advisory lock, salvo preflights de
     schema y privilegios.
 12. Las mutaciones bloquean publicaciones, líneas y versiones en orden UUID determinista. Slots y
     punteros se eliminan en orden de su PK bajo el advisory lock, sin pedir row locks que amplíen
     grants.
-13. Se lee una sola vez transaction_timestamp por apply y se usa para precondiciones, transiciones
-    y receipt.
+13. Después del advisory lock se leen una sola vez `transaction_timestamp()` como `transactionAt`
+    y `statement_timestamp()` como `observedAt`. El primero gobierna mutación fresca, elegibilidad
+    SOURCE, cutoff y receipt; el segundo gobierna readiness, snapshots, replay, reconciliación y
+    postestado.
 14. SET CONSTRAINTS ALL IMMEDIATE se ejecuta después del delta completo. Después sólo se permite
     ReadinessCore en la misma sesión; no más DML.
 15. Un replay o BLOCKED previo a DML no avanza secuencias. Un rollback tardío puede dejar huecos en
@@ -67,6 +68,12 @@ push.
     constraints, fingerprint, rol ni postcondiciones.
 20. Al cierre: suite backend completa, regresión frontend, paridad del schema y evidencia de ramas,
     sin push ni deploy.
+
+Enmienda vigente desde 10A.1: toda descripción histórica de los Cortes 2–6 que hable de un único
+`transaction_timestamp()` queda sustituida por la frontera dual anterior para el flujo editorial.
+Import y dry-run conservan su reloj transaccional; ningún core abre conexiones ni consulta relojes.
+El cambio productivo fue diseñado en `246ef54`, precisado en `69c3763`, planificado en `d882c63` e
+implementado en `9f00cb6`, con aprobación separada antes de reanudar la acreditación.
 
 ## Invariantes globales
 
@@ -1234,71 +1241,96 @@ registra en estos commits locales:
 
 ## Corte 10 — Concurrencia, capacidad y procesos reales
 
-Estado: pendiente.
+Estado: completado el 2026-08-31 mediante 10A, 10B, 10C, 10D, 10E y 10F.
+
+Diseño y ejecución detallada:
+
+- `docs/plans/2026-08-31-legal-editorial-concurrency-capacity-process-design.md`;
+- `docs/plans/2026-08-31-legal-editorial-concurrency-capacity-process-implementation.md`;
+- diseño `2dcad53` y plan `73f5a83`.
 
 ### Objetivo
 
-Acreditar el ciclo completo sobre PostgreSQL 16 y el jar empaquetado con el rol restringido.
+Acreditar el ciclo completo sobre PostgreSQL 16 y los JAR empaquetados con roles restringidos,
+incluidos concurrencia, fallos reales, capacidad acotada, launcher y pérdida de stdout.
 
-### Archivos
+### Implementación cerrada
 
-Crear:
+El corte se dividió en seis fronteras revisables:
 
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialConcurrencyIT.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialFailureIT.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalEditorialCapacityIT.java;
-- src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/cli/LegalEditorialProcessIT.java.
+1. 10A acreditó las carreras y, tras detectar una inversión causal reproducible, se detuvo para
+   diseñar/aprobar la frontera dual post-lock. `9f00cb6` fue la única corrección productiva de
+   Corte 10; ninguna migración, grant, API ni timeout cambió.
+2. 10B acreditó timeout `55P03`, deadlock `40P01`, sesión terminada, ACK perdido reconciliable y
+   commit incierto conservador, siempre contra verdad SQL owner.
+3. 10C congeló fixtures, inventario SQL, binds, sentinels y caps JDBC sin encontrar una brecha
+   productiva.
+4. 10D creó soporte test-only acotado de procesos, UTF-8 estricto, watchdog, entorno mínimo,
+   launcher y fallo stdout determinista.
+5. 10E ejecutó el ciclo de vida, roles, configuración hostil y pérdida total/parcial de stdout contra los
+   JAR reales.
+6. 10F auditó 10A–10E, repitió tres puertas `clean verify`, capturó artefactos y cerró la
+   documentación.
 
-Modificar/reutilizar:
+### Evidencia de cierre
 
-- LegalCliProcessSupport;
-- LegalManifestCliIsolationIT;
-- LegalManifestCliProcessIT;
-- LegalManifestPersistenceITSupport;
-- LegalRestrictedEditorialRoleFixture;
-- scripts/legal-manifest-editor.sh;
-- este plan, sólo para registrar evidencia y métricas reales.
+Ambiente final: Amazon Corretto `21.0.10`, Maven `3.9.11`, Flyway `11.14.1`, Testcontainers `2.0.5`
+y PostgreSQL `16.14`; Flyway validó/aplicó `27` migraciones hasta V27.
 
-### Escenarios
+Puertas limpias finales:
 
-- dos PROMOTE idénticos: APPLIED + ALREADY_APPLIED;
-- targets incompatibles: como máximo uno confirma;
-- reemplazos con predecesores superpuestos: como máximo uno confirma;
-- import, dry-run, readiness, plan y apply usan el mismo advisory lock;
-- timeout, deadlock y session kill sin falso éxito;
-- pérdida del acuse: reconciliación o UNKNOWN;
-- retry exacto convergente;
-- 128 documentos, 256 requisitos y 16 scopes;
-- reuse, adición, uno a uno, split y merge;
-- latencia artificial de 5 ms por ejecución JDBC lógica;
-- cada operación debajo de 70 s, cada statement debajo de 30 s y presupuesto total 75 s;
-- fijar antes del commit los caps observados de llamadas y cada lectura multirrow a expected+1;
-- jar real con READY/NOT_READY, APPLICABLE/BLOCKED, APPLIED/ALREADY_APPLIED y
-  APPLIED+NOT_READY;
-- JSON único, stderr sanitizado, canaries, system properties hostiles;
-- stdout ausente o truncado en el JAR editorial real conserva exit 3 sin fabricar un segundo
-  envelope;
-- ausencia de web, Flyway, JPA y schedulers;
-- rol editorial restringido e importador todavía incapaz de promover;
-- Start-Class y contenido de ambos jars;
-- launcher POSIX real y limpieza de opciones JVM.
+- concurrencia/fallos/capacidad: `4.283` Surefire + `10` Failsafe, cero fallos/errores/omitidos,
+  `1:57`;
+- procesos/aislamiento/JAR: `4.283` + `22`, cero fallos/errores/omitidos, `2:24`;
+- regresión global: `4.283` + `250`, cero fallos/errores/omitidos, `8:28`;
+- `sh -n scripts/legal-manifest-editor.sh` verde.
 
-### Puerta
+El fixture importable máximo es `128 documentos / 256 requisitos / 16 scopes`; no se presenta como
+READY. El fixture editorial
+realizable es `87 documentos / 256 requisitos / 16 scopes / 88 slots`, máximo `11` referencias por
+requisito READY, `2.642` referencias por publicación y `5.284` proyecciones activas derivadas. Con
+delay de `5 ms`, readiness/plan/apply conservaron `52/96/184` viajes JDBC,
+`11.636/36.042/68.648` filas y `2/4/6` ejecuciones máximas por SQL. Los tres permanecieron debajo de
+`70 s`, cada statement debajo de `30 s` y el presupuesto transaccional se mantuvo en `75 s`. La memoria no se congela
+porque heap, límite de contenedor, GC y carga host no estaban controlados.
+
+La matriz JAR revalidó READY/NOT_READY, APPLICABLE/BLOCKED, APPLIED/ALREADY_APPLIED y
+APPLIED+NOT_READY; importador, owner, privilegio extra e `INHERIT` fallaron con
+`ROLE_PRIVILEGE_DRIFT`. Las cuatro properties datasource hostiles fallaron antes de abrir una
+sesión nueva contabilizada en la base objetivo. El launcher limpió los tres canales JVM y conservó
+argumentos literales. Los contextos CLI acreditados no activaron web, Flyway, JPA, runners ni
+schedulers; esas dependencias sí permanecen físicamente en ambos fat JAR.
+
+Stdout `N=0`, `N=78` y pipe cerrado conservaron exit `3`, stderr vacío, commit DB autoritativo y
+retry `ALREADY_APPLIED`, sin segundo envelope. Los snapshots globales cubrieron `25` tablas y `13`
+secuencias `legal_%`; el inventario editorial restringido siguió en `19 tablas / 10 secuencias`.
+
+Artefactos del `clean verify` final:
+
+- aplicación: SHA-256 `e5d3bafa48d80d346ce5afa05177f78eaff79780abb351c1d587699f21f68d5a`,
+  Start-Class `com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication`;
+- legal CLI: SHA-256 `9b9eab3aec0a555c68e1081464b7fd20a3621ffc9a5672e8ca5d107fc23c2fa1`,
+  Start-Class `com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestCli`.
+
+Ninguno contiene atributos de agente, `LegalCliStdoutFailureAgent` ni
+`application-secret.properties`. Los hashes identifican este build: Maven no fija
+`outputTimestamp`, por lo que no sustituyen la evidencia histórica 10E.
+
+### Puerta reproducible
 
 ~~~bash
-./mvnw -Dit.test=LegalEditorialConcurrencyIT,LegalEditorialFailureIT,LegalEditorialCapacityIT verify
-./mvnw -Dit.test=LegalEditorialProcessIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
-./mvnw verify
+./mvnw clean -Dit.test=LegalEditorialConcurrencyIT,LegalEditorialFailureIT,LegalEditorialCapacityIT verify
+./mvnw clean -Dit.test=LegalEditorialProcessIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify
+./mvnw clean verify
+sh -n scripts/legal-manifest-editor.sh
 git diff --check
 git status --short
 ~~~
 
-Si la capacidad falla, optimizar batching/lecturas antes de cambiar timeouts. Registrar PostgreSQL,
-JDK, conteos, duración, JDBC calls, mayor statement, memoria reproducible e incidentes encontrados.
-
-Commit:
-
-    test(legal): acredita concurrencia y procesos editoriales
+Las auditorías independientes cerraron sin hallazgos técnicos P0–P2. Las tres puertas no
+registraron fallos, errores, pruebas omitidas ni reintentos automáticos. No hubo cambios frontend,
+V28 ni promoción de contenido real, y no hubo deploy ni push. Corte 10 no cierra Fase 2.3C ni
+habilita producción pública; Corte 11 conserva runbook y coordinación cross-repo.
 
 ## Corte 11 — Runbook, cierre y coordinación cross-repo
 
@@ -1408,7 +1440,7 @@ Commit backend:
 
     docs(legal): cierra fase 2.3C
 
-## Matriz de commits prevista
+## Matriz de commits ejecutados y previstos
 
 | Corte | Commit |
 |---:|---|
@@ -1443,7 +1475,12 @@ Commit backend:
 | 9D2 | test(legal): preserva incertidumbre editorial |
 | 9E | test(legal): conserva contratos al reconciliar commits |
 | 9F | docs(legal): cierra reconciliacion editorial |
-| 10 | test(legal): acredita concurrencia y procesos editoriales |
+| 10A | `246ef54`, `69c3763`, `d882c63`, `9f00cb6`, `77c80c5`, `af5b847` |
+| 10B | `794c9b2`, `b846965` |
+| 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989`, `4e511e5` |
+| 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97`, `baa188f` |
+| 10E | `ab2a917`, `2f5985f`, `bc83eaa`, `0d40ae1`, `0b7f7f5`, `9629a99`, `8e6062b`, `2efc19f`, `d3a08a8` |
+| 10F | este commit, parent `d3a08a8`, asunto `docs(legal): cierra corte de procesos reales` |
 | 11 frontend | docs(plan): registra cierre de fase 2.3C |
 | 11 backend | docs(legal): cierra fase 2.3C |
 
@@ -1475,5 +1512,5 @@ Commit backend:
 3. Aceptación y registro atómicos.
 4. Seguridad, CORS, 409, 428 y enforcement.
 5. Contenido profesional aprobado y deploy en staging.
-6. BACKEND-HANDOFF 1.
+6. Habilitar y acreditar BACKEND-HANDOFF 1.
 7. Tarea 3 frontend.

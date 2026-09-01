@@ -2,7 +2,7 @@
 
 Fecha: 2026-08-31
 
-Estado: 10A, 10B, 10C, 10D y 10E cerrados; 10F pendiente
+Estado: completado el 2026-08-31; 10A–10F cerrados
 
 Rama backend: `codex/lanzamiento-publico-backend`
 
@@ -16,8 +16,10 @@ Plan maestro:
 - `docs/plans/2026-08-27-legal-manifest-promotion-implementation.md`.
 
 Este plan detalla y reemplaza para la ejecución el bosquejo de un único commit que el plan maestro
-reservaba al Corte 10. La aprobación documental no amplía por sí sola Java productivo,
-migraciones, `pom.xml`, API, frontend, runbooks ni deploy.
+reservaba al Corte 10. La aprobación documental inicial no ampliaba por sí sola Java productivo,
+migraciones, `pom.xml`, API, frontend, runbooks ni deploy. La carrera reproducible de 10A detuvo el
+subcorte y recibió microdiseño y aprobación separados antes de la única corrección productiva de
+Corte 10, `9f00cb6`.
 
 ## Objetivo
 
@@ -57,8 +59,8 @@ atómico.
 15. Si una prueba exige cambiar `src/main`, migraciones, V27/V28, grants, roles, `pom.xml`, schemas,
     API o timeouts, detener el subcorte, conservar la evidencia roja y solicitar diseño/aprobación
     separados.
-16. Frontend, runbooks, `FRONTEND_INTEGRATION.md`, staging, deploy, cierre cross-repo y
-    `BACKEND-HANDOFF 1` permanecen en Corte 11 o planes posteriores.
+16. Frontend, runbooks, `FRONTEND_INTEGRATION.md`, staging, deploy y cierre cross-repo permanecen
+    en Corte 11 o planes posteriores. `BACKEND-HANDOFF 1` continúa cerrado.
 
 ## Subcorte 10A — Concurrencia editorial
 
@@ -894,7 +896,7 @@ de contenido legal real.
 
 ## Subcorte 10F — Puerta final y documentación
 
-Estado: pendiente.
+Estado: cerrado el 2026-08-31.
 
 ### Objetivo
 
@@ -935,10 +937,11 @@ resúmenes y métricas antes de ejecutar el siguiente comando.
 ### Actualización del plan maestro
 
 1. Marcar Cortes 1–10 completados y Corte 11 pendiente.
-2. Enlazar diseño, commit `2dcad53`, este plan y los hashes reales 10A–10F.
+2. Enlazar diseño, commit `2dcad53`, este plan, los hashes reales 10A–10E y el parent/asunto de
+   10F.
 3. Reemplazar la fila única del Corte 10 por filas 10A–10F.
 4. Sustituir la puerta antigua sin `clean` por la puerta aprobada y registrar evidencia real.
-5. Mantener Fase 2.3C, integración frontend y `BACKEND-HANDOFF 1` abiertos.
+5. Mantener Fase 2.3C e integración frontend pendientes; `BACKEND-HANDOFF 1` continúa cerrado.
 
 ### Puerta final
 
@@ -960,7 +963,176 @@ Commit:
 
 ### Evidencia de cierre 10F
 
-Pendiente.
+#### Alcance, rama y trazabilidad
+
+El cierre se ejecutó en `codex/lanzamiento-publico-backend`, con parent `d3a08a8`, y modificó
+exclusivamente los tres documentos autorizados. Tres auditorías independientes revisaron la
+historia/evidencia de 10A–10B, capacidad 10C y procesos 10D–10E; no quedaron hallazgos técnicos
+P0–P2 ni contradicciones bloqueantes. Se corrigieron dos imprecisiones documentales: la frontera
+dual aprobada en 10A.1 sustituye el viejo reloj editorial único, y `BACKEND-HANDOFF 1` continúa
+cerrado.
+
+Corte 10 empezó con alcance test/docs-only. La carrera determinista de 10A produjo
+`APPLIED + ERROR` porque una transacción antigua conservaba un `transaction_timestamp()` anterior
+al commit que observaba. La regla de parada se respetó: diseño `246ef54`, precisión causal
+`69c3763`, plan `d882c63`, fix productivo único `9f00cb6`, acreditación `77c80c5` y cierre
+`af5b847`. 10B–10E no requirieron cambios productivos. La matriz completa de hashes queda al final
+de este plan.
+
+Incidentes cerrados: 10B corrigió una assertion de conteo más estricta que el contrato y endureció
+writer/contador/cleanup tras tres auditorías; 10C sólo tuvo rojos TDD esperados de inventario,
+sentinels y binds, sin incidente productivo; 10D corrigió cobertura del glob, dos P3 del agente y la
+preservación del timeout explícito de `75 s`; 10E corrigió la ruta lógica `/var` del temporal macOS
+y un vararg AssertJ vacío. Todos quedaron acreditados por sus puertas y reauditorías; 10F no abrió
+un incidente nuevo.
+
+#### Ambiente y tres puertas limpias
+
+- Amazon Corretto `21.0.10+7-LTS`, Maven `3.9.11`, Flyway `11.14.1`, Testcontainers `2.0.5` y
+  PostgreSQL `16.14` mediante `postgres:16-alpine`.
+- Flyway validó y aplicó `27` migraciones hasta V27; no se creó V28.
+- Locale `es_AR`, UTF-8, macOS `26.6.2` ARM64 y Docker Desktop `28.3.3`.
+
+| Puerta exacta | Surefire | Failsafe | Tiempo Maven | Resultado |
+|---|---:|---:|---:|---|
+| `./mvnw clean -Dit.test=LegalEditorialConcurrencyIT,LegalEditorialFailureIT,LegalEditorialCapacityIT verify` | `4.283` | `10` | `1:57` | verde |
+| `./mvnw clean -Dit.test=LegalEditorialProcessIT,LegalManifestCliIsolationIT,LegalManifestCliProcessIT verify` | `4.283` | `22` | `2:24` | verde |
+| `./mvnw clean verify` | `4.283` | `250` | `8:28` | verde |
+
+Las tres puertas terminaron con cero fallos, errores u omitidos y sin retry automático. En la
+primera, concurrencia fue `4/4` en `11,871 s`, fallos `5/5` en `14,926 s` y capacidad `1/1` en
+`28,267 s`. En la segunda, lifecycle empaquetado fue `7/7` en `72,67 s`, aislamiento `3/3` en
+`1,940 s` y procesos CLI `12/12` en `7,685 s`. Cada resumen se capturó antes del siguiente
+`clean`; el último lifecycle global produjo la evidencia de artefactos que figura más abajo.
+
+#### Concurrencia, fallos y verdad PostgreSQL
+
+La puerta fresca volvió a demostrar:
+
+- PROMOTE idénticos: exactamente `APPLIED + ALREADY_APPLIED`, un único writer, receipt compartido
+  y replay posterior sin cambio de filas ni secuencias;
+- targets incompatibles y REPLACE con predecesor compartido: como máximo una confirmación y
+  postestado owner coherente;
+- import, dry-run, readiness, plan y apply cooperan sobre el mismo advisory lock;
+- timeout real `55P03`: `ERROR / CONCURRENT_OPERATION`, cero DML y retry convergente;
+- deadlock real `40P01`: rollback exacto, `CONCURRENT_OPERATION` y retry convergente;
+- sesión terminada antes del commit: `ERROR / EDITORIAL_OBSERVATION_FAILED`, fuente exacta y una
+  única aplicación al reintentar;
+- ACK perdido reconciliable: `ALREADY_APPLIED`, receipt exacto y un único writer;
+- ACK perdido sin reconciliación disponible: `UNKNOWN / COMMIT_OUTCOME_UNKNOWN`, nunca falso
+  `APPLIED`; SQL owner y replay exacto determinan luego el estado.
+
+Las assertions contrastan resultados con publicaciones, transiciones, secuencias, DML observado y
+consultas owner independientes; stdout, excepción o metadata tentativa nunca son fuente de verdad.
+
+#### Capacidad y límites congelados
+
+El fixture importable independiente conserva `128 documentos / 256 requisitos / 16 scopes`, con
+`16` referencias por requisito y sin presentarlo como READY. El fixture editorial realizable usa
+por publicación `87 documentos / 256 requisitos / 16 scopes / 88 slots`: once tipos, un locale y
+ocho contextos; split/merge obligan un documento multicontexto. Tiene máximo `11` referencias por
+requisito READY, `2.642` referencias requisito-documento por publicación y una cardinalidad
+derivada/observada de `5.284` proyecciones activas. El delta exacto fue
+`7/8/18/83/83/5/5/16/16/3`; plan `PASS/APPLICABLE`, apply `PASS/APPLIED` y readiness final `READY`.
+
+La última puerta global, con delay test-only de `5 ms` por ejecución JDBC lógica, registró:
+
+| Operación | Duración | RT y categorías A/D/R/T/S/O | Filas | Máx. por SQL | Mayor statement | Advisory |
+|---|---:|---|---:|---:|---:|---:|
+| readiness | `0,986486250 s` | `52 = 1/0/0/3/48/0` | `11.636` | `2` | `62,443875 ms` | `9,763292 ms` |
+| plan | `1,929335625 s` | `96 = 1/0/0/3/92/0` | `36.042` | `4` | `56,667791 ms` | `8,444541 ms` |
+| apply | `4,513654500 s` | `184 = 1/17/5/4/157/0` | `68.648` | `6` | `921,769458 ms` | `8,136833 ms` |
+
+`A/D/R/T/S/O` significa advisory/DML/row-lock/control transaccional/SELECT/other. Cada operación
+tuvo un commit, cero rollbacks y cero fallos JDBC. Los caps congelados son `52/96/184` RT,
+`11.636/36.042/68.648` filas y `2/4/6` repeticiones máximas; las duraciones observadas permanecen
+debajo de `70 s`, cada statement debajo de `30 s` y el presupuesto transaccional sigue en `75 s`.
+
+Los sentinels primarios mantuvieron fail-closed y cero DML:
+
+| Sentinel | Duración | RT | Filas | Máx. por SQL | Mayor statement | Advisory |
+|---|---:|---:|---:|---:|---:|---:|
+| documentos | `0,791931167 s` | `47` | `7.712` | `1` | `56,310875 ms` | `9,140541 ms` |
+| requisitos | `0,916611916 s` | `50` | `11.123` | `1` | `69,645792 ms` | `8,344375 ms` |
+| miembros de scope | `0,825072125 s` | `52` | `11.684` | `2` | `53,674042 ms` | `8,145125 ms` |
+
+Cada sentinel inyectó tres filas inválidas, devolvió `NOT_READY/BLOCKED` con
+`PUBLICATION_CONTENT_MISMATCH` y sólo relajó sus familias declaradas hasta `expected + 1` o el cap
+derivado exacto. El inventario cerrado cubre `74` familias SELECT/row-lock; `35` límites
+parametrizados deben terminar exactamente en `LIMIT ?` y presentar el último bind entero en todas
+las ejecuciones. Los binds congelados son:
+
+- origen/target: documentos `88`, contextos `89`, requisitos `257`, audiencias `513`, referencias
+  `2.643`, scopes `17`, miembros `513`, target documentos `88` y target requisitos `257`;
+- fingerprints activos: slots `89`, punteros `17`, miembros `4.097` y referencias `65.537`;
+- readiness: versiones documento `8.193`, versiones requisito `16.385`, lotes `8.193` y miembros
+  predecessor/successor `16.385`;
+- planner/evidencia: membresía documento `1.025`, requisito `2.049`, slots `1.025`, punteros `65`,
+  scopes/evidencia `65`, miembros `16.385` y documentos `32.769`;
+- historia/lotes: transiciones documento/requisito `8.193`, identidades de lote `513`,
+  predecesores/sucesores/historia `8.193`.
+
+Dos lookups de publicación conservan `LIMIT 2`; catorce familias multirrow sin límite propio están
+acotadas por IDs previos, unicidad V27 o enums. No se construyó artificialmente una base de
+8K–65K: se acreditó el bind exacto entregado al driver y la regresión split/merge. Para import
+máximo se congelaron caps, no valores observados publicables: fresh `<=1.000` RT, replay `<=500` y
+menor que fresh; el sentinel consume exactamente `129` filas de la relación.
+
+No se fija memoria: Docker informó `3.919 MB` compartidos, pero no estaban congelados heap JVM,
+límite por contenedor, GC ni carga del host. Publicar ese valor como pico o cap no sería
+reproducible; esta limitación explícita no bloquea el cierre aprobado.
+
+#### Procesos reales, seguridad y postestado
+
+La matriz completa se conserva en las tablas de “Lifecycle empaquetado y postestado”, “Roles,
+configuración hostil y datos HTTP” y “Pérdida total y parcial de stdout” de 10E. La puerta 10F la
+revalidó: import source `0 / PASS / IMPORTED`; readiness `BLOCKED/NOT_READY` exit `2`;
+planes PROMOTE/REPLACE/RETIRE `PASS/APPLICABLE` exit `0`; applies `PASS/APPLIED` exit `0` con
+readiness `READY`, `READY` y `NOT_READY`; replays `PASS/ALREADY_APPLIED`; y target incompatible
+`BLOCKED` exit `2`. Los siete escenarios del JAR volvieron a pasar y cada plan/replay preservó
+filas, secuencias, SHA-256, Markdown y planes según su contrato. Los reportes entregados conservaron
+schema JSON v3, un único objeto UTF-8 y LF final.
+
+La seguridad siguió dando exit `3 / ERROR / ROLE_PRIVILEGE_DRIFT` para importador, owner,
+privilegio SELECT extra e `INHERIT`, sin mutación. Las cuatro
+`-Dspring.datasource.{url,username,password,driver-class-name}` hostiles dieron exit `3`,
+`persisted=false` y `EDITORIAL_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN`; la garantía observada es
+ninguna sesión nueva contabilizada en la base objetivo, no una afirmación global sobre PostgreSQL.
+
+El launcher ejecutable conservó `exec ... "$@"`, rutas con espacios y saneó
+`JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS`. `sh -n` pasó. Los contextos CLI
+acreditados no activaron web, Flyway, JPA, runners ni schedulers. Ambos fat JAR sí contienen esas
+dependencias por su empaquetado compartido; no se afirma su ausencia física ni una observación
+universal de sockets.
+
+La pérdida total/parcial de stdout se revalidó con agente `N=0`, agente `N=78` y pipe cerrado:
+exit `3`, stderr vacío, commit autoritativo previo al retry y retry `ALREADY_APPLIED` sin duplicar.
+El prefijo de `78` bytes siguió no parseable, sin LF, `UNKNOWN` ni segundo envelope. En los casos
+con reporte entregado hubo un único JSON UTF-8, stderr vacío o allowlisteado y ningún secreto,
+path, SQL, stack trace o canary definido filtrado. El snapshot global cubrió `25` tablas y `13`
+secuencias `legal_%`; el inventario editorial restringido sigue siendo `19` tablas y `10`
+secuencias. Las seis tablas HTTP protegidas y sus tres identity sequences permanecieron intactas.
+
+#### Artefactos finales 10F
+
+| Artefacto del `clean verify` final | SHA-256 | Start-Class |
+|---|---|---|
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar` | `e5d3bafa48d80d346ce5afa05177f78eaff79780abb351c1d587699f21f68d5a` | `com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication` |
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar` | `9b9eab3aec0a555c68e1081464b7fd20a3621ffc9a5672e8ca5d107fc23c2fa1` | `com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestCli` |
+
+Ningún manifest declara `Premain-Class`, `Agent-Class` o `Launcher-Agent-Class`; ninguno de los
+artefactos contiene `LegalCliStdoutFailureAgent` ni `application-secret.properties`. Maven no fija
+`outputTimestamp`, por lo que estos hashes identifican el build final 10F y no sustituyen los
+hashes históricos de la puerta 10E.
+
+#### Cierre de alcance
+
+`git diff --check` y el inventario final se ejecutan inmediatamente antes del commit. No hubo push
+ni deploy, ni cambios en frontend, runbooks, `FRONTEND_INTEGRATION.md`, API, V28, contenido legal
+real, Java, tests, migraciones, grants, roles, `pom.xml` o launcher. Corte 10
+queda cerrado; Fase 2.3C, integración frontend, staging y producción continúan pendientes de Corte
+11 o de sus planes separados. El hash de 10F no puede autorreferenciarse dentro del mismo commit:
+se identifica por parent `d3a08a8` y asunto `docs(legal): cierra corte de procesos reales`.
 
 ## Criterios de parada
 
@@ -982,22 +1154,22 @@ Cualquiera de estos hallazgos bloquea el subcorte correspondiente:
 La memoria no reproducible no bloquea si 10F documenta la razón. Toda otra métrica requerida
 ausente sí bloquea el cierre.
 
-## Matriz de commits prevista
+## Matriz de commits registrados
 
 | Corte | Commit |
 |---:|---|
 | diseño | `2dcad53 docs(legal): diseña concurrencia y procesos editoriales` |
-| plan | `docs(legal): planifica concurrencia y procesos editoriales` |
-| 10A | `test(legal): acredita concurrencia editorial` |
-| 10B | `test(legal): acredita fallos editoriales` |
-| 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989` |
-| 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97` |
-| 10E | `ab2a917`, `2f5985f`, `bc83eaa`, `0d40ae1`, `0b7f7f5`, `9629a99`, `8e6062b`, `2efc19f` |
-| 10F | `docs(legal): cierra corte de procesos reales` |
+| plan | `73f5a83 docs(legal): planifica concurrencia y procesos editoriales` |
+| 10A | `246ef54`, `69c3763`, `d882c63`, `9f00cb6`, `77c80c5`, `af5b847` |
+| 10B | `794c9b2`, `b846965` |
+| 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989`, `4e511e5` |
+| 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97`, `baa188f` |
+| 10E | `ab2a917`, `2f5985f`, `bc83eaa`, `0d40ae1`, `0b7f7f5`, `9629a99`, `8e6062b`, `2efc19f`, `d3a08a8` |
+| 10F | este commit, parent `d3a08a8`, asunto `docs(legal): cierra corte de procesos reales` |
 
 ## Criterio de cierre
 
-Corte 10 queda cerrado cuando las seis fronteras —import, dry-run, readiness, plan, apply y
+Corte 10 quedó cerrado porque las seis fronteras —import, dry-run, readiness, plan, apply y
 reconciliación— comparten un advisory lock real, las carreras no confirman dos estados
 incompatibles, los fallos no fabrican éxito, el fixture máximo cumple presupuestos/caps y los siete
 comandos funcionan con JAR, rol y launcher reales. La pérdida total o parcial de stdout conserva
