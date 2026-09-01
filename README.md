@@ -23,6 +23,9 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 >   de readiness, planificación y apply para promoción, reemplazo y retiro. Es una capacidad
 >   editorial interna: no publica APIs ni acredita contenido real, readiness público, staging o
 >   deploy.
+> - **`docs/plans/2026-08-27-legal-manifest-promotion-closure.md`** — cierre reproducible de la Fase
+>   2.3C como plataforma editorial interna sobre V27; no habilita V28, APIs, contenido real,
+>   staging ni deploy.
 
 ---
 

@@ -2,8 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: plan aprobado por continuidad del diseño; ejecución en curso, Cortes 1 a 10 completados;
-Corte 10 cerrado el 2026-08-31 mediante 10A, 10B, 10C, 10D, 10E y 10F; Corte 11 pendiente
+Estado: fase cerrada y verificada el 2026-08-31; Cortes 1 a 11 completados. El cierre acredita una
+plataforma editorial interna y no habilita producción pública.
 
 Diseño aprobado:
 
@@ -1329,18 +1329,38 @@ git status --short
 
 Las auditorías independientes cerraron sin hallazgos técnicos P0–P2. Las tres puertas no
 registraron fallos, errores, pruebas omitidas ni reintentos automáticos. No hubo cambios frontend,
-V28 ni promoción de contenido real, y no hubo deploy ni push. Corte 10 no cierra Fase 2.3C ni
-habilita producción pública; Corte 11 conserva runbook y coordinación cross-repo.
+V28 ni promoción de contenido real, y no hubo deploy ni push. Corte 10 por sí solo no cerró Fase
+2.3C ni habilitó producción pública; el runbook y la coordinación cross-repo se completaron luego
+en Corte 11.
 
 ## Corte 11 — Runbook, cierre y coordinación cross-repo
 
-Estado: pendiente.
+Estado: completado el 2026-08-31 mediante 11A, 11B, 11C y 11D.
+
+Diseño, ejecución y cierre:
+
+- `docs/plans/2026-08-31-legal-manifest-promotion-closure-design.md`;
+- `docs/plans/2026-08-31-legal-manifest-promotion-closure-implementation.md`;
+- `docs/runbooks/legal-manifest-editorial-postgresql.md`;
+- `docs/plans/2026-08-27-legal-manifest-promotion-closure.md`;
+- diseño `6852c64`, plan `1c74652`, 11B `6622915` y 11C `38cdc41`;
+- espejo frontend 11A `7545201`, sobre baseline `50f9d69`;
+- 11D se identifica dentro de la closure como este commit, con parent `38cdc41` y asunto
+  `docs(legal): cierra fase 2.3C`.
+
+La puerta fresca de 11D aprobó 4.283 pruebas Surefire y 250 Failsafe, sin fallos, errores ni
+omitidos, en 08:09 con Corretto 21.0.10, Maven 3.9.11 y PostgreSQL 16.14. Ambos launchers aprobaron
+`sh -n`; el schema cross-repo conservó 10.547 bytes y SHA-256
+`f7a4ee17f53f5ed3f2613d894fa3a4f46896dfaaec0c80dab055e4320f036f8b`.
+
+No se creó V28 ni API legal, no se conectó el frontend, no se usó contenido real y no hubo staging,
+deploy o push. `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados.
 
 ### Objetivo
 
 Dejar operación reproducible y cerrar 2.3C sin habilitar integración frontend.
 
-### Frontend primero
+### Frontend primero (secuencia ejecutada)
 
 Modificar exclusivamente:
 
@@ -1359,7 +1379,8 @@ Registrar:
 
 - 2.3C acredita operación editorial interna;
 - la secuencia correcta es revisión → digest/validate/dry-run → import/sello →
-  plan APPLICABLE → apply → readiness READY;
+  plan APPLICABLE → apply → readiness READY para promoción/reemplazo, o NOT_READY para el retiro
+  fail-closed solicitado;
 - V28, APIs, aceptación, seguridad, deploy y staging siguen pendientes;
 - Tarea 3 no cambia;
 - BACKEND-HANDOFF 1 continúa cerrado.
@@ -1378,7 +1399,7 @@ No ejecutar build:public con borradores. Commit frontend:
 
     docs(plan): registra cierre de fase 2.3C
 
-### Backend después
+### Backend después (secuencia ejecutada)
 
 Crear:
 
@@ -1405,7 +1426,8 @@ El runbook debe congelar:
 - captura separada de stdout/stderr;
 - receipts y custodia externa de job/operador;
 - stdout ausente, UNKNOWN y retry exacto;
-- prohibición de usar contenido real sin revisión profesional;
+- prohibición de usar contenido real sin revisión profesional o aprobación editorial responsable y
+  trazable;
 - diferencia entre readiness editorial y público.
 
 La closure debe registrar:
@@ -1431,7 +1453,12 @@ shasum -a 256 src/main/resources/legal/manifest/v1/publication-manifest.schema.j
 Puerta backend final:
 
 ~~~bash
-./mvnw verify
+sh -n scripts/legal-manifest-import.sh
+sh -n scripts/legal-manifest-editor.sh
+shasum -a 256 scripts/legal-manifest-import.sh scripts/legal-manifest-editor.sh
+./mvnw clean verify
+shasum -a 256 target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar \
+  target/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar
 git diff --check
 git status --short
 ~~~
@@ -1480,9 +1507,13 @@ Commit backend:
 | 10C | `c0f02cc`, `e227a2d`, `dc9b619`, `148f989`, `4e511e5` |
 | 10D | `09c0e68`, `9e8148b`, `f528f46`, `23139f8`, `e021d67`, `373bc47`, `5923eec`, `d8f6a97`, `baa188f` |
 | 10E | `ab2a917`, `2f5985f`, `bc83eaa`, `0d40ae1`, `0b7f7f5`, `9629a99`, `8e6062b`, `2efc19f`, `d3a08a8` |
-| 10F | este commit, parent `d3a08a8`, asunto `docs(legal): cierra corte de procesos reales` |
-| 11 frontend | docs(plan): registra cierre de fase 2.3C |
-| 11 backend | docs(legal): cierra fase 2.3C |
+| 10F | `ccfe89422539d732bdec479b9f28ba37f092fc37` |
+| 11 diseño | `6852c645faea5c7c6885917e0c2a5dbf50ee2b4b` |
+| 11 plan | `1c74652c61146709852da92b8880515368dab20d` |
+| 11A frontend | `75452010e88a2e2a3252d78b267549d1ee5adce3`, baseline `50f9d69fb73aa709f29e83890388ec273414d9dd` |
+| 11B backend | `662291535807c950fa950775f6c64003d88668cc` |
+| 11C backend | `38cdc41760bfd3999ece07323a0cc50674010529` |
+| 11D backend | este commit, parent `38cdc41760bfd3999ece07323a0cc50674010529`, asunto `docs(legal): cierra fase 2.3C` |
 
 ## Puerta de salida
 
@@ -1511,6 +1542,8 @@ Commit backend:
 2. Catálogo, documentos, ETag y endpoints autenticados.
 3. Aceptación y registro atómicos.
 4. Seguridad, CORS, 409, 428 y enforcement.
-5. Contenido profesional aprobado y deploy en staging.
+5. Desplegar y migrar las capas compatibles en staging; luego importar/promover el contenido que
+   recibió revisión profesional o aprobación editorial responsable y trazable, y validar readiness
+   pública y smokes remotos.
 6. Habilitar y acreditar BACKEND-HANDOFF 1.
 7. Tarea 3 frontend.
