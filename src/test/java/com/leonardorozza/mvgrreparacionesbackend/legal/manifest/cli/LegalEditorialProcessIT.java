@@ -54,6 +54,8 @@ class LegalEditorialProcessIT {
     private static final String EDITORIAL_PASSWORD =
             "editorial-10e-password-must-never-leak";
     private static final Set<String> PROTECTED_HTTP_TABLES = Set.of(
+            "legal_requisito_agregados",
+            "legal_requisito_agregado_scopes",
             "legal_aceptacion_lotes",
             "legal_aceptaciones",
             "legal_aceptacion_documentos",
@@ -84,6 +86,8 @@ class LegalEditorialProcessIT {
             "legal_requisito_conjuntos",
             "legal_requisito_conjunto_miembros",
             "legal_requisito_conjuntos_actuales",
+            "legal_requisito_agregados",
+            "legal_requisito_agregado_scopes",
             "legal_aceptacion_lotes",
             "legal_aceptaciones",
             "legal_aceptacion_documentos",
@@ -165,6 +169,8 @@ class LegalEditorialProcessIT {
                     legal_aceptacion_documentos,
                     legal_aceptaciones,
                     legal_aceptacion_lotes,
+                    legal_requisito_agregado_scopes,
+                    legal_requisito_agregados,
                     legal_publicaciones,
                     legal_documento_reemplazo_lotes
                 RESTART IDENTITY CASCADE
@@ -232,7 +238,7 @@ class LegalEditorialProcessIT {
                 readiness,
                 "source-process-v1",
                 11,
-                6,
+                7,
                 0,
                 0,
                 0,
@@ -260,7 +266,7 @@ class LegalEditorialProcessIT {
                 .isTrue();
         assertThat(promotePlan.path("readiness").path("value").textValue())
                 .isEqualTo("READY");
-        assertDelta(promotePlan, 22, 0, 12, 0, 21, 0, 0, 0, 8, 0);
+        assertDelta(promotePlan, 22, 0, 14, 0, 21, 0, 0, 0, 9, 0);
         assertNoIssues(promotePlan);
         assertThat(fixture.snapshotOwner()).isEqualTo(beforeReadiness);
 
@@ -283,11 +289,11 @@ class LegalEditorialProcessIT {
                 promoted,
                 "source-process-v1",
                 11,
-                6,
+                7,
                 22,
-                12,
+                14,
                 21,
-                8,
+                9,
                 0);
         OwnerSnapshot afterPromote = fixture.snapshotOwner();
         assertThat(afterPromote).isNotEqualTo(beforeReadiness);
@@ -363,11 +369,11 @@ class LegalEditorialProcessIT {
                 sourceReady,
                 "source-process-v1",
                 11,
-                6,
+                7,
                 22,
-                12,
+                14,
                 21,
-                8,
+                9,
                 0);
         assertNoIssues(sourceReady);
         assertThat(fixture.snapshotOwner()).isEqualTo(afterTargetImport);
@@ -390,7 +396,7 @@ class LegalEditorialProcessIT {
         assertThat(replacePlan.path("persisted").booleanValue()).isFalse();
         assertOperation(replacePlan, "REPLACE", "APPLICABLE");
         assertPlanIdentity(replacePlan, replacement, true, "READY");
-        assertDelta(replacePlan, 1, 2, 6, 18, 18, 3, 3, 8, 8, 1);
+        assertDelta(replacePlan, 1, 2, 6, 18, 18, 3, 3, 9, 9, 1);
         assertNoIssues(replacePlan);
         assertThat(fixture.snapshotOwner()).isEqualTo(afterTargetImport);
 
@@ -411,14 +417,14 @@ class LegalEditorialProcessIT {
                 replaced,
                 "target-process-v2",
                 11,
-                6,
+                7,
                 22,
-                12,
+                14,
                 21,
-                8,
+                9,
                 1);
         assertNoIssues(replaced);
-        assertCurrentVersionStates(11, 1, 6, 2);
+        assertCurrentVersionStates(11, 1, 7, 2);
         OwnerSnapshot afterReplace = fixture.snapshotOwner();
         assertThat(afterReplace).isNotEqualTo(afterTargetImport);
         assertProtectedRowsUnchanged(afterTargetImport, afterReplace);
@@ -451,11 +457,11 @@ class LegalEditorialProcessIT {
         assertStateCounts(
                 targetReady,
                 12,
-                8,
+                9,
                 25,
-                18,
+                20,
                 21,
-                8,
+                9,
                 1);
         assertNoIssues(targetReady);
         assertThat(fixture.snapshotOwner()).isEqualTo(afterReplace);
@@ -494,14 +500,14 @@ class LegalEditorialProcessIT {
                 retired,
                 "target-process-v2",
                 11,
-                6,
+                7,
                 23,
-                13,
+                15,
                 19,
-                4,
+                5,
                 1);
         assertNoIssues(retired);
-        assertCurrentVersionStates(10, 1, 5, 2);
+        assertCurrentVersionStates(10, 1, 6, 2);
         assertThat(owner.queryForObject("""
                 SELECT count(*)
                   FROM legal_documento_versiones
@@ -677,11 +683,11 @@ class LegalEditorialProcessIT {
                 applied,
                 "launcher-source-v1",
                 11,
-                6,
+                7,
                 22,
-                12,
+                14,
                 21,
-                8,
+                9,
                 0);
         assertThat(fixture.snapshotOwner()).isNotEqualTo(before);
         assertThat(fixture.digestTree(source))
@@ -811,11 +817,11 @@ class LegalEditorialProcessIT {
                 retry,
                 source.release().plan().manifest().publicationId(),
                 11,
-                6,
+                7,
                 22,
-                12,
+                14,
                 21,
-                8,
+                9,
                 0);
         assertNoIssues(retry);
         assertThat(fixture.snapshotOwner()).isEqualTo(committed);
@@ -835,19 +841,19 @@ class LegalEditorialProcessIT {
                 Long.class)).isEqualTo(11L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_requisito_versiones",
-                Long.class)).isEqualTo(6L);
+                Long.class)).isEqualTo(7L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_documento_transiciones",
                 Long.class)).isEqualTo(22L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_requisito_transiciones",
-                Long.class)).isEqualTo(12L);
+                Long.class)).isEqualTo(14L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_documento_vigentes",
                 Long.class)).isEqualTo(21L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_requisito_conjuntos_actuales",
-                Long.class)).isEqualTo(8L);
+                Long.class)).isEqualTo(9L);
         assertThat(owner.queryForObject(
                 "SELECT count(*) FROM legal_documento_reemplazo_lotes",
                 Long.class)).isZero();

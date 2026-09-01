@@ -11,6 +11,17 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestStatus;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection.ScopeRevision;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance.ScopeOrigin;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EsquemaRevisionLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.LocaleLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PerfilAgregadoLegal;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,7 +61,7 @@ import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persisten
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.editorialSequenceStates;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.editorialTableCounts;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.harness;
-import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.migrate;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.migrateLatest;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.promoteToReady;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.restrictedApplyHarness;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalManifestPersistenceITSupport.withReplicaRole;
@@ -67,7 +78,13 @@ class LegalEditorialRetireIT {
             "Retiro editorial documental explícito de prueba";
     private static final String REQUIREMENT_REASON =
             "Retiro editorial de requisito explícito de prueba";
+    private static final String CONTINUED_USE_STATEMENT =
+            "Confirmo el requisito continued-use de OrdenFix.";
+    private static final String CONTINUED_USE_STATEMENT_SHA256 =
+            "691f6e8465d629ca3e5f184539add016db43ee5be37011b4f5a1470b33ac780d";
     private static final Set<String> ACCEPTANCE_AND_IDEMPOTENCY_TABLES = Set.of(
+            "legal_requisito_agregados",
+            "legal_requisito_agregado_scopes",
             "legal_aceptacion_lotes",
             "legal_aceptaciones",
             "legal_aceptacion_documentos",
@@ -91,7 +108,7 @@ class LegalEditorialRetireIT {
 
     @BeforeAll
     static void migrateProvisionAndAssemble() {
-        migrate(POSTGRES);
+        migrateLatest(POSTGRES);
         DataSource ownerDataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         owner = new JdbcTemplate(ownerDataSource);
@@ -123,7 +140,9 @@ class LegalEditorialRetireIT {
                     legal_aceptacion_metadatos,
                     legal_aceptacion_documentos,
                     legal_aceptaciones,
-                    legal_aceptacion_lotes
+                    legal_aceptacion_lotes,
+                    legal_requisito_agregado_scopes,
+                    legal_requisito_agregados
                 RESTART IDENTITY CASCADE
                 """);
         cleanLegalState(owner);
@@ -641,7 +660,7 @@ class LegalEditorialRetireIT {
         List<DocumentVersion> allDocuments = documents(current.publicationId());
         List<RequirementVersion> allRequirements = requirements(current.publicationId());
         assertThat(allDocuments).hasSize(11);
-        assertThat(allRequirements).hasSize(6);
+        assertThat(allRequirements).hasSize(7);
 
         Set<UUID> retiredDocumentIds = retiredDocuments.stream()
                 .map(DocumentVersion::id)
@@ -660,7 +679,7 @@ class LegalEditorialRetireIT {
 
         DatabaseSnapshot before = databaseSnapshot(allDocuments, allRequirements);
         assertThat(before.documentSlots()).hasSize(21);
-        assertThat(before.requiredSetPointers()).hasSize(8);
+        assertThat(before.requiredSetPointers()).hasSize(9);
         assertThat(before.unrelatedRows().keySet())
                 .containsAll(ACCEPTANCE_AND_IDEMPOTENCY_TABLES);
         assertAcceptanceAggregate(before.acceptanceRows());
@@ -1014,6 +1033,11 @@ class LegalEditorialRetireIT {
         UUID acceptanceId = stableUuid("acceptance-act:" + token);
         importer.transaction().executeWithoutResult(status -> {
             JdbcTemplate jdbc = importer.jdbc();
+            jdbc.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
             Long workshopId = jdbc.queryForObject("""
                     INSERT INTO talleres (nombre)
                     VALUES (?)
@@ -1037,23 +1061,28 @@ class LegalEditorialRetireIT {
                      WHERE pr.publicacion_id = ?
                        AND rl.clave = 'customer-photo-attestation'
                     """, UUID.class, current.publicationId()));
-            String revision = Objects.requireNonNull(jdbc.queryForObject("""
-                    SELECT c.required_set_revision
-                      FROM legal_requisito_conjuntos_actuales a
-                      JOIN legal_requisito_conjuntos c ON c.id = a.conjunto_id
-                     WHERE a.publicacion_id = ?
-                       AND a.locale = 'es-AR'
-                       AND a.contexto = 'ATESTACION_FOTOS'
-                       AND a.audiencia = 'ADMIN_TITULAR'
-                    """, String.class, current.publicationId()));
+            PersistedAcceptanceAggregate aggregate = materializeAcceptanceAggregate(
+                    jdbc,
+                    current.publicationId(),
+                    stableUuid("acceptance-aggregate:" + token),
+                    List.of(
+                            ContextoLegal.USO_CONTINUADO,
+                            ContextoLegal.ATESTACION_FOTOS));
 
             assertThat(jdbc.update("""
                     INSERT INTO legal_aceptacion_lotes
                         (id, user_id, taller_id, rol_wire, audiencia,
-                         required_set_revision, aceptado_en)
+                         required_set_revision, aceptado_en, revision_scheme,
+                         perfil, agregado_id)
                     VALUES (?, ?, ?, 'ADMIN', 'ADMIN_TITULAR', ?,
-                            transaction_timestamp())
-                    """, lotId, userId, workshopId, revision)).isOne();
+                            transaction_timestamp(), 'AGGREGATE_V1',
+                            'AUTHENTICATED_PENDING', ?)
+                    """,
+                    lotId,
+                    userId,
+                    workshopId,
+                    aggregate.requiredSetRevision(),
+                    aggregate.id())).isOne();
             assertThat(jdbc.update("""
                     INSERT INTO legal_aceptaciones
                         (id, lote_id, user_id, taller_id, requisito_version_id,
@@ -1112,6 +1141,95 @@ class LegalEditorialRetireIT {
             jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
         });
         assertAcceptanceAggregate(acceptanceRows());
+    }
+
+    private static PersistedAcceptanceAggregate materializeAcceptanceAggregate(
+            JdbcTemplate jdbc,
+            UUID publicationId,
+            UUID aggregateId,
+            List<ContextoLegal> expectedContexts) {
+        List<AggregateScope> scopes = jdbc.query("""
+                SELECT current_set.conjunto_id, current_set.publicacion_id,
+                       current_set.contexto, required_set.required_set_revision
+                  FROM legal_requisito_conjuntos_actuales current_set
+                  JOIN legal_requisito_conjuntos required_set
+                    ON required_set.id = current_set.conjunto_id
+                   AND required_set.publicacion_id = current_set.publicacion_id
+                   AND required_set.locale = current_set.locale
+                   AND required_set.contexto = current_set.contexto
+                   AND required_set.audiencia = current_set.audiencia
+                 WHERE current_set.publicacion_id = ?
+                   AND current_set.locale = 'es-AR'
+                   AND current_set.audiencia = 'ADMIN_TITULAR'
+                   AND current_set.contexto IN ('USO_CONTINUADO', 'ATESTACION_FOTOS')
+                 ORDER BY CASE current_set.contexto
+                     WHEN 'USO_CONTINUADO' THEN 1
+                     WHEN 'ATESTACION_FOTOS' THEN 2
+                 END
+                   FOR SHARE OF current_set
+                """, (resultSet, rowNumber) -> new AggregateScope(
+                ContextoLegal.valueOf(resultSet.getString("contexto")),
+                resultSet.getObject("conjunto_id", UUID.class),
+                resultSet.getObject("publicacion_id", UUID.class),
+                resultSet.getString("required_set_revision")), publicationId);
+        assertThat(scopes)
+                .extracting(AggregateScope::context)
+                .containsExactlyElementsOf(expectedContexts);
+
+        LegalRequiredSetAggregateProjection projection =
+                new LegalRequiredSetAggregateProjection(
+                        EsquemaRevisionLegal.AGGREGATE_V1,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        scopes.stream()
+                                .map(scope -> new ScopeRevision(
+                                        scope.context(),
+                                        scope.requiredSetRevision()))
+                                .toList());
+        LegalRequiredSetAggregateProvenance provenance =
+                new LegalRequiredSetAggregateProvenance(
+                        PerfilAgregadoLegal.AUTHENTICATED_PENDING,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        scopes.stream()
+                                .map(scope -> new ScopeOrigin(
+                                        scope.context(),
+                                        scope.requiredSetId(),
+                                        scope.publicationId()))
+                                .toList());
+        String requiredSetRevision =
+                new LegalRequiredSetAggregateRevisionCalculator().calculate(projection);
+        String provenanceFingerprint =
+                new LegalRequiredSetAggregateProvenanceCalculator().calculate(provenance);
+
+        assertThat(jdbc.update("""
+                INSERT INTO legal_requisito_agregados
+                    (id, perfil, locale, audiencia, revision_scheme,
+                     required_set_revision, provenance_fingerprint,
+                     scope_count, creado_en)
+                VALUES (?, 'AUTHENTICATED_PENDING', 'es-AR', 'ADMIN_TITULAR',
+                        'AGGREGATE_V1', ?, ?, ?, transaction_timestamp())
+                """,
+                aggregateId,
+                requiredSetRevision,
+                provenanceFingerprint,
+                scopes.size())).isOne();
+        for (int index = 0; index < scopes.size(); index++) {
+            AggregateScope scope = scopes.get(index);
+            assertThat(jdbc.update("""
+                    INSERT INTO legal_requisito_agregado_scopes
+                        (agregado_id, scope_ordinal, contexto, conjunto_id,
+                         publicacion_id, locale, audiencia, required_set_revision)
+                    VALUES (?, ?, ?, ?, ?, 'es-AR', 'ADMIN_TITULAR', ?)
+                    """,
+                    aggregateId,
+                    index + 1,
+                    scope.context().name(),
+                    scope.requiredSetId(),
+                    scope.publicationId(),
+                    scope.requiredSetRevision())).isOne();
+        }
+        return new PersistedAcceptanceAggregate(aggregateId, requiredSetRevision);
     }
 
     private static byte[] bytes(int length, int seed) {
@@ -1386,10 +1504,15 @@ class LegalEditorialRetireIT {
                 temporaryDirectory,
                 LegalEditorialRetireIT.class,
                 externalId,
-                (manifestPath, manifest) -> manifest.withArray("documents")
-                        .forEach(document -> ((ObjectNode) document).put(
-                                "effectiveAt",
-                                "2026-01-01T00:00:00-03:00")));
+                (manifestPath, manifest) -> {
+                    manifest.withArray("documents")
+                            .forEach(document -> ((ObjectNode) document).put(
+                                    "effectiveAt",
+                                    "2026-01-01T00:00:00-03:00"));
+                    // AUTHENTICATED_PENDING must carry a genuine USO_CONTINUADO scope.
+                    // Add it before import/seal instead of fabricating SCOPE_V1 history.
+                    appendContinuedUseRequirement(manifest);
+                });
         UUID publicationId = importer.importService()
                 .importManifest(release)
                 .receipt()
@@ -1457,6 +1580,7 @@ class LegalEditorialRetireIT {
                             ((ObjectNode) document).put(
                                     "effectiveAt",
                                     "2026-01-01T00:00:00-03:00"));
+                    appendContinuedUseRequirement(manifest);
                     manifestDocument(manifest, "terminos")
                             .put("version", replacementVersion);
                     manifest.withArray("requirements").forEach(candidate -> {
@@ -1567,7 +1691,7 @@ class LegalEditorialRetireIT {
 
         assertThat(plan.withArray("documentReuses")).hasSize(10);
         assertThat(plan.withArray("documentReplacementBatches")).hasSize(1);
-        assertThat(plan.withArray("requirementReuses")).hasSize(4);
+        assertThat(plan.withArray("requirementReuses")).hasSize(5);
         assertThat(plan.withArray("requirementReplacements")).hasSize(2);
         assertThat(plan.withArray("documentAdditions")).isEmpty();
         assertThat(plan.withArray("documentRetirements")).isEmpty();
@@ -1642,6 +1766,29 @@ class LegalEditorialRetireIT {
                 .filter(candidate -> key.equals(candidate.path("key").textValue()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private static void appendContinuedUseRequirement(ObjectNode manifest) {
+        boolean alreadyPresent = java.util.stream.StreamSupport.stream(
+                        manifest.withArray("requirements").spliterator(),
+                        false)
+                .anyMatch(candidate -> "continued-use".equals(
+                        candidate.path("key").textValue()));
+        if (alreadyPresent) {
+            throw new IllegalStateException(
+                    "El fixture RETIRE ya contiene el requisito USO_CONTINUADO");
+        }
+        ObjectNode requirement = manifest.withArray("requirements").addObject();
+        requirement.put("key", "continued-use");
+        requirement.put("version", "1.0.0");
+        requirement.put("context", "USO_CONTINUADO");
+        requirement.putArray("roles").add("ADMIN_TITULAR");
+        requirement.put("actType", "ACEPTACION");
+        requirement.put("statement", CONTINUED_USE_STATEMENT);
+        requirement.put("statementSha256", CONTINUED_USE_STATEMENT_SHA256);
+        requirement.putArray("documents").add("privacidad");
+        requirement.put("required", true);
+        requirement.put("requiresReacceptance", true);
     }
 
     private static DocumentVersion document(UUID publicationId, String key) {
@@ -1942,6 +2089,8 @@ class LegalEditorialRetireIT {
 
     private static void assertAcceptanceAggregate(Map<String, String> snapshot) {
         assertThat(snapshot).hasSize(ACCEPTANCE_AND_IDEMPOTENCY_TABLES.size());
+        assertThat(rowCount("legal_requisito_agregados")).isOne();
+        assertThat(rowCount("legal_requisito_agregado_scopes")).isEqualTo(2L);
         assertThat(rowCount("legal_aceptacion_lotes")).isOne();
         assertThat(rowCount("legal_aceptaciones")).isOne();
         assertThat(rowCount("legal_aceptacion_documentos")).isEqualTo(2L);
@@ -2121,6 +2270,16 @@ class LegalEditorialRetireIT {
     }
 
     private record ImportedRelease(ValidatedRelease release, UUID publicationId) { }
+
+    private record AggregateScope(
+            ContextoLegal context,
+            UUID requiredSetId,
+            UUID publicationId,
+            String requiredSetRevision) { }
+
+    private record PersistedAcceptanceAggregate(
+            UUID id,
+            String requiredSetRevision) { }
 
     private record DocumentVersionBase(
             UUID id,

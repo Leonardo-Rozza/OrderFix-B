@@ -3,7 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import java.util.List;
 import java.util.Objects;
 
-/** Internal marker that makes mixed dry-run/import database contexts fail during refresh. */
+/** Internal marker that makes mixed legal database contexts fail during refresh. */
 record LegalDatabaseBoundaryMarker(Kind kind) {
 
     LegalDatabaseBoundaryMarker {
@@ -13,7 +13,8 @@ record LegalDatabaseBoundaryMarker(Kind kind) {
     enum Kind {
         DRY_RUN,
         IMPORT,
-        EDITORIAL
+        EDITORIAL,
+        AGGREGATE
     }
 
     static final class Guard {

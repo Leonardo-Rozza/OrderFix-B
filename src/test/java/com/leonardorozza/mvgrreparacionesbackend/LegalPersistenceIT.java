@@ -1,8 +1,17 @@
 package com.leonardorozza.mvgrreparacionesbackend;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection.ScopeRevision;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance.ScopeOrigin;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EsquemaRevisionLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoVersionLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.LocaleLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PerfilAgregadoLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoOperacionIdempotenteLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.legal.LegalAceptacionDocumentoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.legal.LegalAceptacionMetadataCifradaRepository;
@@ -107,7 +116,8 @@ class LegalPersistenceIT {
         }
         transaction = new TransactionTemplate(transactionManager);
         jdbc.execute("""
-                TRUNCATE TABLE legal_publicaciones, legal_documento_reemplazo_lotes
+                TRUNCATE TABLE legal_publicaciones, legal_requisito_agregados,
+                    legal_documento_reemplazo_lotes
                 RESTART IDENTITY CASCADE
                 """);
     }
@@ -907,9 +917,11 @@ class LegalPersistenceIT {
         UUID lotId = UUID.randomUUID();
         UUID acceptanceId = UUID.randomUUID();
         inTransaction(() -> {
+            acquireEditorialTransactionLock();
+            RegistrationAggregate aggregate = materializeRegistrationAggregate(fixture);
             insertAcceptanceRows(
                     fixture, actor, acceptedAt, retainUntil, ipNonce, userAgentNonce,
-                    corruptCanonicalSnapshot, lotId, acceptanceId);
+                    corruptCanonicalSnapshot, aggregate, lotId, acceptanceId);
             if (idempotency != null) {
                 insertIdempotency(idempotency, actor, lotId);
             }
@@ -926,6 +938,7 @@ class LegalPersistenceIT {
             byte[] ipNonce,
             byte[] userAgentNonce,
             boolean corruptCanonicalSnapshot,
+            RegistrationAggregate aggregate,
             UUID lotId,
             UUID acceptanceId) {
         RequirementVersion requirement = fixture.requirement();
@@ -933,10 +946,12 @@ class LegalPersistenceIT {
         jdbc.update("""
                 INSERT INTO legal_aceptacion_lotes
                     (id, user_id, taller_id, rol_wire, audiencia,
+                     revision_scheme, perfil, agregado_id,
                      required_set_revision, aceptado_en)
-                VALUES (?, ?, ?, ?, 'ADMIN_TITULAR', ?, ?)
+                VALUES (?, ?, ?, ?, 'ADMIN_TITULAR',
+                        'AGGREGATE_V1', 'REGISTRATION', ?, ?, ?)
                 """, lotId, actor.userId(), actor.tallerId(), actor.role(),
-                fixture.revision(), acceptedAt);
+                aggregate.id(), aggregate.requiredSetRevision(), acceptedAt);
         jdbc.update("""
                 INSERT INTO legal_aceptaciones
                     (id, lote_id, user_id, taller_id, requisito_version_id,
@@ -981,14 +996,19 @@ class LegalPersistenceIT {
         UUID lotId = UUID.randomUUID();
         UUID acceptanceId = UUID.randomUUID();
         inTransaction(() -> {
+            acquireEditorialTransactionLock();
+            RegistrationAggregate aggregate = materializeRegistrationAggregate(fixture);
             RequirementVersion requirement = fixture.requirement();
             DocumentVersion document = fixture.document();
             jdbc.update("""
                     INSERT INTO legal_aceptacion_lotes
                         (id, user_id, taller_id, rol_wire, audiencia,
+                         revision_scheme, perfil, agregado_id,
                          required_set_revision, aceptado_en)
-                    VALUES (?, ?, ?, 'ADMIN', 'ADMIN_TITULAR', ?, ?)
-                    """, lotId, actor.userId(), actor.tallerId(), fixture.revision(), acceptedAt);
+                    VALUES (?, ?, ?, 'ADMIN', 'ADMIN_TITULAR',
+                            'AGGREGATE_V1', 'REGISTRATION', ?, ?, ?)
+                    """, lotId, actor.userId(), actor.tallerId(), aggregate.id(),
+                    aggregate.requiredSetRevision(), acceptedAt);
             jdbc.update("""
                     INSERT INTO legal_aceptaciones
                         (id, lote_id, user_id, taller_id, requisito_version_id,
@@ -1014,6 +1034,86 @@ class LegalPersistenceIT {
         });
     }
 
+    private void acquireEditorialTransactionLock() {
+        jdbc.execute("""
+                SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                    pg_catalog.hashtextextended(
+                        'ordenfix:legal-publicaciones:sello:v1', 0
+                    )
+                )
+                """);
+    }
+
+    private RegistrationAggregate materializeRegistrationAggregate(
+            ActiveLegalFixture fixture) {
+        LegalRequiredSetAggregateProjection projection =
+                new LegalRequiredSetAggregateProjection(
+                        EsquemaRevisionLegal.AGGREGATE_V1,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        List.of(new ScopeRevision(
+                                ContextoLegal.REGISTRO,
+                                fixture.revision())));
+        LegalRequiredSetAggregateProvenance provenance =
+                new LegalRequiredSetAggregateProvenance(
+                        PerfilAgregadoLegal.REGISTRATION,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        List.of(new ScopeOrigin(
+                                ContextoLegal.REGISTRO,
+                                fixture.snapshotId(),
+                                fixture.publicationId())));
+        String requiredSetRevision =
+                new LegalRequiredSetAggregateRevisionCalculator().calculate(projection);
+        String provenanceFingerprint =
+                new LegalRequiredSetAggregateProvenanceCalculator().calculate(provenance);
+        UUID candidateId = UUID.randomUUID();
+
+        List<UUID> inserted = jdbc.queryForList("""
+                INSERT INTO legal_requisito_agregados
+                    (id, perfil, locale, audiencia, revision_scheme,
+                     required_set_revision, provenance_fingerprint,
+                     scope_count, creado_en)
+                VALUES (?, 'REGISTRATION', 'es-AR', 'ADMIN_TITULAR',
+                        'AGGREGATE_V1', ?, ?, 1, statement_timestamp())
+                ON CONFLICT ON CONSTRAINT uk_legal_requisito_agregado_identidad_fisica
+                DO NOTHING
+                RETURNING id
+                """, UUID.class, candidateId, requiredSetRevision, provenanceFingerprint);
+
+        UUID aggregateId;
+        if (inserted.isEmpty()) {
+            aggregateId = jdbc.queryForObject("""
+                    SELECT id
+                      FROM legal_requisito_agregados
+                     WHERE perfil = 'REGISTRATION'
+                       AND locale = 'es-AR'
+                       AND audiencia = 'ADMIN_TITULAR'
+                       AND revision_scheme = 'AGGREGATE_V1'
+                       AND required_set_revision = ?
+                       AND provenance_fingerprint = ?
+                    """, UUID.class, requiredSetRevision, provenanceFingerprint);
+        } else if (inserted.size() == 1) {
+            aggregateId = inserted.getFirst();
+            jdbc.update("""
+                    INSERT INTO legal_requisito_agregado_scopes
+                        (agregado_id, scope_ordinal, contexto, conjunto_id,
+                         publicacion_id, locale, audiencia, required_set_revision)
+                    VALUES (?, 1, 'REGISTRO', ?, ?, 'es-AR',
+                            'ADMIN_TITULAR', ?)
+                    """, aggregateId, fixture.snapshotId(), fixture.publicationId(),
+                    fixture.revision());
+        } else {
+            throw new IllegalStateException(
+                    "La identidad REGISTRATION materializo mas de una cabecera");
+        }
+        if (aggregateId == null) {
+            throw new IllegalStateException(
+                    "La identidad REGISTRATION no resolvio una cabecera");
+        }
+        return new RegistrationAggregate(aggregateId, requiredSetRevision);
+    }
+
     private void insertIdempotency(IdempotencyData data, Actor actor, UUID lotId) {
         jdbc.update("""
                 INSERT INTO legal_idempotencia_resultados
@@ -1029,6 +1129,7 @@ class LegalPersistenceIT {
     private void insertHistoricalExpiredIdempotency(
             IdempotencyData data, Actor actor, UUID lotId) {
         inTransaction(() -> {
+            acquireEditorialTransactionLock();
             // Fixture histórico: V27 no posee filas legales previas y un resultado nuevo nunca
             // puede nacer vencido. Se omite sólo el trigger de INSERT para probar la purga de una
             // fila que, en producción, habría envejecido durante más de 24 horas.
@@ -1177,6 +1278,9 @@ class LegalPersistenceIT {
     }
 
     private record Acceptance(UUID lotId, UUID acceptanceId) {
+    }
+
+    private record RegistrationAggregate(UUID id, String requiredSetRevision) {
     }
 
     private record IdempotencyData(

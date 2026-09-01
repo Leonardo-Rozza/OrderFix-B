@@ -97,7 +97,7 @@ class LegalManifestDryRunIT {
 
     @BeforeAll
     static void prepareSchemasAndGoldenRelease() throws URISyntaxException {
-        migrate("public", null);
+        migrate("public", "27");
         migrate(V26_SCHEMA, "26");
         v27Context = contextForSchema("public");
         dryRunService = v27Context.getBean(LegalManifestDryRunService.class);

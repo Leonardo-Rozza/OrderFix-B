@@ -14,8 +14,19 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidation;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManifestValidator.ValidatedRelease;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProjection.ScopeRevision;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenance.ScopeOrigin;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRestrictedEditorialRoleFixture;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRestrictedImportRoleFixture;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.ContextoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EsquemaRevisionLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.LocaleLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PerfilAgregadoLegal;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -52,6 +63,12 @@ final class LegalEditorialProcessFixture {
             "Retiro mixto controlado del fixture de procesos editoriales";
     private static final String REQUIREMENT_RETIREMENT_REASON =
             "Retiro de requisito controlado del fixture de procesos editoriales";
+    private static final String CONTINUED_USE_STATEMENT =
+            "Confirmo el requisito continued-use de OrdenFix.";
+    private static final String CONTINUED_USE_STATEMENT_SHA256 =
+            "691f6e8465d629ca3e5f184539add016db43ee5be37011b4f5a1470b33ac780d";
+    private static final String EDITORIAL_LOCK_NAME =
+            "ordenfix:legal-publicaciones:sello:v1";
     private static final String NORMAL_START_CLASS =
             "com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication";
     private static final String PROCESS_SECRET =
@@ -122,6 +139,9 @@ final class LegalEditorialProcessFixture {
         for (JsonNode document : manifest.withArray("documents")) {
             ((ObjectNode) document).put("effectiveAt", EFFECTIVE_AT);
         }
+        // The protected acceptance is AUTHENTICATED_PENDING, so the release must
+        // expose a real USO_CONTINUADO requirement before it is imported and sealed.
+        appendContinuedUseRequirement(manifest);
         Files.writeString(
                 manifestPath,
                 JSON.writerWithDefaultPrettyPrinter().writeValueAsString(manifest) + '\n',
@@ -516,6 +536,11 @@ final class LegalEditorialProcessFixture {
                         "owner.dataSource")));
 
         transaction.executeWithoutResult(status -> {
+            owner.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """, EDITORIAL_LOCK_NAME);
             Long workshopId = Objects.requireNonNull(owner.queryForObject("""
                     INSERT INTO talleres (nombre)
                     VALUES (?)
@@ -544,24 +569,27 @@ final class LegalEditorialProcessFixture {
                      WHERE pr.publicacion_id = ?
                        AND rl.clave = 'account-closure'
                     """, UUID.class, publicationId));
-            String revision = Objects.requireNonNull(owner.queryForObject("""
-                    SELECT required_set.required_set_revision
-                      FROM legal_requisito_conjuntos_actuales current_set
-                      JOIN legal_requisito_conjuntos required_set
-                        ON required_set.id = current_set.conjunto_id
-                     WHERE current_set.publicacion_id = ?
-                       AND current_set.locale = 'es-AR'
-                       AND current_set.contexto = 'CIERRE_CUENTA'
-                       AND current_set.audiencia = 'ADMIN_TITULAR'
-                    """, String.class, publicationId));
+            PersistedAcceptanceAggregate aggregate = materializeAcceptanceAggregate(
+                    publicationId,
+                    stableUuid("protected-http-aggregate:" + seed),
+                    List.of(
+                            ContextoLegal.USO_CONTINUADO,
+                            ContextoLegal.CIERRE_CUENTA));
 
             requireSingleInsert(owner.update("""
                     INSERT INTO legal_aceptacion_lotes
                         (id, user_id, taller_id, rol_wire, audiencia,
-                         required_set_revision, aceptado_en)
+                         required_set_revision, aceptado_en, revision_scheme,
+                         perfil, agregado_id)
                     VALUES (?, ?, ?, 'ADMIN', 'ADMIN_TITULAR', ?,
-                            transaction_timestamp())
-                    """, lotId, userId, workshopId, revision),
+                            transaction_timestamp(), 'AGGREGATE_V1',
+                            'AUTHENTICATED_PENDING', ?)
+                    """,
+                    lotId,
+                    userId,
+                    workshopId,
+                    aggregate.requiredSetRevision(),
+                    aggregate.id()),
                     "legal_aceptacion_lotes");
             requireSingleInsert(owner.update("""
                     INSERT INTO legal_aceptaciones
@@ -628,6 +656,101 @@ final class LegalEditorialProcessFixture {
                     "legal_idempotencia_resultados");
             owner.execute("SET CONSTRAINTS ALL IMMEDIATE");
         });
+    }
+
+    private PersistedAcceptanceAggregate materializeAcceptanceAggregate(
+            UUID publicationId,
+            UUID aggregateId,
+            List<ContextoLegal> expectedContexts) {
+        List<AggregateScope> scopes = owner.query("""
+                SELECT current_set.conjunto_id, current_set.publicacion_id,
+                       current_set.contexto, required_set.required_set_revision
+                  FROM legal_requisito_conjuntos_actuales current_set
+                  JOIN legal_requisito_conjuntos required_set
+                    ON required_set.id = current_set.conjunto_id
+                   AND required_set.publicacion_id = current_set.publicacion_id
+                   AND required_set.locale = current_set.locale
+                   AND required_set.contexto = current_set.contexto
+                   AND required_set.audiencia = current_set.audiencia
+                 WHERE current_set.publicacion_id = ?
+                   AND current_set.locale = 'es-AR'
+                   AND current_set.audiencia = 'ADMIN_TITULAR'
+                   AND current_set.contexto IN ('USO_CONTINUADO', 'CIERRE_CUENTA')
+                 ORDER BY CASE current_set.contexto
+                     WHEN 'USO_CONTINUADO' THEN 1
+                     WHEN 'CIERRE_CUENTA' THEN 2
+                 END
+                   FOR SHARE OF current_set
+                """, (resultSet, rowNumber) -> new AggregateScope(
+                ContextoLegal.valueOf(resultSet.getString("contexto")),
+                resultSet.getObject("conjunto_id", UUID.class),
+                resultSet.getObject("publicacion_id", UUID.class),
+                resultSet.getString("required_set_revision")), publicationId);
+        List<ContextoLegal> observedContexts = scopes.stream()
+                .map(AggregateScope::context)
+                .toList();
+        if (!observedContexts.equals(expectedContexts)) {
+            throw new AssertionError(
+                    "El aggregate HTTP no resolvió los scopes esperados: "
+                            + observedContexts);
+        }
+
+        LegalRequiredSetAggregateProjection projection =
+                new LegalRequiredSetAggregateProjection(
+                        EsquemaRevisionLegal.AGGREGATE_V1,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        scopes.stream()
+                                .map(scope -> new ScopeRevision(
+                                        scope.context(),
+                                        scope.requiredSetRevision()))
+                                .toList());
+        LegalRequiredSetAggregateProvenance provenance =
+                new LegalRequiredSetAggregateProvenance(
+                        PerfilAgregadoLegal.AUTHENTICATED_PENDING,
+                        LocaleLegal.ES_AR,
+                        AudienciaLegal.ADMIN_TITULAR,
+                        scopes.stream()
+                                .map(scope -> new ScopeOrigin(
+                                        scope.context(),
+                                        scope.requiredSetId(),
+                                        scope.publicationId()))
+                                .toList());
+        String requiredSetRevision =
+                new LegalRequiredSetAggregateRevisionCalculator().calculate(projection);
+        String provenanceFingerprint =
+                new LegalRequiredSetAggregateProvenanceCalculator().calculate(provenance);
+
+        requireSingleInsert(owner.update("""
+                INSERT INTO legal_requisito_agregados
+                    (id, perfil, locale, audiencia, revision_scheme,
+                     required_set_revision, provenance_fingerprint,
+                     scope_count, creado_en)
+                VALUES (?, 'AUTHENTICATED_PENDING', 'es-AR', 'ADMIN_TITULAR',
+                        'AGGREGATE_V1', ?, ?, ?, transaction_timestamp())
+                """,
+                aggregateId,
+                requiredSetRevision,
+                provenanceFingerprint,
+                scopes.size()),
+                "legal_requisito_agregados");
+        for (int index = 0; index < scopes.size(); index++) {
+            AggregateScope scope = scopes.get(index);
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_requisito_agregado_scopes
+                        (agregado_id, scope_ordinal, contexto, conjunto_id,
+                         publicacion_id, locale, audiencia, required_set_revision)
+                    VALUES (?, ?, ?, ?, ?, 'es-AR', 'ADMIN_TITULAR', ?)
+                    """,
+                    aggregateId,
+                    index + 1,
+                    scope.context().name(),
+                    scope.requiredSetId(),
+                    scope.publicationId(),
+                    scope.requiredSetRevision()),
+                    "legal_requisito_agregado_scopes");
+        }
+        return new PersistedAcceptanceAggregate(aggregateId, requiredSetRevision);
     }
 
     JdbcTemplate owner() {
@@ -918,7 +1041,7 @@ final class LegalEditorialProcessFixture {
     private static void requireOneToOneShape(ObjectNode plan) {
         if (plan.withArray("documentReuses").size() != 10
                 || plan.withArray("documentReplacementBatches").size() != 1
-                || plan.withArray("requirementReuses").size() != 4
+                || plan.withArray("requirementReuses").size() != 5
                 || plan.withArray("requirementReplacements").size() != 2
                 || !plan.withArray("documentAdditions").isEmpty()
                 || !plan.withArray("documentRetirements").isEmpty()
@@ -990,6 +1113,26 @@ final class LegalEditorialProcessFixture {
         }
         throw new IllegalArgumentException(
                 "Documento de fixture inexistente: " + key);
+    }
+
+    private static void appendContinuedUseRequirement(ObjectNode manifest) {
+        for (JsonNode candidate : manifest.withArray("requirements")) {
+            if ("continued-use".equals(candidate.path("key").textValue())) {
+                throw new IllegalStateException(
+                        "El fixture de procesos ya contiene USO_CONTINUADO");
+            }
+        }
+        ObjectNode requirement = manifest.withArray("requirements").addObject();
+        requirement.put("key", "continued-use");
+        requirement.put("version", "1.0.0");
+        requirement.put("context", "USO_CONTINUADO");
+        requirement.putArray("roles").add("ADMIN_TITULAR");
+        requirement.put("actType", "ACEPTACION");
+        requirement.put("statement", CONTINUED_USE_STATEMENT);
+        requirement.put("statementSha256", CONTINUED_USE_STATEMENT_SHA256);
+        requirement.putArray("documents").add("privacidad");
+        requirement.put("required", true);
+        requirement.put("requiresReacceptance", true);
     }
 
     private static boolean containsText(ArrayNode values, String expected) {
@@ -1241,6 +1384,18 @@ final class LegalEditorialProcessFixture {
     }
 
     record SequenceState(long lastValue, boolean called) {
+    }
+
+    private record AggregateScope(
+            ContextoLegal context,
+            UUID requiredSetId,
+            UUID publicationId,
+            String requiredSetRevision) {
+    }
+
+    private record PersistedAcceptanceAggregate(
+            UUID id,
+            String requiredSetRevision) {
     }
 
     private record DocumentVersionBase(

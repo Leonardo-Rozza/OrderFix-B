@@ -115,6 +115,7 @@ class LegalManifestImportProcessIT {
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
+                .target("27")
                 .load()
                 .migrate();
         owner = new JdbcTemplate(new DriverManagerDataSource(

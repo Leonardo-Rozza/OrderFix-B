@@ -204,6 +204,22 @@ final class LegalManifestDatabaseGate {
         }
     }
 
+    /** Accredits the exact schema/privilege pair used by the isolated aggregate context. */
+    void requireExactAggregatePreflights(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema,
+            LegalDatabasePreflight privileges) {
+        if (jdbc != candidate
+                || preflights.size() != 2
+                || preflights.get(0) != schema
+                || preflights.get(1) != privileges
+                || !schema.usesJdbc(candidate)
+                || !privileges.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "El contexto agregado requiere schema y privilegios acreditados y ordenados");
+        }
+    }
+
     /** Accredits the exact immutable boundary and preflight graph used by reconciliation. */
     void requireExactEditorialReconciliationBoundary(
             JdbcTemplate candidate,

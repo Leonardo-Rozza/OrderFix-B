@@ -70,6 +70,7 @@ class LegalImportPrivilegeVerifierIT {
         Flyway.configure()
                 .dataSource(jdbcUrl, ownerUsername, ownerPassword)
                 .locations("classpath:db/migration")
+                .target("27")
                 .load()
                 .migrate();
         owner = jdbc(jdbcUrl, ownerUsername, ownerPassword);

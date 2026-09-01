@@ -80,6 +80,15 @@ final class LegalManifestPersistenceITSupport {
         Flyway.configure()
                 .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .locations("classpath:db/migration")
+                .target("27")
+                .load()
+                .migrate();
+    }
+
+    static void migrateLatest(PostgreSQLContainer postgres) {
+        Flyway.configure()
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+                .locations("classpath:db/migration")
                 .load()
                 .migrate();
     }

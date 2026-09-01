@@ -474,6 +474,7 @@ class LegalManifestCliProcessIT {
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
+                .target("27")
                 .load()
                 .migrate();
         assertThat(legalPublicationCount()).isZero();

@@ -42,6 +42,7 @@ class LegalV27ImportSchemaVerifierIT {
         Flyway.configure()
                 .dataSource(jdbcUrl, username, password)
                 .locations("classpath:db/migration")
+                .target("27")
                 .load()
                 .migrate();
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
@@ -76,6 +77,7 @@ class LegalV27ImportSchemaVerifierIT {
             Flyway.configure()
                     .dataSource(jdbcUrl, username, password)
                     .locations("classpath:db/migration")
+                    .target("27")
                     .schemas(schema)
                     .defaultSchema(schema)
                     .createSchemas(true)

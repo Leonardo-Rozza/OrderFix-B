@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.persistence.entity.legal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EsquemaRevisionLegal;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PerfilAgregadoLegal;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.UserRole;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -64,16 +66,31 @@ public class LegalAceptacionLote {
     @Column(name = "required_set_revision", nullable = false, updatable = false, length = 71)
     private String requiredSetRevision;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "revision_scheme", nullable = false, updatable = false, length = 20)
+    private EsquemaRevisionLegal revisionScheme;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "perfil", updatable = false, length = 30)
+    private PerfilAgregadoLegal perfil;
+
+    @Column(name = "agregado_id", updatable = false)
+    private UUID agregadoId;
+
     @Column(name = "aceptado_en", nullable = false, updatable = false)
     @Generated(event = EventType.INSERT, writable = true)
     private Instant aceptadoEn;
 
     public LegalAceptacionLote(Long userId, Long tallerId, UserRole rolWire,
+                               PerfilAgregadoLegal perfil, UUID agregadoId,
                                String requiredSetRevision, Instant aceptadoEn) {
         this.userId = Objects.requireNonNull(userId);
         this.tallerId = Objects.requireNonNull(tallerId);
         this.rolWire = Objects.requireNonNull(rolWire);
         this.audiencia = rolWire.toAudienciaLegal();
+        this.revisionScheme = EsquemaRevisionLegal.AGGREGATE_V1;
+        this.perfil = Objects.requireNonNull(perfil);
+        this.agregadoId = Objects.requireNonNull(agregadoId);
         this.requiredSetRevision = Objects.requireNonNull(requiredSetRevision);
         this.aceptadoEn = Objects.requireNonNull(aceptadoEn);
     }
