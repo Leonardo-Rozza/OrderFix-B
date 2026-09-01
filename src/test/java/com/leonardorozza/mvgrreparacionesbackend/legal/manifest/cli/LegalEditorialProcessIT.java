@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.Artifacts;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.ProcessResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.EditorialConnection;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.OwnerSnapshot;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.PlanArtifact;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRestrictedEditorialRoleFixture;
@@ -22,6 +23,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -46,6 +51,10 @@ class LegalEditorialProcessIT {
             "legal_aceptacion_metadatos",
             "legal_aceptacion_metadatos_cifrados",
             "legal_idempotencia_resultados");
+    private static final Set<String> PROTECTED_HTTP_SEQUENCES = Set.of(
+            "legal_aceptacion_documentos_id_seq",
+            "legal_aceptacion_metadatos_cifrados_id_seq",
+            "legal_idempotencia_resultados_id_seq");
     private static final Set<String> EXPECTED_LEGAL_TABLES = Set.of(
             "legal_publicaciones",
             "legal_documento_reemplazo_lotes",
@@ -518,6 +527,233 @@ class LegalEditorialProcessIT {
         assertThat(fixture.digestPlan(retirement)).isEqualTo(retirement.fileSha256());
     }
 
+    @Test
+    void rejectsNonMinimalDatabaseRolesBeforeReplaceWithoutTouchingHttpState()
+            throws Exception {
+        ReplacementScenario scenario = prepareReplacementScenario(
+                "role-security-source-v1",
+                "role-security-target-v2");
+        fixture.seedProtectedHttpState(scenario.source());
+        OwnerSnapshot protectedState = fixture.snapshotOwner();
+        assertProtectedHttpStateSeeded(protectedState);
+
+        EditorialConnection importer = new EditorialConnection(
+                importCredentials.jdbcUrl(),
+                importCredentials.username(),
+                importCredentials.password(),
+                importCredentials.driverClassName());
+        assertRolePrivilegeDrift(scenario, importer, protectedState);
+
+        EditorialConnection databaseOwner = new EditorialConnection(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword(),
+                POSTGRES.getDriverClassName());
+        assertRolePrivilegeDrift(scenario, databaseOwner, protectedState);
+
+        String editorialRole = quotedIdentifier(EDITORIAL_ROLE);
+        owner.execute("GRANT SELECT ON SEQUENCE "
+                + "public.legal_documento_transiciones_id_seq TO "
+                + editorialRole);
+        try {
+            assertRolePrivilegeDrift(
+                    scenario,
+                    editorialConnection(),
+                    protectedState);
+        } finally {
+            owner.execute("REVOKE SELECT ON SEQUENCE "
+                    + "public.legal_documento_transiciones_id_seq FROM "
+                    + editorialRole);
+            editorialRoleFixture.verify();
+        }
+
+        owner.execute("ALTER ROLE " + editorialRole + " INHERIT");
+        try {
+            assertRolePrivilegeDrift(
+                    scenario,
+                    editorialConnection(),
+                    protectedState);
+        } finally {
+            owner.execute("ALTER ROLE " + editorialRole + " NOINHERIT");
+            editorialRoleFixture.verify();
+        }
+
+        assertThat(fixture.snapshotOwner()).isEqualTo(protectedState);
+        assertProtectedHttpStateSeeded(protectedState);
+    }
+
+    @Test
+    void rejectsEveryDatasourceSystemPropertyBeforeOpeningDatabaseSession()
+            throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source =
+                fixture.copyRelease("system-property-source-v1");
+        OwnerSnapshot before = fixture.snapshotOwner();
+        List<DatasourceProperty> forbiddenProperties = List.of(
+                new DatasourceProperty(
+                        "spring.datasource.url",
+                        "system-property-url-canary-must-never-leak"),
+                new DatasourceProperty(
+                        "spring.datasource.username",
+                        "system-property-username-canary-must-never-leak"),
+                new DatasourceProperty(
+                        "spring.datasource.password",
+                        "system-property-password-canary-must-never-leak"),
+                new DatasourceProperty(
+                        "spring.datasource.driver-class-name",
+                        "system-property-driver-canary-must-never-leak"));
+
+        try (Connection observer = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword())) {
+            long sessionsBefore = databaseSessions(observer);
+            for (DatasourceProperty property : forbiddenProperties) {
+                JsonNode rejected = assertSingleJson(
+                        fixture.executeEditorial(
+                                "apply-promote",
+                                source,
+                                List.of(property.jvmArgument())),
+                        3,
+                        3,
+                        "apply-promote",
+                        "ERROR",
+                        property.value());
+                assertKnownEditorialError(
+                        rejected,
+                        "PROMOTE",
+                        "EDITORIAL_DATASOURCE_SYSTEM_PROPERTY_FORBIDDEN");
+            }
+            assertThat(databaseSessions(observer)).isEqualTo(sessionsBefore);
+        }
+
+        assertThat(fixture.snapshotOwner()).isEqualTo(before);
+        assertThat(fixture.digestTree(source))
+                .isEqualTo(source.sha256ByRelativePath());
+    }
+
+    @Test
+    void realLauncherRemovesPreMainOptionsForReadinessAndApply() throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source =
+                fixture.copyRelease("launcher-source-v1");
+        assertSingleJson(
+                fixture.executeImport(source),
+                0,
+                2,
+                "import",
+                "PASS");
+        OwnerSnapshot before = fixture.snapshotOwner();
+
+        JsonNode readiness = assertSingleJson(
+                fixture.executeEditorialLauncher("readiness", source),
+                2,
+                3,
+                "readiness",
+                "BLOCKED");
+        assertThat(readiness.path("readiness").path("value").textValue())
+                .isEqualTo("NOT_READY");
+        assertThat(fixture.snapshotOwner()).isEqualTo(before);
+
+        JsonNode applied = assertSingleJson(
+                fixture.executeEditorialLauncher("apply-promote", source),
+                0,
+                3,
+                "apply-promote",
+                "PASS");
+        assertThat(applied.path("persisted").booleanValue()).isTrue();
+        assertOperation(applied, "PROMOTE", "APPLIED");
+        assertThat(applied.path("readiness").path("value").textValue())
+                .isEqualTo("READY");
+        assertNoIssues(applied);
+        assertStateMatchesDatabase(
+                applied,
+                "launcher-source-v1",
+                11,
+                6,
+                22,
+                12,
+                21,
+                8,
+                0);
+        assertThat(fixture.snapshotOwner()).isNotEqualTo(before);
+        assertThat(fixture.digestTree(source))
+                .isEqualTo(source.sha256ByRelativePath());
+    }
+
+    private ReplacementScenario prepareReplacementScenario(
+            String sourcePublicationId,
+            String targetPublicationId) throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source =
+                fixture.copyRelease(sourcePublicationId);
+        JsonNode imported = assertSingleJson(
+                fixture.executeImport(source),
+                0,
+                2,
+                "import",
+                "PASS");
+        assertThat(imported.path("import").path("outcome").textValue())
+                .isEqualTo("IMPORTED");
+        JsonNode promoted = assertSingleJson(
+                fixture.executeEditorial("apply-promote", source),
+                0,
+                3,
+                "apply-promote",
+                "PASS");
+        assertOperation(promoted, "PROMOTE", "APPLIED");
+
+        LegalEditorialProcessFixture.ReleaseArtifact target =
+                fixture.successor(source, targetPublicationId);
+        assertSingleJson(
+                fixture.executeImport(target),
+                0,
+                2,
+                "import",
+                "PASS");
+        JsonNode sourceReady = assertSingleJson(
+                fixture.executeEditorial("readiness", source),
+                0,
+                3,
+                "readiness",
+                "PASS");
+        String fingerprint = sourceReady.path("readiness")
+                .path("editorialStateFingerprint")
+                .textValue();
+        return new ReplacementScenario(
+                source,
+                target,
+                fixture.replacementPlan(source, target, fingerprint));
+    }
+
+    private void assertRolePrivilegeDrift(
+            ReplacementScenario scenario,
+            EditorialConnection connection,
+            OwnerSnapshot expectedState) throws Exception {
+        JsonNode rejected = assertSingleJson(
+                fixture.executeEditorial(
+                        "apply-replace",
+                        scenario.target(),
+                        scenario.plan(),
+                        connection,
+                        List.of()),
+                3,
+                3,
+                "apply-replace",
+                "ERROR");
+        assertKnownEditorialError(rejected, "REPLACE", "ROLE_PRIVILEGE_DRIFT");
+        assertPlanIdentity(rejected, scenario.plan(), false, "READY");
+        assertThat(fixture.snapshotOwner()).isEqualTo(expectedState);
+    }
+
+    private static void assertKnownEditorialError(
+            JsonNode report,
+            String operationType,
+            String issueCode) {
+        assertThat(report.path("persisted").booleanValue()).isFalse();
+        assertOperation(report, operationType, "ERROR");
+        assertThat(report.path("readiness").isNull()).isTrue();
+        assertThat(issueCodes(report)).containsExactly(issueCode);
+        assertThat(report.path("omittedIssueCount").intValue()).isZero();
+    }
+
     private static void assertOperation(
             JsonNode report,
             String expectedType,
@@ -701,6 +937,22 @@ class LegalEditorialProcessIT {
         }
     }
 
+    private static void assertProtectedHttpStateSeeded(OwnerSnapshot snapshot) {
+        for (String table : PROTECTED_HTTP_TABLES) {
+            assertThat(snapshot.rowsByTable().get(table))
+                    .as("tabla HTTP protegida sembrada %s", table)
+                    .isNotNull()
+                    .isNotEqualTo("[]");
+        }
+        for (String sequence : PROTECTED_HTTP_SEQUENCES) {
+            assertThat(snapshot.sequences().get(sequence))
+                    .as("secuencia HTTP protegida sembrada %s", sequence)
+                    .isNotNull()
+                    .extracting(LegalEditorialProcessFixture.SequenceState::called)
+                    .isEqualTo(true);
+        }
+    }
+
     private static void assertStateMatchesDatabase(
             JsonNode report,
             String publicationId,
@@ -797,12 +1049,40 @@ class LegalEditorialProcessIT {
         return Math.toIntExact(owner.queryForObject(sql, Long.class, publicationUuid));
     }
 
+    private static long databaseSessions(Connection observer) throws Exception {
+        try (Statement statement = observer.createStatement();
+             ResultSet result = statement.executeQuery("""
+                     SELECT sessions
+                       FROM pg_catalog.pg_stat_database
+                      WHERE datname = pg_catalog.current_database()
+                     """)) {
+            assertThat(result.next()).isTrue();
+            long sessions = result.getLong(1);
+            assertThat(result.next()).isFalse();
+            return sessions;
+        }
+    }
+
+    private static EditorialConnection editorialConnection() {
+        return new EditorialConnection(
+                editorialCredentials.jdbcUrl(),
+                editorialCredentials.username(),
+                editorialCredentials.password(),
+                editorialCredentials.driverClassName());
+    }
+
+    private static String quotedIdentifier(String identifier) {
+        assertThat(identifier).matches("[a-z][a-z0-9_]*");
+        return '"' + identifier + '"';
+    }
+
     private JsonNode assertSingleJson(
             ProcessResult process,
             int expectedExit,
             int expectedReportVersion,
             String expectedCommand,
-            String expectedStatus) throws Exception {
+            String expectedStatus,
+            String... extraCanaries) throws Exception {
         assertThat(process.timedOut()).isFalse();
         assertThat(process.wallDuration()).isLessThan(Duration.ofSeconds(70));
         assertThat(process.exitCode()).isEqualTo(expectedExit);
@@ -850,6 +1130,9 @@ class LegalEditorialProcessIT {
                             "Started ");
             assertThat(process.stdout())
                     .doesNotContain(fixture.outputCanaries().toArray(String[]::new));
+            if (extraCanaries.length > 0) {
+                assertThat(process.stdout()).doesNotContain(extraCanaries);
+            }
             return report;
         }
     }
@@ -885,5 +1168,23 @@ class LegalEditorialProcessIT {
                 "counts",
                 "issues",
                 "omittedIssueCount");
+    }
+
+    private record ReplacementScenario(
+            LegalEditorialProcessFixture.ReleaseArtifact source,
+            LegalEditorialProcessFixture.ReleaseArtifact target,
+            PlanArtifact plan) {
+    }
+
+    private record DatasourceProperty(String name, String value) {
+
+        private DatasourceProperty {
+            assertThat(name).startsWith("spring.datasource.");
+            assertThat(value).isNotBlank();
+        }
+
+        String jvmArgument() {
+            return "-D" + name + '=' + value;
+        }
     }
 }
