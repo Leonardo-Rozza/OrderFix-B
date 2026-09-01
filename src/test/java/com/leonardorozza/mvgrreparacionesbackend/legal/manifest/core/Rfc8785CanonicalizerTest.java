@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.erdtman.jcs.JsonCanonicalizer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -248,7 +249,20 @@ class Rfc8785CanonicalizerTest {
                 .containsExactlyInAnyOrder(
                         StrictJsonReader.StrictJsonDocument.class,
                         LegalRequiredSetProjection.class,
-                        LegalEditorialStateProjection.class);
+                        LegalEditorialStateProjection.class,
+                        LegalRequiredSetAggregateProjection.class,
+                        LegalRequiredSetAggregateProvenance.class)
+                .allSatisfy(type -> assertThat(type)
+                        .isNotIn(Object.class, String.class, JsonNode.class));
+
+        Arrays.stream(Rfc8785Canonicalizer.class.getDeclaredMethods())
+                .filter(method -> !Modifier.isPrivate(method.getModifiers()))
+                .flatMap(method -> Arrays.stream(method.getParameterTypes()))
+                .forEach(type -> assertThat(type).isNotIn(
+                        Object.class,
+                        String.class,
+                        byte[].class,
+                        JsonNode.class));
     }
 
     private static Stream<String> compatibleOfficialVectorNames() {

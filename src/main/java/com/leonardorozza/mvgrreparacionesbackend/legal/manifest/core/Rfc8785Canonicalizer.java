@@ -15,8 +15,8 @@ import java.util.Objects;
 
 /**
  * Adaptador acotado de JCS: acepta JSON externo sólo después de {@link StrictJsonReader} y las
- * proyecciones internas tipadas del conjunto requerido y del estado editorial. No expone
- * entradas de texto, bytes o árboles JSON genéricos.
+ * proyecciones internas tipadas del conjunto requerido, sus agregados y el estado editorial. No
+ * expone entradas de texto, bytes o árboles JSON genéricos.
  */
 final class Rfc8785Canonicalizer {
 
@@ -88,6 +88,68 @@ final class Rfc8785Canonicalizer {
         } catch (IOException exception) {
             throw new IllegalStateException(
                     "No se pudo materializar la proyección legal canónica", exception);
+        }
+        return bytes.toByteArray();
+    }
+
+    /** Hashes one normalized semantic aggregate without a generic JSON tree. */
+    String canonicalize(LegalRequiredSetAggregateProjection projection) {
+        LegalRequiredSetAggregateProjection required = Objects.requireNonNull(
+                projection,
+                "projection");
+        MessageDigest digest = sha256Digest();
+        try (BufferedOutputStream output = new BufferedOutputStream(
+                new DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+            writeCanonicalAggregateProjection(required, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "No se pudo canonicalizar la revisión legal agregada", exception);
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /** Materializes semantic aggregate bytes only for golden/equivalence tests. */
+    byte[] canonicalUtf8(LegalRequiredSetAggregateProjection projection) {
+        LegalRequiredSetAggregateProjection required = Objects.requireNonNull(
+                projection,
+                "projection");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (BufferedOutputStream output = new BufferedOutputStream(bytes)) {
+            writeCanonicalAggregateProjection(required, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "No se pudo materializar la revisión legal agregada", exception);
+        }
+        return bytes.toByteArray();
+    }
+
+    /** Hashes one normalized physical provenance without a generic JSON tree. */
+    String canonicalize(LegalRequiredSetAggregateProvenance provenance) {
+        LegalRequiredSetAggregateProvenance required = Objects.requireNonNull(
+                provenance,
+                "provenance");
+        MessageDigest digest = sha256Digest();
+        try (BufferedOutputStream output = new BufferedOutputStream(
+                new DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+            writeCanonicalAggregateProvenance(required, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "No se pudo canonicalizar la procedencia legal agregada", exception);
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /** Materializes provenance bytes only for golden/equivalence tests. */
+    byte[] canonicalUtf8(LegalRequiredSetAggregateProvenance provenance) {
+        LegalRequiredSetAggregateProvenance required = Objects.requireNonNull(
+                provenance,
+                "provenance");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (BufferedOutputStream output = new BufferedOutputStream(bytes)) {
+            writeCanonicalAggregateProvenance(required, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "No se pudo materializar la procedencia legal agregada", exception);
         }
         return bytes.toByteArray();
     }
@@ -204,6 +266,72 @@ final class Rfc8785Canonicalizer {
                 output,
                 LegalRequiredSetRevisionCalculator.utcInstant(
                         document.effectiveAt().toInstant()));
+        output.write('}');
+    }
+
+    private static void writeCanonicalAggregateProjection(
+            LegalRequiredSetAggregateProjection projection,
+            OutputStream output) throws IOException {
+        writeAscii(output, "{\"audiencia\":");
+        writeJsonString(output, projection.audience().name());
+        writeAscii(output, ",\"locale\":");
+        writeJsonString(output, projection.locale().getCodigo());
+        writeAscii(output, ",\"revisionScheme\":");
+        writeJsonString(output, projection.revisionScheme().name());
+        writeAscii(output, ",\"scopes\":[");
+        boolean first = true;
+        for (LegalRequiredSetAggregateProjection.ScopeRevision scope : projection.scopes()) {
+            if (!first) {
+                output.write(',');
+            }
+            first = false;
+            writeCanonicalAggregateScopeRevision(scope, output);
+        }
+        writeAscii(output, "]}");
+    }
+
+    private static void writeCanonicalAggregateScopeRevision(
+            LegalRequiredSetAggregateProjection.ScopeRevision scope,
+            OutputStream output) throws IOException {
+        writeAscii(output, "{\"contexto\":");
+        writeJsonString(output, scope.context().name());
+        writeAscii(output, ",\"requiredSetRevision\":");
+        writeJsonString(output, scope.requiredSetRevision());
+        output.write('}');
+    }
+
+    private static void writeCanonicalAggregateProvenance(
+            LegalRequiredSetAggregateProvenance provenance,
+            OutputStream output) throws IOException {
+        writeAscii(output, "{\"audiencia\":");
+        writeJsonString(output, provenance.audience().name());
+        writeAscii(output, ",\"locale\":");
+        writeJsonString(output, provenance.locale().getCodigo());
+        writeAscii(output, ",\"perfil\":");
+        writeJsonString(output, provenance.profile().name());
+        writeAscii(output, ",\"provenanceScheme\":");
+        writeJsonString(output, LegalRequiredSetAggregateProvenance.PROVENANCE_SCHEME);
+        writeAscii(output, ",\"scopes\":[");
+        boolean first = true;
+        for (LegalRequiredSetAggregateProvenance.ScopeOrigin scope : provenance.scopes()) {
+            if (!first) {
+                output.write(',');
+            }
+            first = false;
+            writeCanonicalAggregateScopeOrigin(scope, output);
+        }
+        writeAscii(output, "]}");
+    }
+
+    private static void writeCanonicalAggregateScopeOrigin(
+            LegalRequiredSetAggregateProvenance.ScopeOrigin scope,
+            OutputStream output) throws IOException {
+        writeAscii(output, "{\"conjuntoId\":");
+        writeJsonString(output, scope.requiredSetId().toString());
+        writeAscii(output, ",\"contexto\":");
+        writeJsonString(output, scope.context().name());
+        writeAscii(output, ",\"publicacionId\":");
+        writeJsonString(output, scope.publicationId().toString());
         output.write('}');
     }
 

@@ -1,0 +1,18 @@
+{
+  "provenanceScheme": "AGGREGATE_PROVENANCE_V1",
+  "perfil": "AUTHENTICATED_PENDING",
+  "locale": "es-AR",
+  "audiencia": "USER",
+  "scopes": [
+    {
+      "contexto": "USO_CONTINUADO",
+      "conjuntoId": "10000000-0000-0000-0000-000000000001",
+      "publicacionId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "contexto": "ATESTACION_FOTOS",
+      "conjuntoId": "10000000-0000-0000-0000-000000000002",
+      "publicacionId": "20000000-0000-0000-0000-000000000002"
+    }
+  ]
+}

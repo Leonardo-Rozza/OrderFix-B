@@ -1,0 +1,15 @@
+{
+  "revisionScheme": "AGGREGATE_V1",
+  "locale": "es-AR",
+  "audiencia": "ADMIN_TITULAR",
+  "scopes": [
+    {
+      "contexto": "USO_CONTINUADO",
+      "requiredSetRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "contexto": "ATESTACION_FOTOS",
+      "requiredSetRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

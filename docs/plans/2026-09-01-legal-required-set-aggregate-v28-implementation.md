@@ -151,6 +151,7 @@ src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/Lega
 src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalApplicableScopeResolverTest.java
 src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalRequiredSetAggregateRevisionCalculatorTest.java
 src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/LegalRequiredSetAggregateProvenanceCalculatorTest.java
+src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/core/Rfc8785CanonicalizerTest.java
 src/test/resources/legal/manifest/required-set-aggregate-v1/projection.json
 src/test/resources/legal/manifest/required-set-aggregate-v1/canonical.json
 src/test/resources/legal/manifest/required-set-aggregate-v1/sha256.txt
