@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,6 +37,16 @@ class LegalManifestDatabaseGateTest {
             Instant.parse("2026-08-31T12:00:00.123456Z");
     private static final Instant OBSERVED_AT =
             Instant.parse("2026-08-31T12:00:01.654321Z");
+    private static final String EXCLUSIVE_LOCK_SQL = """
+            SELECT pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtextextended(?, 0)
+            )
+            """;
+    private static final String SHARED_LOCK_SQL = """
+            SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                pg_catalog.hashtextextended(?, 0)
+            )
+            """;
 
     @Test
     void ordersTimeoutsPreflightsEditorialLockAndCallback() {
@@ -63,10 +74,13 @@ class LegalManifestDatabaseGateTest {
         order.verify(privileges).verify();
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
         order.verify(jdbc).queryForList(
-                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(EXCLUSIVE_LOCK_SQL),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
         order.verify(callback).doInTransaction(any());
+        verify(jdbc, never()).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         verify(jdbc, never()).queryForObject(
                 "SELECT transaction_timestamp()",
                 OffsetDateTime.class);
@@ -116,7 +130,7 @@ class LegalManifestDatabaseGateTest {
     }
 
     @Test
-    void mutableGateAccreditsEffectiveModeBeforeTheSharedProtectedGraph() {
+    void mutableGateAccreditsEffectiveModeBeforeTheExclusiveProtectedGraph() {
         DataSource dataSource = mock(DataSource.class);
         TransactionTemplate transaction = executingMutableTransaction(dataSource);
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -152,7 +166,7 @@ class LegalManifestDatabaseGateTest {
         order.verify(schema).verify();
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
         order.verify(jdbc).queryForList(
-                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(EXCLUSIVE_LOCK_SQL),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
         order.verify(jdbc).queryForObject(
@@ -164,6 +178,212 @@ class LegalManifestDatabaseGateTest {
         order.verify(callback).doInTransaction(
                 any(),
                 eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+        verify(jdbc, never()).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+    }
+
+    @Test
+    void sharedMutableGateKeepsTheAccreditedOrderAndUsesTheExactSharedLock() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, dataSource);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        stubTimeBoundary(jdbc);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        when(callback.doInTransaction(any(), any())).thenReturn("aggregate");
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema));
+
+        String result = gate.executeMutableShared(callback);
+
+        assertThat(result).isEqualTo("aggregate");
+        InOrder order = inOrder(jdbc, schema, callback);
+        order.verify(jdbc).execute("SET LOCAL statement_timeout TO '30s'");
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class);
+        order.verify(schema).verify();
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
+        order.verify(jdbc).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
+        order.verify(jdbc).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        order.verify(jdbc).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
+        order.verify(callback).doInTransaction(
+                any(),
+                eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+        verify(jdbc, never()).queryForList(
+                eq(EXCLUSIVE_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+    }
+
+    @Test
+    void sharedMutableGateRejectsAnUnsafeDeclaredBoundaryBeforeOpeningPostgres() {
+        DataSource dataSource = mock(DataSource.class);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate unsafe = safeImportTransaction(manager);
+        unsafe.setReadOnly(true);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                unsafe,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verify(jdbc, never()).execute(anyString());
+        verify(jdbc, never()).queryForList(
+                anyString(),
+                org.mockito.ArgumentMatchers.<Object[]>any());
+        verifyNoInteractions(callback);
+    }
+
+    @Test
+    void sharedMutableGateRejectsEveryInvalidEffectiveModeBeforePreflights() {
+        assertEffectiveSharedMutableModeRejected("repeatable read", "off");
+        assertEffectiveSharedMutableModeRejected("read committed", "on");
+        assertEffectiveSharedMutableModeRejected(null, "off");
+        assertEffectiveSharedMutableModeRejected("read committed", null);
+    }
+
+    @Test
+    void sharedMutableGateFailsClosedWhenAPreflightFails() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, dataSource);
+        LegalDatabasePreflight failing = mock(LegalDatabasePreflight.class);
+        IllegalStateException failure = new IllegalStateException("aggregate schema drift");
+        org.mockito.Mockito.doThrow(failure).when(failing).verify();
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(failing));
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback)).isSameAs(failure);
+
+        verify(jdbc, never()).queryForList(
+                anyString(),
+                org.mockito.ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        verifyNoInteractions(callback);
+    }
+
+    @Test
+    void sharedMutableGatePropagatesLockFailureWithoutFallbackClocksOrCallback() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, dataSource);
+        IllegalStateException failure = new IllegalStateException("shared lock timeout");
+        org.mockito.Mockito.doThrow(failure).when(jdbc).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback)).isSameAs(failure);
+
+        verify(jdbc, times(1)).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        verify(jdbc, never()).queryForList(
+                eq(EXCLUSIVE_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        verify(jdbc, never()).execute("SET LOCAL lock_timeout TO '5s'");
+        verify(jdbc, never()).queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class);
+        verify(jdbc, never()).queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class);
+        verifyNoInteractions(callback);
+    }
+
+    @Test
+    void sharedMutableGateRejectsInvalidClockCausalityBeforeCallback() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, dataSource);
+        when(jdbc.queryForObject(
+                "SELECT transaction_timestamp()",
+                OffsetDateTime.class)).thenReturn(
+                        OffsetDateTime.ofInstant(OBSERVED_AT, ZoneOffset.UTC));
+        when(jdbc.queryForObject(
+                "SELECT statement_timestamp()",
+                OffsetDateTime.class)).thenReturn(
+                        OffsetDateTime.ofInstant(TRANSACTION_AT, ZoneOffset.UTC));
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verify(jdbc).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        verifyNoInteractions(callback);
+    }
+
+    @Test
+    void sharedMutableCallbackFailureEscapesOnceWithoutRetry() {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, dataSource);
+        stubTimeBoundary(jdbc);
+        IllegalStateException failure = new IllegalStateException("aggregate writer failed");
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        when(callback.doInTransaction(any(), any())).thenThrow(failure);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of());
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback)).isSameAs(failure);
+
+        verify(transaction, times(1)).execute(any());
+        verify(jdbc, times(1)).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
+        verify(callback, times(1)).doInTransaction(any(), any());
     }
 
     @Test
@@ -175,7 +395,7 @@ class LegalManifestDatabaseGateTest {
     }
 
     @Test
-    void readOnlyGateAccreditsTheEffectiveModeBeforeTheSharedProtectedGraph() {
+    void readOnlyGateAccreditsEffectiveModeBeforeTheExclusiveProtectedGraph() {
         DataSource dataSource = mock(DataSource.class);
         TransactionTemplate transaction = executingReadOnlyTransaction(dataSource);
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -211,7 +431,7 @@ class LegalManifestDatabaseGateTest {
         order.verify(schema).verify();
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
         order.verify(jdbc).queryForList(
-                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(EXCLUSIVE_LOCK_SQL),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
         order.verify(jdbc).queryForObject(
@@ -223,6 +443,9 @@ class LegalManifestDatabaseGateTest {
         order.verify(callback).doInTransaction(
                 any(),
                 eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+        verify(jdbc, never()).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
     }
 
     @Test
@@ -264,7 +487,7 @@ class LegalManifestDatabaseGateTest {
         order.verify(privileges).verify();
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '30s'");
         order.verify(jdbc).queryForList(
-                org.mockito.ArgumentMatchers.contains("pg_advisory_xact_lock"),
+                eq(EXCLUSIVE_LOCK_SQL),
                 eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
         order.verify(jdbc).execute("SET LOCAL lock_timeout TO '5s'");
         order.verify(jdbc).queryForObject(
@@ -276,6 +499,9 @@ class LegalManifestDatabaseGateTest {
         order.verify(callback).doInTransaction(
                 any(),
                 eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+        verify(jdbc, never()).queryForList(
+                eq(SHARED_LOCK_SQL),
+                eq(LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME));
     }
 
     @Test
@@ -772,6 +998,37 @@ class LegalManifestDatabaseGateTest {
         verifyNoInteractions(schema, callback);
     }
 
+    private static void assertEffectiveSharedMutableModeRejected(
+            String isolation,
+            String readOnly) {
+        DataSource dataSource = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(dataSource);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn(isolation);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn(readOnly);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        LegalManifestDatabaseGate gate = new LegalManifestDatabaseGate(
+                transaction,
+                jdbc,
+                LegalDatabaseBudgets.production(),
+                List.of(schema));
+
+        assertThatThrownBy(() -> gate.executeMutableShared(callback))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(jdbc).execute("SET LOCAL statement_timeout TO '30s'");
+        verify(jdbc, never()).queryForList(
+                anyString(),
+                org.mockito.ArgumentMatchers.<Object[]>any());
+        verifyNoInteractions(schema, callback);
+    }
+
     private static LegalManifestDatabaseGate gateFor(
             DataSourceTransactionManager transactionManager) {
         DataSource dataSource = transactionManager.getDataSource();
@@ -838,6 +1095,16 @@ class LegalManifestDatabaseGateTest {
                 "SELECT statement_timestamp()",
                 OffsetDateTime.class)).thenReturn(
                         OffsetDateTime.ofInstant(OBSERVED_AT, ZoneOffset.UTC));
+    }
+
+    private static void stubMutableMode(JdbcTemplate jdbc, DataSource dataSource) {
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')",
+                String.class)).thenReturn("read committed");
+        when(jdbc.queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')",
+                String.class)).thenReturn("off");
     }
 
     private static TransactionTemplate safeImportTransaction(

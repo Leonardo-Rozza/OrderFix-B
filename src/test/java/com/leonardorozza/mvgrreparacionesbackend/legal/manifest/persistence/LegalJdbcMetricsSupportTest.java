@@ -272,6 +272,7 @@ class LegalJdbcMetricsSupportTest {
         Connection connection = support.dataSource().getConnection();
 
         execute(connection, "SELECT pg_catalog.pg_advisory_xact_lock(?)");
+        execute(connection, "SELECT pg_catalog.pg_advisory_xact_lock_shared(?)");
         execute(connection, "SELECT id FROM legal_publicaciones FOR UPDATE");
         execute(connection, "SET LOCAL statement_timeout TO '30s'");
         execute(connection, "INSERT INTO legal_publicaciones(id) VALUES (?)");
@@ -280,7 +281,7 @@ class LegalJdbcMetricsSupportTest {
         execute(connection, "VACUUM ANALYZE legal_publicaciones");
         LegalJdbcMetricsSupport.Snapshot snapshot = support.snapshot();
 
-        assertThat(snapshot.executions(ADVISORY_LOCK)).isEqualTo(1L);
+        assertThat(snapshot.executions(ADVISORY_LOCK)).isEqualTo(2L);
         assertThat(snapshot.executions(ROW_LOCK)).isEqualTo(1L);
         assertThat(snapshot.executions(TX_CONTROL)).isEqualTo(1L);
         assertThat(snapshot.executions(DML)).isEqualTo(1L);
@@ -293,6 +294,12 @@ class LegalJdbcMetricsSupportTest {
         assertThat(snapshot.maximumStatementDuration())
                 .isGreaterThanOrEqualTo(snapshot.maximumAdvisoryLockDuration());
         assertThat(snapshot.maximumStatementDuration()).isLessThan(Duration.ofSeconds(5));
+        assertThat(LegalJdbcMetricsSupport.categoryOf(
+                "SELECT pg_catalog.pg_advisory_xact_lock(?)"))
+                .isEqualTo(ADVISORY_LOCK);
+        assertThat(LegalJdbcMetricsSupport.categoryOf(
+                "SELECT pg_catalog.pg_advisory_xact_lock_shared(?)"))
+                .isEqualTo(ADVISORY_LOCK);
     }
 
     @Test

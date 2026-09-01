@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 
-/** Coordinates the shared transaction, preflights and editorial lock around legal graph access. */
+/** Coordinates one transaction, its preflights and the editorial lock around legal graph access. */
 final class LegalManifestDatabaseGate {
 
     static final String EDITORIAL_LOCK_NAME = "ordenfix:legal-publicaciones:sello:v1";
@@ -53,12 +53,30 @@ final class LegalManifestDatabaseGate {
      * timeout and cooperative-lock protocol.</p>
      */
     <T> T executeMutable(EditorialTransactionCallback<T> protectedCallback) {
+        return executeAccreditedMutable(protectedCallback, AdvisoryLockMode.EXCLUSIVE);
+    }
+
+    /**
+     * Executes one V28 mutation while coexisting with other accredited shared readers/writers.
+     *
+     * <p>The boundary remains writable and commit-sensitive. Only the transaction-scoped advisory
+     * lock mode changes; all budgets, preflights, effective-mode checks and authoritative clocks
+     * remain identical to the exclusive mutable boundary.</p>
+     */
+    <T> T executeMutableShared(EditorialTransactionCallback<T> protectedCallback) {
+        return executeAccreditedMutable(protectedCallback, AdvisoryLockMode.SHARED);
+    }
+
+    private <T> T executeAccreditedMutable(
+            EditorialTransactionCallback<T> protectedCallback,
+            AdvisoryLockMode lockMode) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
+        Objects.requireNonNull(lockMode, "lockMode");
         requireCommitOutcomeSafe();
         return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
             requireEffectiveMutableTransaction();
-            enterProtectedGraphAfterStatementBudget();
+            enterProtectedGraphAfterStatementBudget(lockMode);
             return protectedCallback.doInTransaction(
                     status,
                     readEditorialTimeBoundary());
@@ -244,18 +262,33 @@ final class LegalManifestDatabaseGate {
 
     private void enterProtectedGraph() {
         setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
-        enterProtectedGraphAfterStatementBudget();
+        enterProtectedGraphAfterStatementBudget(AdvisoryLockMode.EXCLUSIVE);
     }
 
     private void enterProtectedGraphAfterStatementBudget() {
+        enterProtectedGraphAfterStatementBudget(AdvisoryLockMode.EXCLUSIVE);
+    }
+
+    private void enterProtectedGraphAfterStatementBudget(AdvisoryLockMode lockMode) {
         preflights.forEach(LegalDatabasePreflight::verify);
         setLocalTimeout("lock_timeout", budgets.editorialLockTimeoutSeconds());
-        jdbc.queryForList("""
-                SELECT pg_catalog.pg_advisory_xact_lock(
-                    pg_catalog.hashtextextended(?, 0)
-                )
-                """, EDITORIAL_LOCK_NAME);
+        jdbc.queryForList(advisoryLockSql(lockMode), EDITORIAL_LOCK_NAME);
         setLocalTimeout("lock_timeout", budgets.graphLockTimeoutSeconds());
+    }
+
+    private static String advisoryLockSql(AdvisoryLockMode lockMode) {
+        return switch (Objects.requireNonNull(lockMode, "lockMode")) {
+            case EXCLUSIVE -> """
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """;
+            case SHARED -> """
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(?, 0)
+                    )
+                    """;
+        };
     }
 
     private void setLocalTimeout(String setting, int seconds) {
@@ -270,5 +303,10 @@ final class LegalManifestDatabaseGate {
         T doInTransaction(
                 TransactionStatus status,
                 LegalEditorialTimeBoundary boundary);
+    }
+
+    private enum AdvisoryLockMode {
+        EXCLUSIVE,
+        SHARED
     }
 }

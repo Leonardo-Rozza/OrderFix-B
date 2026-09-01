@@ -88,7 +88,8 @@ final class LegalJdbcMetricsSupport {
 
     static Category categoryOf(String sql) {
         String normalized = normalizeSql(sql).toLowerCase(java.util.Locale.ROOT);
-        if (normalized.contains("pg_advisory_xact_lock(")
+        if (normalized.contains("pg_advisory_xact_lock_shared(")
+                || normalized.contains("pg_advisory_xact_lock(")
                 || normalized.contains("pg_try_advisory_xact_lock(")
                 || normalized.contains("pg_advisory_lock(")
                 || normalized.contains("pg_try_advisory_lock(")
