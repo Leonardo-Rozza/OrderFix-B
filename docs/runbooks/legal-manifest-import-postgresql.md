@@ -9,6 +9,11 @@ Este procedimiento configura una credencial PostgreSQL exclusiva para importar e
 sellado. La cuenta no es la de la aplicación, no es el owner de migraciones y no ejecuta Flyway.
 Sólo recibe las capacidades que `LegalImportPrivilegeVerifier` acredita en cada intento.
 
+El rol importador sólo importa y sella; no promueve, reemplaza ni retira. Debe permanecer separado
+del rol editorial, de la aplicación y del owner. La fase posterior usa otra credencial y se describe
+en [`legal-manifest-editorial-postgresql.md`](legal-manifest-editorial-postgresql.md). Nunca amplíe
+este perfil con los grants editoriales ni use el rol editorial para importar el grafo origen.
+
 El documento no contiene ni genera passwords. El rol debe existir y su secreto debe provisionarse
 por el gestor de secretos del entorno antes de aplicar los grants. Use un rol nuevo, sin membresías,
 creado como `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`.
@@ -30,14 +35,18 @@ password ni valores sensibles a los logs.
   reotorgue explícitamente esa capacidad sólo a los roles de migración que realmente la necesitan.
 - La revocación de `PUBLIC EXECUTE` se limita a las 47 firmas legales de V27. Si otro rol operativo
   las necesita, concédaselas directamente en un cambio separado y documentado.
+- No sustituya esa lista por el `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC` del
+  fixture: sólo es seguro en la base efímera dedicada de pruebas. En un cluster compartido,
+  inventaríe también funciones adicionales y prepare revocaciones/regrants nominales revisados.
 - Un grant de parámetros a `PUBLIC` es global al clúster. Antes de revocarlo, confirme qué roles lo
   usan; `session_replication_role` no puede quedar disponible para la credencial importadora.
 - Ejecute el bloque con el owner de migraciones o un administrador autorizado, dentro de una
   ventana controlada. No lo ejecute con la credencial importadora.
 
-## Placeholders editables
+## Placeholders editables y schema fijo
 
-Revise estos tres valores antes de ejecutar el SQL:
+Revise la base y el rol antes de ejecutar el SQL. `schema_name` es un centinela fijo, no un tercer
+valor editable:
 
 ```sql
 \set ON_ERROR_STOP on
@@ -46,12 +55,9 @@ Revise estos tres valores antes de ejecutar el SQL:
 \set import_role 'EDITAR_ROL_IMPORTADOR'
 ```
 
-`schema_name` debe estar en minúsculas y cumplir `[a-z_][a-z0-9_]{0,62}`; el verifier rechaza
-cualquier otro identificador antes de consultar el catálogo.
-
-La configuración del contexto debe usar el mismo schema mediante
-`ordenfix.legal.import-schema`; el default es `public`. El username resuelto de la conexión debe
-coincidir exactamente con `import_role`.
+El JAR y el launcher operativos quedan fijados a `public`. El contexto aislado descarta selectores
+ambientales y no expone `ordenfix.legal.import-schema`, una variable ni un flag para cambiarlo. El
+username resuelto de la conexión debe coincidir exactamente con `import_role`.
 
 ## Precondiciones
 
@@ -318,8 +324,8 @@ con prefijo `spring.datasource.*` bloquea el comando aunque también existan var
 La invocación operativa usa el launcher POSIX versionado. Debe distribuirse como archivo executable
 junto al jar aprobado —Maven construye los jars, pero no empaqueta este script— y su checksum debe
 formar parte del artefacto de release. `ORDENFIX_LEGAL_CLI_JAR` apunta al jar exacto; el launcher
-agrega el comando `import` y acepta exactamente tres flags con forma `--nombre=valor`, en cualquier
-orden y una sola vez cada uno:
+agrega el comando `import` y reenvía los argumentos. El parser de la CLI exige exactamente tres
+flags con forma `--nombre=valor`, en cualquier orden y una sola vez cada uno:
 
 ```bash
 ORDENFIX_LEGAL_CLI_JAR=/ruta/aprobada/mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar \
@@ -344,8 +350,10 @@ retry confirma, o un fallo conocido.
 Un stdout ausente, truncado o inválido también deja el resultado operativo indeterminado, aunque el
 proceso termine con exit `3`; no lo convierta automáticamente en `UNKNOWN` ni infiera rollback. El
 caso acreditado de pipe cerrado ocurrió después del commit y el retry exacto devolvió
-`ALREADY_IMPORTED`. Capture stdout y stderr por separado, sin pipelines que puedan cerrar stdout,
-y aplique la misma reconciliación exacta.
+`ALREADY_IMPORTED`. Consulte primero con credenciales de observación y repita después el mismo
+bundle, manifiesto, `publicationId` y hash. Capture stdout y stderr mediante redirecciones directas
+y permisos restrictivos; no use `| tee`, `| jq` ni pipelines que puedan cerrar stdout u ocultar el
+exit code real.
 
 `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` y `_JAVA_OPTIONS` son interpretadas por la JVM antes de
 `main`. El launcher las elimina antes de iniciar Java y su ejecución directa quedó acreditada en el
@@ -392,7 +400,7 @@ Abra una conexión nueva usando la credencial importadora obtenida del gestor de
 password por argumentos del proceso ni lo guarde en este archivo.
 
 1. Confirme `SESSION_USER = CURRENT_USER = import_role`.
-2. Confirme que `SHOW search_path` devuelve `pg_catalog, <schema>, pg_temp`.
+2. Confirme que `SHOW search_path` devuelve `pg_catalog, public, pg_temp`.
 3. Ejecute el contexto de importación para que `LegalV27ImportSchemaVerifier` y
    `LegalImportPrivilegeVerifier` acrediten el catálogo y los privilegios efectivos.
 4. Ejecute primero el release aprobado y luego el replay idéntico. Espere `IMPORTED` y
@@ -412,11 +420,38 @@ Si cualquiera de los verifiers devuelve `IMPORT_DB_SCHEMA_INCOMPATIBLE` o
 objetos automáticamente. Compare este runbook con infraestructura como código, corrija mediante un
 cambio revisado y vuelva a abrir una conexión nueva.
 
+## Cierre de la credencial importadora
+
+Después del replay y de la verificación con observer, cierre primero el job y su ruta de red. Como
+administrador autorizado aplique `NOLOGIN`, inventaríe las sesiones exactas del rol, espere su
+drenaje o termine únicamente los PIDs nominalmente aprobados, confirme cero sesiones y recién
+entonces rote o invalide el secreto. `NOLOGIN` impide conexiones nuevas pero no cierra las ya
+existentes.
+
+```sql
+ALTER ROLE :"import_role" NOLOGIN;
+
+SELECT pid, datname, usename, application_name, client_addr, state,
+       backend_start, xact_start
+  FROM pg_catalog.pg_stat_activity
+ WHERE usename = :'import_role'
+ ORDER BY pid;
+
+SELECT pg_catalog.count(*) AS sesiones_restantes
+  FROM pg_catalog.pg_stat_activity
+ WHERE usename = :'import_role';
+```
+
+Si la política autoriza terminar sesiones, use sólo los PIDs observados para ese rol y esa ventana;
+no ejecute terminaciones por patrón amplio. El conteo debe ser `0` antes de rotar el secreto. Una
+nueva ventana requiere secreto nuevo, `LOGIN` restituido explícitamente y verificación completa con
+una conexión nueva.
+
 ## Evidencia de cierre
 
 Archive fuera de V27, con acceso restringido:
 
-- entorno, base, schema y rol (sin secreto);
+- entorno, base, schema fijo `public` y rol (sin secreto);
 - versión PostgreSQL y checksum V27 `1575269868`;
 - revisión y SHA-256 del jar CLI y del launcher pareados, más el modo executable del script;
 - identificadores del job y operador;
