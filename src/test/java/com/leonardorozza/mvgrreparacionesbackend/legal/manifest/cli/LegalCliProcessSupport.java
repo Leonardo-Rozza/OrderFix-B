@@ -15,11 +15,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+
+import static java.nio.file.StandardOpenOption.CREATE_NEW;
+import static java.nio.file.StandardOpenOption.WRITE;
 
 /** Shared subprocess boundary for packaged legal CLI integration tests. */
 final class LegalCliProcessSupport {
@@ -36,6 +45,11 @@ final class LegalCliProcessSupport {
     private static final int MAX_CAPTURE_BYTES = 1_048_576;
     private static final boolean WINDOWS = File.separatorChar == '\\';
     private static final String POSIX_LOCALE = "C.UTF-8";
+    private static final String STDOUT_FAILURE_AGENT_CLASS =
+            "com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli."
+                    + "LegalCliStdoutFailureAgent";
+    private static final String STDOUT_FAILURE_AGENT_ENTRY =
+            STDOUT_FAILURE_AGENT_CLASS.replace('.', '/') + ".class";
     static final String READER_THREAD_PREFIX = "ordenfix-legal-cli-reader-";
 
     private LegalCliProcessSupport() { }
@@ -72,6 +86,77 @@ final class LegalCliProcessSupport {
                 normalJar,
                 legalCliJar,
                 javaExecutable);
+    }
+
+    static String javaAgentArgument(Path agentJar, int prefixBytes) {
+        Path validatedAgentJar = Objects.requireNonNull(agentJar, "agentJar")
+                .toAbsolutePath()
+                .normalize();
+        requireRegularFile(validatedAgentJar, "agente de stdout");
+        if (prefixBytes < 0) {
+            throw new IllegalArgumentException(
+                    "prefixBytes no puede ser negativo");
+        }
+        if (validatedAgentJar.toString().contains("=")) {
+            throw new IllegalArgumentException(
+                    "La ruta del agente de stdout no puede contener '='");
+        }
+        return "-javaagent:" + validatedAgentJar + "=" + prefixBytes;
+    }
+
+    static Path createStdoutFailureAgentJar(Path directory) throws IOException {
+        Path validatedDirectory = Objects.requireNonNull(directory, "directory")
+                .toAbsolutePath()
+                .normalize();
+        if (!Files.isDirectory(validatedDirectory)) {
+            throw new IllegalArgumentException(
+                    "El directorio del agente de stdout no existe");
+        }
+        InputStream classBytes = LegalCliProcessSupport.class
+                .getClassLoader()
+                .getResourceAsStream(STDOUT_FAILURE_AGENT_ENTRY);
+        if (classBytes == null) {
+            throw new AssertionError(
+                    "No se encontraron los bytes compilados del agente de stdout");
+        }
+
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().putValue(
+                "Premain-Class",
+                STDOUT_FAILURE_AGENT_CLASS);
+        Path agentJar = validatedDirectory.resolve("stdout failure agent.jar");
+        try (classBytes;
+             JarOutputStream output = new JarOutputStream(
+                     Files.newOutputStream(agentJar, CREATE_NEW, WRITE),
+                     manifest)) {
+            JarEntry classEntry = new JarEntry(STDOUT_FAILURE_AGENT_ENTRY);
+            classEntry.setTime(0L);
+            output.putNextEntry(classEntry);
+            classBytes.transferTo(output);
+            output.closeEntry();
+        }
+
+        try (JarFile packagedAgent = new JarFile(agentJar.toFile())) {
+            Manifest packagedManifest = packagedAgent.getManifest();
+            if (packagedManifest == null
+                    || !STDOUT_FAILURE_AGENT_CLASS.equals(packagedManifest
+                    .getMainAttributes()
+                    .getValue("Premain-Class"))) {
+                throw new AssertionError(
+                        "El agente de stdout no conservó su Premain-Class");
+            }
+            Set<String> entries = packagedAgent.stream()
+                    .map(JarEntry::getName)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            if (!entries.equals(Set.of(
+                    "META-INF/MANIFEST.MF",
+                    STDOUT_FAILURE_AGENT_ENTRY))) {
+                throw new AssertionError(
+                        "El agente de stdout contiene entradas inesperadas");
+            }
+        }
+        return agentJar;
     }
 
     static ProcessResult executeJar(

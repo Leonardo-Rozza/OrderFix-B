@@ -6,8 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,27 +25,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.jar.Attributes;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
-import java.util.jar.JarOutputStream;
-import java.util.jar.Manifest;
 
 import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
-import static java.nio.file.StandardOpenOption.CREATE_NEW;
-import static java.nio.file.StandardOpenOption.WRITE;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LegalCliProcessSupportTest {
 
-    private static final String STDOUT_FAILURE_AGENT_CLASS =
-            "com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli."
-                    + "LegalCliStdoutFailureAgent";
-    private static final String STDOUT_FAILURE_AGENT_ENTRY =
-            STDOUT_FAILURE_AGENT_CLASS.replace('.', '/') + ".class";
     private static final String STDOUT_CONTRACT = "0123456789";
 
     @TempDir
@@ -110,13 +95,14 @@ class LegalCliProcessSupportTest {
     void capturesCompleteZeroAndExactPartialStdoutDeterministically() throws Exception {
         Path agentDirectory = Files.createDirectory(
                 temporaryDirectory.resolve("agent jar with spaces"));
-        Path agentJar = createStdoutFailureAgentJar(agentDirectory);
+        Path agentJar = LegalCliProcessSupport.createStdoutFailureAgentJar(
+                agentDirectory);
 
         ProcessResult complete = executeStdoutContract(List.of());
         ProcessResult empty = executeStdoutContract(List.of(
-                javaAgentArgument(agentJar, 0)), agentJar);
+                LegalCliProcessSupport.javaAgentArgument(agentJar, 0)), agentJar);
         ProcessResult partial = executeStdoutContract(List.of(
-                javaAgentArgument(agentJar, 7)), agentJar);
+                LegalCliProcessSupport.javaAgentArgument(agentJar, 7)), agentJar);
 
         assertThat(complete.exitCode()).isZero();
         assertThat(complete.timedOut()).isFalse();
@@ -140,6 +126,39 @@ class LegalCliProcessSupportTest {
         assertThat(partial.stderrBytes()).isEmpty();
         assertThat(partial.stdoutLimitExceeded()).isFalse();
         assertThat(partial.stderrLimitExceeded()).isFalse();
+    }
+
+    @Test
+    void validatesStdoutFailureAgentPathAndPrefixBeforeJvmExecution()
+            throws Exception {
+        Path directory = Files.createDirectory(
+                temporaryDirectory.resolve("validated agent with spaces"));
+        Path agent = LegalCliProcessSupport.createStdoutFailureAgentJar(directory);
+
+        assertThat(LegalCliProcessSupport.javaAgentArgument(agent, 78))
+                .isEqualTo("-javaagent:" + agent.toAbsolutePath().normalize() + "=78");
+        assertThatThrownBy(() -> LegalCliProcessSupport.javaAgentArgument(agent, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("prefixBytes no puede ser negativo");
+        assertThatThrownBy(() -> LegalCliProcessSupport.javaAgentArgument(
+                temporaryDirectory.resolve("missing-agent.jar"),
+                0))
+                .isInstanceOf(AssertionError.class)
+                .hasMessage("No se encontró el agente de stdout requerido");
+
+        Path equalsDirectory = Files.createDirectory(
+                temporaryDirectory.resolve("agent=ambiguous"));
+        Path ambiguousAgent = LegalCliProcessSupport.createStdoutFailureAgentJar(
+                equalsDirectory);
+        assertThatThrownBy(() -> LegalCliProcessSupport.javaAgentArgument(
+                ambiguousAgent,
+                0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("La ruta del agente de stdout no puede contener '='");
+        assertThatThrownBy(() -> LegalCliProcessSupport.createStdoutFailureAgentJar(
+                temporaryDirectory.resolve("missing-directory")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("El directorio del agente de stdout no existe");
     }
 
     @Test
@@ -401,49 +420,6 @@ class LegalCliProcessSupportTest {
         command.add(mode);
         command.addAll(List.of(arguments));
         return List.copyOf(command);
-    }
-
-    private static String javaAgentArgument(Path agentJar, int prefixBytes) {
-        return "-javaagent:" + agentJar.toAbsolutePath() + "=" + prefixBytes;
-    }
-
-    private static Path createStdoutFailureAgentJar(Path directory) throws IOException {
-        InputStream classBytes = LegalCliProcessSupportTest.class
-                .getClassLoader()
-                .getResourceAsStream(STDOUT_FAILURE_AGENT_ENTRY);
-        if (classBytes == null) {
-            throw new AssertionError(
-                    "No se encontraron los bytes compilados del agente de stdout");
-        }
-
-        Manifest manifest = new Manifest();
-        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        manifest.getMainAttributes().putValue(
-                "Premain-Class",
-                STDOUT_FAILURE_AGENT_CLASS);
-        Path agentJar = directory.resolve("stdout failure agent.jar");
-        try (classBytes;
-             JarOutputStream output = new JarOutputStream(
-                     Files.newOutputStream(agentJar, CREATE_NEW, WRITE),
-                     manifest)) {
-            JarEntry classEntry = new JarEntry(STDOUT_FAILURE_AGENT_ENTRY);
-            classEntry.setTime(0L);
-            output.putNextEntry(classEntry);
-            classBytes.transferTo(output);
-            output.closeEntry();
-        }
-
-        try (JarFile packagedAgent = new JarFile(agentJar.toFile())) {
-            assertThat(packagedAgent.getManifest()
-                    .getMainAttributes()
-                    .getValue("Premain-Class"))
-                    .isEqualTo(STDOUT_FAILURE_AGENT_CLASS);
-            assertThat(packagedAgent.stream().map(JarEntry::getName).toList())
-                    .containsExactlyInAnyOrder(
-                            "META-INF/MANIFEST.MF",
-                            STDOUT_FAILURE_AGENT_ENTRY);
-        }
-        return agentJar;
     }
 
     private static void awaitMarker(Path marker, WatchService signals) throws Exception {
