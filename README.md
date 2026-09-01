@@ -11,13 +11,18 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > - **`docs/runbooks/cobros-consistencia.md`** — auditoría tenant-aware y saneamiento de cobros
 >   manuales históricos.
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
-> - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — decisiones y rollout del contrato
->   legal v1 congelado; persistencia e importación/sello internos listos, con APIs, aceptación y
->   enforcement todavía pendientes.
+> - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — contrato y rollout legal v1
+>   congelados; V27, importación/sello y los siete comandos editoriales internos están disponibles.
+>   Siguen pendientes V28, controllers/API, ETag/readiness público, aceptación, enforcement,
+>   contenido definitivo y staging.
 > - **`docs/plans/2026-08-25-legal-manifest-import-closure.md`** — cierre reproducible de la Fase
 >   2.3B y fronteras pendientes.
 > - **`docs/runbooks/legal-manifest-import-postgresql.md`** — operación PostgreSQL restringida del
 >   importador legal; no reemplaza la aprobación profesional ni la autorización del entorno.
+> - **`docs/runbooks/legal-manifest-editorial-postgresql.md`** — operación PostgreSQL restringida
+>   de readiness, planificación y apply para promoción, reemplazo y retiro. Es una capacidad
+>   editorial interna: no publica APIs ni acredita contenido real, readiness público, staging o
+>   deploy.
 
 ---
 
@@ -190,6 +195,7 @@ El `429` protege login, registro, recuperación/verificación, seguimiento públ
 | V24 | Alias, titular, entidad y visibilidad de datos de cobro por taller |
 | V25 | QR raster normalizado, aislado 1:1 por taller |
 | V26 | Tenant/roles válidos y un único ADMIN titular por taller |
+| V27 | Persistencia legal append-only para publicaciones, documentos, requisitos, transiciones y proyecciones editoriales internas |
 
 ---
 
@@ -272,5 +278,5 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/
 ├── persistence/       # entity/ (+ enums) y repository/
 ├── exceptions/        # GlobalExceptionHandler + excepciones de dominio
 └── utils/             # mappers (MapStruct) + jwt
-src/main/resources/db/migration/   # Flyway V1..V26
+src/main/resources/db/migration/   # Flyway V1..V27
 ```

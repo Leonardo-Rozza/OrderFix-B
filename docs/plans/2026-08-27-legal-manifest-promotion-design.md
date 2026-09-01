@@ -2,7 +2,8 @@
 
 Fecha: 2026-08-27
 
-Estado: diseño aprobado; implementación en curso, Cortes 1 y 2 completados
+Estado: diseño aprobado; Cortes 1–10 técnicos completados. El estado final de 2.3C se delega al
+documento de cierre del Corte 11; este diseño no anticipa ese cierre ni su evidencia.
 
 Continuidad:
 

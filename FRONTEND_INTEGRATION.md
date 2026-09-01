@@ -56,11 +56,12 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     opcional por taller; USER puede consultarlos, pero no modificarlos.
 18. **Resumen digital no fiscal** (§4.13): `GET /resumen-digital` reemplaza al recibo imprimible. El
     alias `/recibo` sigue temporalmente disponible con el mismo JSON, pero está deprecado.
-19. **Contrato legal v1 e importación interna segura** (§4.1.a): quedan definidos
-    documentos/requisitos versionados, evidencia propia, aceptación idempotente, `409`/`428` y
-    caché. La persistencia V27 y la CLI interna `validate`/`dry-run`/`import` están listas; `import`
-    deja la publicación `SELLADO`, conserva las versiones nuevas en `BORRADOR` y no promueve. Las
-    APIs, catálogo, readiness, aceptación y enforcement todavía no están habilitados.
+19. **Contrato legal v1 y operación interna segura** (§4.1.a): schema/persistencia V27 y las CLI
+    internas de validación, simulación, importación, promoción, reemplazo, retiro y readiness
+    editorial están implementadas. La operación editorial usa siete comandos y mantiene separada
+    la readiness interna del grafo respecto de la readiness pública. Siguen pendientes V28,
+    controllers/APIs legales, aceptación, seguridad/enforcement, contenido definitivo, staging y
+    deploy.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
@@ -201,14 +202,14 @@ Errores: `401` (email o contraseña incorrectos).
 > **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
 > de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
 
-### 4.1.a Legal versionado — contrato v1 congelado, importación interna disponible
+### 4.1.a Legal versionado — contrato v1 congelado y operación interna 2.3A–2.3C
 
-> **Estado al 2026-08-27:** las Fases 2.3A y 2.3B cerraron el schema, la persistencia append-only
-> V27 y una CLI interna capaz de validar, simular rollback-only e importar/sellar de forma
-> idempotente. El import deja versiones nuevas en `BORRADOR`: no promueve, no publica catálogo y no
-> habilita readiness ni enforcement. Las rutas de esta sección todavía no existen en runtime y el
-> registro histórico de §4.1 continúa activo; no actives la UI basándote solamente en esta
-> documentación.
+> **Estado al 2026-08-31:** 2.3A y 2.3B validan, simulan, importan y sellan; 2.3C permite planificar
+> y aplicar promoción, reemplazo o retiro y consultar readiness editorial mediante una CLI interna.
+> Esa readiness sólo inspecciona el grafo V27: no existe todavía V28, controllers/endpoints legales,
+> contenido real, staging, deploy ni readiness pública. Las rutas de esta sección siguen sin existir
+> en runtime, `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1
+> continúa activo. No actives la UI basándote solamente en esta documentación.
 
 #### Endpoints y autorización
 
@@ -1023,14 +1024,71 @@ El cierre reproducible y el runbook operativo están en
 El cierre previo de 2.3A, su matriz de pruebas y sus alcances están en
 `docs/plans/2026-08-25-legal-manifest-dry-run-closure.md`.
 
+#### CLI editorial interna (Fase 2.3C)
+
+Esta CLI es una operación de plataforma; el frontend no la invoca ni consume su salida. Se ejecuta
+exclusivamente mediante `scripts/legal-manifest-editor.sh`. En una operación real se fijan y
+verifican `ORDENFIX_LEGAL_CLI_JAR` y `ORDENFIX_JAVA_BIN`; no se invoca el JAR directamente ni se
+depende del fallback local a `target/`. Opera sobre PostgreSQL 16, V27 y el schema fijo `public`,
+con un rol editorial distinto del importador.
+
+El datasource editorial se recibe sólo por `ORDENFIX_LEGAL_EDITOR_DB_URL`,
+`ORDENFIX_LEGAL_EDITOR_DB_USERNAME`, `ORDENFIX_LEGAL_EDITOR_DB_PASSWORD` y el driver opcional
+`ORDENFIX_LEGAL_EDITOR_DB_DRIVER_CLASS_NAME`. Las propiedades `-Dspring.datasource.*` están
+prohibidas. `ORDENFIX_LEGAL_EDITOR_ENABLED=true` se inyecta únicamente en el proceso individual de
+cada `apply-*`, nunca como habilitación global para readiness o planificación.
+
+Los siete comandos exactos y case-sensitive son:
+
+```text
+readiness
+plan-promote
+apply-promote
+plan-replace
+apply-replace
+plan-retire
+apply-retire
+```
+
+`readiness`, `plan-promote` y `apply-promote` reciben exactamente `--manifest=<ruta>`,
+`--confirm-publication-id=<id>` y `--confirm-manifest-sha256=<64-hex>`. Los cuatro comandos de
+reemplazo/retiro agregan `--editorial-plan=<ruta>`, `--confirm-operation-id=<uuid>` y
+`--confirm-editorial-plan-sha256=<64-hex>`. Faltantes, extras o duplicados bloquean antes de JDBC.
+
+El reporte editorial v3 escribe un único JSON por stdout y mantiene stderr separado. El orden
+superior es:
+
+```text
+reportVersion, command, status, persisted, publication, operation, plan,
+readiness, counts, issues, omittedIssueCount
+```
+
+Los estados y exits son `PASS/0`, `BLOCKED/2` y `ERROR/3`. Un plan `APPLICABLE` no persiste; un
+apply exitoso devuelve `APPLIED` o `ALREADY_APPLIED` con `persisted=true`. Un retiro aplicado
+termina `NOT_READY` con exit `0` porque deja un hueco fail-closed deliberado; la consulta
+`readiness` posterior devuelve `NOT_READY` y exit `2`. `UNKNOWN` usa `persisted=null` y `ERROR/3` y
+exige observación más retry exacto, sin inferir rollback.
+
+El perfil PostgreSQL, las confirmaciones, la captura sin pipelines, la reconciliación y el cierre de
+credenciales están en `docs/runbooks/legal-manifest-editorial-postgresql.md`. Readiness editorial
+`READY` no abre una ruta HTTP ni acredita contenido, seguridad, staging o disponibilidad pública.
+
 #### Orden de rollout
 
-1. Backend agrega recursos y persistencia con enforcement apagado.
-2. Staging importa una publicación aprobada y valida ETag/readiness.
-3. Frontend integra lectura, historial, `409`, `428` y limpieza de caché privada.
-4. El registro nuevo empieza a enviar evidencia.
-5. Sólo con telemetría compatible se activa enforcement.
-6. Después se programa reaceptación; nunca se autoacepta a cuentas legacy.
+1. Mantener 2.3C como operación interna V27, sin exposición HTTP.
+2. Diseñar e implementar V28 multicontexto.
+3. Implementar controllers, catálogo, documentos, requisitos HTTP y ETag con enforcement apagado.
+4. Implementar aceptación y registro atómicos, incluidos `409` y `428`.
+5. Aplicar seguridad, CORS, rate limits y enforcement compatible, todavía desactivado hasta completar
+   la validación.
+6. Desplegar y migrar las capas backend compatibles en staging; luego importar/promover el release
+   definitivo aprobado y validar readiness pública y smokes remotos.
+7. Sólo entonces acreditar `BACKEND-HANDOFF 1`.
+8. Conectar la Tarea 3, desplegar un frontend compatible en staging y ejecutar E2E.
+9. Después decidir la activación productiva y la reaceptación, sin autoaceptar a cuentas legacy.
+
+La readiness editorial `READY` sólo inspecciona el grafo V27; no acredita V28, HTTP, aceptación,
+seguridad, staging ni disponibilidad pública.
 
 Las decisiones y lo que queda fuera de esta fase están documentados en
 `docs/plans/2026-08-23-legal-api-contract-v1-design.md`.
@@ -2102,10 +2160,11 @@ window.location.href = data.initPoint;
 - **Exportación a Excel** (§4.14): el ADMIN descarga todos los datos del taller en un `.xlsx`.
 - **Gating por plan**: inventario, cobros manuales/datos de cobro y multi-empleado son PRO
   (402 + mapa `funciones` en §4.2). Perfil y dashboard son FREE.
-- **Importación legal interna (Fases 2.3A–2.3B)**: schema v1, persistencia V27 y CLI aislada
-  `validate`/`dry-run`/`import`; el import es idempotente y sella el grafo con versiones nuevas en
-  `BORRADOR`. Todavía no existen las APIs legales, la promoción/readiness, las aceptaciones ni el
-  enforcement descritos en §4.1.a.
+- **Operación legal interna (Fases 2.3A–2.3C)**: schema v1, persistencia V27 y CLI aisladas para
+  `validate`, `dry-run`, `import`, promoción, reemplazo, retiro y readiness editorial. El import
+  sella versiones nuevas en `BORRADOR`; los siete comandos editoriales operan después sin exponer
+  HTTP. Todavía no existen V28, controllers/APIs legales, aceptaciones, seguridad/enforcement,
+  contenido definitivo, staging o deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
@@ -2213,6 +2272,9 @@ Usá esta lista para marcar qué está integrado en el repo del frontend.
       secretos de MP nunca existen en variables `VITE_*`.
 
 ### Legal versionado (cuando las APIs del backend estén implementadas)
+
+Estado: contrato de diseño; `BACKEND-HANDOFF 1` continúa cerrado y esta lista no describe runtime
+disponible.
 
 - [ ] El registro obtiene `REGISTRO/es-AR`, presenta todo el set y envía revisión, IDs, actos y
       digests con un `Idempotency-Key` estable por intento lógico.
