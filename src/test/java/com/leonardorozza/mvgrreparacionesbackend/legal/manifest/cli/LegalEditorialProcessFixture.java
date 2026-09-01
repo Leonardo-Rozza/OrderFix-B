@@ -194,8 +194,21 @@ final class LegalEditorialProcessFixture {
         return executeEditorial(
                 command,
                 release,
+                jvmArguments,
+                StdoutMode.CAPTURE);
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            List<String> jvmArguments,
+            StdoutMode stdoutMode) throws Exception {
+        return executeEditorial(
+                command,
+                release,
                 editorialConnection,
-                jvmArguments);
+                jvmArguments,
+                stdoutMode);
     }
 
     ProcessResult executeEditorial(
@@ -203,12 +216,27 @@ final class LegalEditorialProcessFixture {
             ReleaseArtifact release,
             EditorialConnection connection,
             List<String> jvmArguments) throws Exception {
+        return executeEditorial(
+                command,
+                release,
+                connection,
+                jvmArguments,
+                StdoutMode.CAPTURE);
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            EditorialConnection connection,
+            List<String> jvmArguments,
+            StdoutMode stdoutMode) throws Exception {
         return executeEditorialJar(
                 command,
                 release,
                 null,
                 connection,
-                jvmArguments);
+                jvmArguments,
+                stdoutMode);
     }
 
     ProcessResult executeEditorial(
@@ -247,7 +275,8 @@ final class LegalEditorialProcessFixture {
                 release,
                 Objects.requireNonNull(plan, "plan"),
                 connection,
-                jvmArguments);
+                jvmArguments,
+                StdoutMode.CAPTURE);
     }
 
     ProcessResult executeEditorialLauncher(
@@ -304,7 +333,8 @@ final class LegalEditorialProcessFixture {
             ReleaseArtifact release,
             PlanArtifact plan,
             EditorialConnection connection,
-            List<String> jvmArguments) throws Exception {
+            List<String> jvmArguments,
+            StdoutMode stdoutMode) throws Exception {
         String requiredCommand = requireVisibleToken(command, "command");
         ReleaseArtifact requiredRelease = Objects.requireNonNull(release, "release");
         EditorialConnection requiredConnection = Objects.requireNonNull(
@@ -313,13 +343,16 @@ final class LegalEditorialProcessFixture {
         List<String> requiredJvmArguments = List.copyOf(Objects.requireNonNull(
                 jvmArguments,
                 "jvmArguments"));
+        StdoutMode requiredStdoutMode = Objects.requireNonNull(
+                stdoutMode,
+                "stdoutMode");
         return LegalCliProcessSupport.executeJar(
                 artifacts,
                 temporaryDirectory,
                 requiredJvmArguments,
                 editorialArguments(requiredCommand, requiredRelease, plan),
                 editorialEnvironment(requiredConnection),
-                StdoutMode.CAPTURE);
+                requiredStdoutMode);
     }
 
     private List<String> editorialArguments(

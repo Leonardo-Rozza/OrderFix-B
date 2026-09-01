@@ -1,10 +1,12 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli;
 
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.Artifacts;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.ProcessResult;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalCliProcessSupport.StdoutMode;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.EditorialConnection;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.OwnerSnapshot;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalEditorialProcessFixture.PlanArtifact;
@@ -22,6 +24,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -34,9 +38,14 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Testcontainers
 class LegalEditorialProcessIT {
+
+    private static final String PARTIAL_APPLY_REPORT_PREFIX =
+            "{\"reportVersion\":3,\"command\":\"apply-promote\","
+                    + "\"status\":\"PASS\",\"persisted\":true,";
 
     private static final String IMPORT_ROLE = "ordenfix_legal_import_10e";
     private static final String IMPORT_PASSWORD =
@@ -677,6 +686,171 @@ class LegalEditorialProcessIT {
         assertThat(fixture.snapshotOwner()).isNotEqualTo(before);
         assertThat(fixture.digestTree(source))
                 .isEqualTo(source.sha256ByRelativePath());
+    }
+
+    @Test
+    void zeroByteStdoutFailureKeepsCommittedPromoteAndRetryConverges()
+            throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source = importedSource(
+                "stdout-zero-source-v1");
+        OwnerSnapshot before = fixture.snapshotOwner();
+        Path agent = stdoutFailureAgent();
+
+        ProcessResult failedOutput = fixture.executeEditorial(
+                "apply-promote",
+                source,
+                List.of(LegalCliProcessSupport.javaAgentArgument(agent, 0)),
+                StdoutMode.CAPTURE);
+
+        assertOutputFailure(failedOutput);
+        assertThat(failedOutput.stdoutBytes()).isEmpty();
+        assertCommittedPromoteAndRetry(source, before);
+    }
+
+    @Test
+    void partialStdoutFailureEmitsExactPrefixAndKeepsCommittedPromote()
+            throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source = importedSource(
+                "stdout-partial-source-v1");
+        OwnerSnapshot before = fixture.snapshotOwner();
+        Path agent = stdoutFailureAgent();
+        byte[] expectedPrefix = PARTIAL_APPLY_REPORT_PREFIX.getBytes(
+                StandardCharsets.UTF_8);
+        assertThat(expectedPrefix).hasSize(78);
+
+        ProcessResult failedOutput = fixture.executeEditorial(
+                "apply-promote",
+                source,
+                List.of(LegalCliProcessSupport.javaAgentArgument(
+                        agent,
+                        expectedPrefix.length)),
+                StdoutMode.CAPTURE);
+
+        assertOutputFailure(failedOutput);
+        assertThat(failedOutput.stdoutBytes()).containsExactly(expectedPrefix);
+        assertThat(failedOutput.stdout())
+                .isEqualTo(PARTIAL_APPLY_REPORT_PREFIX)
+                .doesNotContain("\n", "UNKNOWN")
+                .doesNotContain("}{");
+        assertThat(failedOutput.stdout().chars()
+                .filter(character -> character == '{')
+                .count()).isOne();
+        assertThatThrownBy(() -> JSON.readTree(failedOutput.stdout()))
+                .isInstanceOf(JsonProcessingException.class);
+        assertCommittedPromoteAndRetry(source, before);
+    }
+
+    @Test
+    void closedStdoutPipeSupplementallyKeepsCommittedPromote() throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source = importedSource(
+                "stdout-closed-pipe-source-v1");
+        OwnerSnapshot before = fixture.snapshotOwner();
+
+        ProcessResult failedOutput = fixture.executeEditorial(
+                "apply-promote",
+                source,
+                List.of(),
+                StdoutMode.CLOSE_IMMEDIATELY);
+
+        assertOutputFailure(failedOutput);
+        assertThat(failedOutput.stdoutBytes()).isEmpty();
+        assertCommittedPromoteAndRetry(source, before);
+    }
+
+    private LegalEditorialProcessFixture.ReleaseArtifact importedSource(
+            String publicationId) throws Exception {
+        LegalEditorialProcessFixture.ReleaseArtifact source =
+                fixture.copyRelease(publicationId);
+        JsonNode imported = assertSingleJson(
+                fixture.executeImport(source),
+                0,
+                2,
+                "import",
+                "PASS");
+        assertThat(imported.path("persisted").booleanValue()).isTrue();
+        assertThat(imported.path("import").path("outcome").textValue())
+                .isEqualTo("IMPORTED");
+        return source;
+    }
+
+    private Path stdoutFailureAgent() throws Exception {
+        Path directory = Files.createDirectories(
+                temporaryDirectory.resolve("stdout agent with spaces"));
+        return LegalCliProcessSupport.createStdoutFailureAgentJar(directory);
+    }
+
+    private static void assertOutputFailure(ProcessResult process) {
+        assertThat(process.timedOut()).isFalse();
+        assertThat(process.wallDuration()).isLessThan(Duration.ofSeconds(70));
+        assertThat(process.exitCode()).isEqualTo(3);
+        assertThat(process.stdoutLimitExceeded()).isFalse();
+        assertThat(process.stderrLimitExceeded()).isFalse();
+        assertThat(process.stderrBytes()).isEmpty();
+    }
+
+    private void assertCommittedPromoteAndRetry(
+            LegalEditorialProcessFixture.ReleaseArtifact source,
+            OwnerSnapshot before) throws Exception {
+        assertPromotedDatabaseState(
+                source.release().plan().manifest().publicationId());
+        OwnerSnapshot committed = fixture.snapshotOwner();
+        assertThat(committed).isNotEqualTo(before);
+        assertProtectedRowsUnchanged(before, committed);
+
+        JsonNode retry = assertSingleJson(
+                fixture.executeEditorial("apply-promote", source),
+                0,
+                3,
+                "apply-promote",
+                "PASS");
+        assertThat(retry.path("persisted").booleanValue()).isTrue();
+        assertOperation(retry, "PROMOTE", "ALREADY_APPLIED");
+        assertThat(retry.path("readiness").path("value").textValue())
+                .isEqualTo("READY");
+        assertStateMatchesDatabase(
+                retry,
+                source.release().plan().manifest().publicationId(),
+                11,
+                6,
+                22,
+                12,
+                21,
+                8,
+                0);
+        assertNoIssues(retry);
+        assertThat(fixture.snapshotOwner()).isEqualTo(committed);
+        assertThat(fixture.digestTree(source))
+                .isEqualTo(source.sha256ByRelativePath());
+    }
+
+    private static void assertPromotedDatabaseState(String publicationId) {
+        assertThat(owner.queryForObject("""
+                SELECT count(*)
+                  FROM legal_publicaciones
+                 WHERE publication_external_id = ?
+                   AND estado_construccion = 'SELLADO'
+                """, Long.class, publicationId)).isEqualTo(1L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_documento_versiones",
+                Long.class)).isEqualTo(11L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_requisito_versiones",
+                Long.class)).isEqualTo(6L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_documento_transiciones",
+                Long.class)).isEqualTo(22L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_requisito_transiciones",
+                Long.class)).isEqualTo(12L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_documento_vigentes",
+                Long.class)).isEqualTo(21L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_requisito_conjuntos_actuales",
+                Long.class)).isEqualTo(8L);
+        assertThat(owner.queryForObject(
+                "SELECT count(*) FROM legal_documento_reemplazo_lotes",
+                Long.class)).isZero();
     }
 
     private ReplacementScenario prepareReplacementScenario(
