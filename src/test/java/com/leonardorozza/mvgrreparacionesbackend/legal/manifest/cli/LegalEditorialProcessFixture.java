@@ -17,6 +17,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalManife
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRestrictedEditorialRoleFixture;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRestrictedImportRoleFixture;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -56,6 +58,14 @@ final class LegalEditorialProcessFixture {
             "editorial-process-secret-must-never-leak";
     private static final String LEGACY_DATASOURCE_SECRET =
             "legacy-datasource-secret-must-never-leak";
+    private static final String LAUNCHER_URL_CANARY =
+            "launcher-editorial-url-canary-must-never-leak";
+    private static final String LAUNCHER_USERNAME_CANARY =
+            "launcher-editorial-username-canary-must-never-leak";
+    private static final String LAUNCHER_PASSWORD_CANARY =
+            "launcher-editorial-password-canary-must-never-leak";
+    private static final String LAUNCHER_DRIVER_CANARY =
+            "launcher-editorial-driver-canary-must-never-leak";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern DATABASE_IDENTIFIER =
             Pattern.compile("[a-z][a-z0-9_]*");
@@ -65,7 +75,7 @@ final class LegalEditorialProcessFixture {
     private final Artifacts artifacts;
     private final JdbcTemplate owner;
     private final LegalRestrictedImportRoleFixture.Credentials importCredentials;
-    private final LegalRestrictedEditorialRoleFixture.Credentials editorialCredentials;
+    private final EditorialConnection editorialConnection;
 
     LegalEditorialProcessFixture(
             Path temporaryDirectory,
@@ -83,9 +93,13 @@ final class LegalEditorialProcessFixture {
         this.importCredentials = Objects.requireNonNull(
                 importCredentials,
                 "importCredentials");
-        this.editorialCredentials = Objects.requireNonNull(
-                editorialCredentials,
-                "editorialCredentials");
+        LegalRestrictedEditorialRoleFixture.Credentials requiredEditorialCredentials =
+                Objects.requireNonNull(editorialCredentials, "editorialCredentials");
+        this.editorialConnection = new EditorialConnection(
+                requiredEditorialCredentials.jdbcUrl(),
+                requiredEditorialCredentials.username(),
+                requiredEditorialCredentials.password(),
+                requiredEditorialCredentials.driverClassName());
         if (!Files.isDirectory(this.temporaryDirectory)) {
             throw new IllegalArgumentException("El directorio temporal de 10E no existe");
         }
@@ -170,43 +184,159 @@ final class LegalEditorialProcessFixture {
     ProcessResult executeEditorial(
             String command,
             ReleaseArtifact release) throws Exception {
-        String requiredCommand = requireVisibleToken(command, "command");
-        ReleaseArtifact requiredRelease = Objects.requireNonNull(release, "release");
-        requireCommandPlanContract(requiredCommand, false);
-        List<String> arguments = new ArrayList<>();
-        arguments.add(requiredCommand);
-        arguments.addAll(releaseConfirmationArguments(requiredRelease));
-        return LegalCliProcessSupport.executeJar(
-                artifacts,
-                temporaryDirectory,
-                List.of(),
-                arguments,
-                editorialEnvironment(editorialCredentials),
-                StdoutMode.CAPTURE);
+        return executeEditorial(command, release, editorialConnection, List.of());
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            List<String> jvmArguments) throws Exception {
+        return executeEditorial(
+                command,
+                release,
+                editorialConnection,
+                jvmArguments);
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            EditorialConnection connection,
+            List<String> jvmArguments) throws Exception {
+        return executeEditorialJar(
+                command,
+                release,
+                null,
+                connection,
+                jvmArguments);
     }
 
     ProcessResult executeEditorial(
             String command,
             ReleaseArtifact release,
             PlanArtifact plan) throws Exception {
+        return executeEditorial(
+                command,
+                release,
+                plan,
+                editorialConnection,
+                List.of());
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            PlanArtifact plan,
+            List<String> jvmArguments) throws Exception {
+        return executeEditorial(
+                command,
+                release,
+                plan,
+                editorialConnection,
+                jvmArguments);
+    }
+
+    ProcessResult executeEditorial(
+            String command,
+            ReleaseArtifact release,
+            PlanArtifact plan,
+            EditorialConnection connection,
+            List<String> jvmArguments) throws Exception {
+        return executeEditorialJar(
+                command,
+                release,
+                Objects.requireNonNull(plan, "plan"),
+                connection,
+                jvmArguments);
+    }
+
+    ProcessResult executeEditorialLauncher(
+            String command,
+            ReleaseArtifact release) throws Exception {
+        return executeEditorialLauncher(command, release, null);
+    }
+
+    ProcessResult executeEditorialLauncher(
+            String command,
+            ReleaseArtifact release,
+            PlanArtifact plan) throws Exception {
         String requiredCommand = requireVisibleToken(command, "command");
         ReleaseArtifact requiredRelease = Objects.requireNonNull(release, "release");
-        PlanArtifact requiredPlan = Objects.requireNonNull(plan, "plan");
-        requireCommandPlanContract(requiredCommand, true);
-        List<String> arguments = new ArrayList<>();
-        arguments.add(requiredCommand);
-        arguments.addAll(releaseConfirmationArguments(requiredRelease));
-        arguments.add("--editorial-plan=" + requiredPlan.path());
-        arguments.add("--confirm-operation-id=" + requiredPlan.plan().operationId());
-        arguments.add("--confirm-editorial-plan-sha256="
-                + requiredPlan.plan().editorialPlanSha256());
+        List<String> commandLine = new ArrayList<>();
+        Path launcher = artifacts.projectDirectory()
+                .resolve("scripts/legal-manifest-editor.sh")
+                .toAbsolutePath()
+                .normalize();
+        if (!Files.isRegularFile(launcher) || !Files.isExecutable(launcher)) {
+            throw new AssertionError(
+                    "El launcher editorial real no está disponible o no es ejecutable");
+        }
+        commandLine.add(launcher.toString());
+        commandLine.addAll(editorialArguments(
+                requiredCommand,
+                requiredRelease,
+                plan));
+
+        Map<String, String> environment = new LinkedHashMap<>(
+                editorialEnvironment(editorialConnection));
+        environment.put("ORDENFIX_LEGAL_CLI_JAR", artifacts.legalCliJar().toString());
+        environment.put("ORDENFIX_JAVA_BIN", artifacts.javaExecutable().toString());
+        environment.put(
+                "JAVA_TOOL_OPTIONS",
+                "-Dspring.datasource.url=" + LAUNCHER_URL_CANARY);
+        environment.put(
+                "JDK_JAVA_OPTIONS",
+                "-Dspring.datasource.username=" + LAUNCHER_USERNAME_CANARY
+                        + " -Dspring.datasource.driver-class-name="
+                        + LAUNCHER_DRIVER_CANARY);
+        environment.put(
+                "_JAVA_OPTIONS",
+                "-Dspring.datasource.password=" + LAUNCHER_PASSWORD_CANARY);
+        return LegalCliProcessSupport.execute(
+                List.copyOf(commandLine),
+                temporaryDirectory,
+                Map.copyOf(environment),
+                StdoutMode.CAPTURE);
+    }
+
+    private ProcessResult executeEditorialJar(
+            String command,
+            ReleaseArtifact release,
+            PlanArtifact plan,
+            EditorialConnection connection,
+            List<String> jvmArguments) throws Exception {
+        String requiredCommand = requireVisibleToken(command, "command");
+        ReleaseArtifact requiredRelease = Objects.requireNonNull(release, "release");
+        EditorialConnection requiredConnection = Objects.requireNonNull(
+                connection,
+                "connection");
+        List<String> requiredJvmArguments = List.copyOf(Objects.requireNonNull(
+                jvmArguments,
+                "jvmArguments"));
         return LegalCliProcessSupport.executeJar(
                 artifacts,
                 temporaryDirectory,
-                List.of(),
-                arguments,
-                editorialEnvironment(editorialCredentials),
+                requiredJvmArguments,
+                editorialArguments(requiredCommand, requiredRelease, plan),
+                editorialEnvironment(requiredConnection),
                 StdoutMode.CAPTURE);
+    }
+
+    private List<String> editorialArguments(
+            String command,
+            ReleaseArtifact release,
+            PlanArtifact plan) {
+        requireCommandPlanContract(command, plan != null);
+        List<String> arguments = new ArrayList<>();
+        arguments.add(command);
+        arguments.addAll(releaseConfirmationArguments(release));
+        if (plan != null) {
+            arguments.add("--editorial-plan=" + plan.path());
+            arguments.add("--confirm-operation-id=" + plan.plan().operationId());
+            arguments.add("--confirm-editorial-plan-sha256="
+                    + plan.plan().editorialPlanSha256());
+        }
+        return List.copyOf(arguments);
     }
 
     /** Builds the exact 1→1 REPLACE mapping from owner-observed database identities. */
@@ -339,6 +469,134 @@ final class LegalEditorialProcessFixture {
         return validatePlan(plan, operationId);
     }
 
+    /** Seeds one complete HTTP-owned row per protected table in one owner transaction. */
+    void seedProtectedHttpState(ReleaseArtifact current) {
+        ReleaseArtifact requiredCurrent = Objects.requireNonNull(current, "current");
+        String publicationExternalId = externalId(requiredCurrent);
+        UUID seed = UUID.randomUUID();
+        String seedHex = seed.toString().replace("-", "");
+        UUID lotId = stableUuid("protected-http-lot:" + seed);
+        UUID acceptanceId = stableUuid("protected-http-acceptance:" + seed);
+        TransactionTemplate transaction = new TransactionTemplate(
+                new DataSourceTransactionManager(Objects.requireNonNull(
+                        owner.getDataSource(),
+                        "owner.dataSource")));
+
+        transaction.executeWithoutResult(status -> {
+            Long workshopId = Objects.requireNonNull(owner.queryForObject("""
+                    INSERT INTO talleres (nombre)
+                    VALUES (?)
+                    RETURNING id
+                    """, Long.class, "Taller HTTP protegido 10E " + seedHex));
+            Long userId = Objects.requireNonNull(owner.queryForObject("""
+                    INSERT INTO users (username, password, email, role, taller_id)
+                    VALUES (?, 'hash-process-10e', ?, 'ADMIN', ?)
+                    RETURNING id
+                    """, Long.class,
+                    "process10e-" + seedHex,
+                    "process10e-" + seedHex + "@ordenfix.test",
+                    workshopId));
+            UUID publicationId = Objects.requireNonNull(owner.queryForObject("""
+                    SELECT id
+                      FROM legal_publicaciones
+                     WHERE publication_external_id = ?
+                    """, UUID.class, publicationExternalId));
+            UUID requirementId = Objects.requireNonNull(owner.queryForObject("""
+                    SELECT rv.id
+                      FROM legal_publicacion_requisitos pr
+                      JOIN legal_requisito_versiones rv
+                        ON rv.id = pr.requisito_version_id
+                      JOIN legal_requisito_lineas rl
+                        ON rl.id = rv.requisito_linea_id
+                     WHERE pr.publicacion_id = ?
+                       AND rl.clave = 'account-closure'
+                    """, UUID.class, publicationId));
+            String revision = Objects.requireNonNull(owner.queryForObject("""
+                    SELECT required_set.required_set_revision
+                      FROM legal_requisito_conjuntos_actuales current_set
+                      JOIN legal_requisito_conjuntos required_set
+                        ON required_set.id = current_set.conjunto_id
+                     WHERE current_set.publicacion_id = ?
+                       AND current_set.locale = 'es-AR'
+                       AND current_set.contexto = 'CIERRE_CUENTA'
+                       AND current_set.audiencia = 'ADMIN_TITULAR'
+                    """, String.class, publicationId));
+
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_aceptacion_lotes
+                        (id, user_id, taller_id, rol_wire, audiencia,
+                         required_set_revision, aceptado_en)
+                    VALUES (?, ?, ?, 'ADMIN', 'ADMIN_TITULAR', ?,
+                            transaction_timestamp())
+                    """, lotId, userId, workshopId, revision),
+                    "legal_aceptacion_lotes");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_aceptaciones
+                        (id, lote_id, user_id, taller_id, requisito_version_id,
+                         requisito_clave, requisito_version, contexto, tipo_acto,
+                         afirmacion, afirmacion_sha256, requerido)
+                    SELECT ?, ?, ?, ?, rv.id, rl.clave, rv.version, rl.contexto,
+                           rl.tipo_acto, rv.afirmacion, rv.afirmacion_sha256,
+                           rv.requerido
+                      FROM legal_requisito_versiones rv
+                      JOIN legal_requisito_lineas rl
+                        ON rl.id = rv.requisito_linea_id
+                     WHERE rv.id = ?
+                    """, acceptanceId, lotId, userId, workshopId, requirementId),
+                    "legal_aceptaciones");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_aceptacion_documentos
+                        (aceptacion_id, documento_ordinal, documento_version_id,
+                         documento_clave, tipo, version, titulo, sha256)
+                    SELECT ?, rd.documento_ordinal, dv.id, dl.clave, dl.tipo,
+                           dv.version, dv.titulo, dv.sha256
+                      FROM legal_requisito_documentos rd
+                      JOIN legal_documento_versiones dv
+                        ON dv.id = rd.documento_version_id
+                      JOIN legal_documento_lineas dl
+                        ON dl.id = dv.documento_linea_id
+                     WHERE rd.requisito_version_id = ?
+                     ORDER BY rd.documento_ordinal
+                    """, acceptanceId, requirementId),
+                    "legal_aceptacion_documentos");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_aceptacion_metadatos
+                        (lote_id, capturado_en, retener_hasta)
+                    VALUES (?, transaction_timestamp(),
+                            transaction_timestamp() + INTERVAL '30 days')
+                    """, lotId), "legal_aceptacion_metadatos");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_aceptacion_metadatos_cifrados
+                        (lote_id, tipo, key_version, nonce, ciphertext, tag,
+                         longitud_original)
+                    VALUES (?, 'IP', 1, ?, ?, ?, 9)
+                    """,
+                    lotId,
+                    HexFormat.of().parseHex(seedHex.substring(0, 24)),
+                    bytes(9, 31),
+                    bytes(16, 51)),
+                    "legal_aceptacion_metadatos_cifrados");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_idempotencia_resultados
+                        (operacion, route_template, scope_hmac,
+                         idempotency_key_hmac, fingerprint_hmac,
+                         hmac_key_version, user_id, taller_id, lote_id,
+                         completed_at, expires_at)
+                    VALUES ('ACEPTACION_LEGAL', '/api/legal/process-10e', ?, ?, ?,
+                            1, ?, ?, ?, transaction_timestamp(),
+                            transaction_timestamp() + INTERVAL '30 days')
+                    """,
+                    "a".repeat(64),
+                    seedHex.repeat(2),
+                    "c".repeat(64),
+                    userId,
+                    workshopId,
+                    lotId),
+                    "legal_idempotencia_resultados");
+            owner.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        });
+    }
+
     JdbcTemplate owner() {
         return owner;
     }
@@ -409,6 +667,10 @@ final class LegalEditorialProcessFixture {
                 "legal@ordenfix.com",
                 "privacidad@ordenfix.com",
                 "soporte@ordenfix.com",
+                LAUNCHER_URL_CANARY,
+                LAUNCHER_USERNAME_CANARY,
+                LAUNCHER_PASSWORD_CANARY,
+                LAUNCHER_DRIVER_CANARY,
                 "# Términos");
     }
 
@@ -747,7 +1009,7 @@ final class LegalEditorialProcessFixture {
     }
 
     private Map<String, String> editorialEnvironment(
-            LegalRestrictedEditorialRoleFixture.Credentials credentials) {
+            EditorialConnection credentials) {
         Map<String, String> environment = hostileBaseEnvironment();
         environment.put(LegalEditorialEnvironment.ENABLED_VARIABLE, "true");
         environment.put(
@@ -838,6 +1100,21 @@ final class LegalEditorialProcessFixture {
         return required;
     }
 
+    private static byte[] bytes(int length, int seed) {
+        byte[] value = new byte[length];
+        for (int index = 0; index < length; index++) {
+            value[index] = (byte) (seed + index);
+        }
+        return value;
+    }
+
+    private static void requireSingleInsert(int affectedRows, String table) {
+        if (affectedRows != 1) {
+            throw new AssertionError(
+                    "El seed HTTP de 10E no insertó una fila exacta en " + table);
+        }
+    }
+
     private static String requireDatabaseIdentifier(String value) {
         String required = Objects.requireNonNull(value, "databaseIdentifier");
         if (!DATABASE_IDENTIFIER.matcher(required).matches()) {
@@ -845,6 +1122,28 @@ final class LegalEditorialProcessFixture {
                     "Identificador inesperado en el catálogo PostgreSQL");
         }
         return required;
+    }
+
+    /** Arbitrary process credentials with a deliberately redacted diagnostic form. */
+    record EditorialConnection(
+            String jdbcUrl,
+            String username,
+            String password,
+            String driverClassName) {
+
+        EditorialConnection {
+            jdbcUrl = requireVisibleToken(jdbcUrl, "jdbcUrl");
+            username = requireVisibleToken(username, "username");
+            password = requireVisibleToken(password, "password");
+            driverClassName = requireVisibleToken(
+                    driverClassName,
+                    "driverClassName");
+        }
+
+        @Override
+        public String toString() {
+            return "EditorialConnection[configured=true]";
+        }
     }
 
     record ReleaseArtifact(
