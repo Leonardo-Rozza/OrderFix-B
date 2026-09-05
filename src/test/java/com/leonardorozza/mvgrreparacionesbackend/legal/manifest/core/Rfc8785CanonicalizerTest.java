@@ -251,7 +251,8 @@ class Rfc8785CanonicalizerTest {
                         LegalRequiredSetProjection.class,
                         LegalEditorialStateProjection.class,
                         LegalRequiredSetAggregateProjection.class,
-                        LegalRequiredSetAggregateProvenance.class)
+                        LegalRequiredSetAggregateProvenance.class,
+                        LegalDocumentCatalogProjection.class)
                 .allSatisfy(type -> assertThat(type)
                         .isNotIn(Object.class, String.class, JsonNode.class));
 

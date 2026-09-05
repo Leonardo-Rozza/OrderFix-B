@@ -1,0 +1,66 @@
+{
+  "contexto": "REGISTRO",
+  "locale": "es-AR",
+  "documentos": [
+    {
+      "id": "00000000-0000-0000-7fff-ffffffffffff",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2026.1",
+      "titulo": "Términos \"OrdenFix\" \\ / reparación 🙂",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vigenteDesde": "2026-09-05T12:34:56.123456Z",
+      "estado": "VIGENTE",
+      "locale": "es-AR"
+    },
+    {
+      "id": "00000000-0000-0000-8000-000000000000",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2026.2",
+      "titulo": "Términos\tcon aviso\nsegunda línea",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "vigenteDesde": "2026-09-05T12:34:56.123456Z",
+      "estado": "REEMPLAZADA",
+      "locale": "es-AR"
+    },
+    {
+      "id": "7fffffff-ffff-ffff-ffff-ffffffffffff",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2026.3",
+      "titulo": "Histórico € y  archivo",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "vigenteDesde": "2026-09-05T12:34:56.123456Z",
+      "estado": "RETIRADA",
+      "locale": "es-AR"
+    },
+    {
+      "id": "80000000-0000-0000-0000-000000000000",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2026.4",
+      "titulo": "Condiciones históricas: niño y 漢字",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "vigenteDesde": "2026-09-05T12:34:56.123456Z",
+      "estado": "REEMPLAZADA",
+      "locale": "es-AR"
+    },
+    {
+      "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "tipo": "TERMINOS_SERVICIO",
+      "version": "2025.1",
+      "titulo": "Versión anterior",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "vigenteDesde": "2025-01-01T00:00:00Z",
+      "estado": "RETIRADA",
+      "locale": "es-AR"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "tipo": "POLITICA_PRIVACIDAD",
+      "version": "2026.5",
+      "titulo": "Política de privacidad <aviso>",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "vigenteDesde": "2026-09-06T00:00:00Z",
+      "estado": "VIGENTE",
+      "locale": "es-AR"
+    }
+  ]
+}

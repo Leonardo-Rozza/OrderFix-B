@@ -11,12 +11,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.Objects;
 
 /**
  * Adaptador acotado de JCS: acepta JSON externo sólo después de {@link StrictJsonReader} y las
- * proyecciones internas tipadas del conjunto requerido, sus agregados y el estado editorial. No
- * expone entradas de texto, bytes o árboles JSON genéricos.
+ * proyecciones internas tipadas del conjunto requerido, sus agregados, el estado editorial y el
+ * catálogo documental. No expone entradas de texto, bytes o árboles JSON genéricos.
  */
 final class Rfc8785Canonicalizer {
 
@@ -179,6 +180,101 @@ final class Rfc8785Canonicalizer {
                     "No se pudo materializar el estado editorial canónico", exception);
         }
         return bytes.toByteArray();
+    }
+
+    /** Hashes a one-shot catalog without retaining its history or constructing a JSON tree. */
+    String canonicalize(LegalDocumentCatalogProjection projection) {
+        Objects.requireNonNull(projection, "projection");
+        MessageDigest digest = sha256Digest();
+        try (BufferedOutputStream output = new BufferedOutputStream(
+                new DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+            writeCanonicalDocumentCatalog(projection, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException("No se pudo canonicalizar el catálogo documental", exception);
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /** Materializes catalog bytes only for small golden/equivalence tests. */
+    byte[] canonicalUtf8(LegalDocumentCatalogProjection projection) {
+        Objects.requireNonNull(projection, "projection");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (BufferedOutputStream output = new BufferedOutputStream(bytes)) {
+            writeCanonicalDocumentCatalog(projection, output);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "No se pudo materializar el catálogo documental canónico", exception);
+        }
+        return bytes.toByteArray();
+    }
+
+    private static void writeCanonicalDocumentCatalog(
+            LegalDocumentCatalogProjection projection,
+            OutputStream output) throws IOException {
+        Iterator<LegalDocumentSummary> documents = projection.claimDocuments();
+        writeAscii(output, "{\"contexto\":");
+        writeNullableString(output, projection.context() == null ? null : projection.context().name());
+        writeAscii(output, ",\"documentos\":[");
+        LegalDocumentSummary previous = null;
+        while (documents.hasNext()) {
+            LegalDocumentSummary document = Objects.requireNonNull(documents.next(), "document");
+            if (document.locale() != projection.locale()) {
+                throw new IllegalArgumentException("El documento no pertenece a la locale del catálogo");
+            }
+            if (previous != null) {
+                if (compareDocumentOrder(previous, document) >= 0) {
+                    throw new IllegalArgumentException(
+                            "El catálogo documental está fuera de orden o repite una posición");
+                }
+                output.write(',');
+            }
+            writeCanonicalDocumentSummary(document, output);
+            previous = document;
+        }
+        if (previous == null) {
+            throw new IllegalArgumentException("El catálogo documental no puede estar vacío");
+        }
+        writeAscii(output, "],\"locale\":");
+        writeJsonString(output, projection.locale().getCodigo());
+        output.write('}');
+    }
+
+    private static int compareDocumentOrder(LegalDocumentSummary first, LegalDocumentSummary second) {
+        int typeOrder = Integer.compare(first.type().ordinal(), second.type().ordinal());
+        if (typeOrder != 0) {
+            return typeOrder;
+        }
+        int instantOrder = second.effectiveAt().compareTo(first.effectiveAt());
+        if (instantOrder != 0) {
+            return instantOrder;
+        }
+        // PostgreSQL compares UUID bytes unsigned; UUID.compareTo compares signed long values.
+        int mostSignificantOrder = Long.compareUnsigned(
+                first.versionId().getMostSignificantBits(), second.versionId().getMostSignificantBits());
+        return mostSignificantOrder != 0 ? mostSignificantOrder : Long.compareUnsigned(
+                first.versionId().getLeastSignificantBits(), second.versionId().getLeastSignificantBits());
+    }
+
+    private static void writeCanonicalDocumentSummary(
+            LegalDocumentSummary document,
+            OutputStream output) throws IOException {
+        writeAscii(output, "{\"estado\":");
+        writeJsonString(output, document.state().name());
+        writeAscii(output, ",\"id\":");
+        writeJsonString(output, document.versionId().toString());
+        writeAscii(output, ",\"locale\":");
+        writeJsonString(output, document.locale().getCodigo());
+        writeAscii(output, ",\"sha256\":");
+        writeJsonString(output, document.sha256());
+        writeAscii(output, ",\"tipo\":");
+        writeJsonString(output, document.type().name());
+        writeAscii(output, ",\"titulo\":");
+        writeJsonString(output, document.title());
+        writeAscii(output, ",\"version\":");
+        writeJsonString(output, document.version());
+        writeAscii(output, ",\"vigenteDesde\":");
+        writeJsonString(output, document.effectiveAtUtc());
+        output.write('}');
     }
 
     private static CanonicalJson canonicalizeText(String json) throws IOException {

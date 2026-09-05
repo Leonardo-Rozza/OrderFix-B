@@ -2,7 +2,8 @@
 
 Fecha: 2026-09-05
 
-Estado: propuesta revisada, pendiente de aprobación para implementar. Este commit es documental.
+Estado: diseño aprobado por el titular el 2026-09-05; 13A completado y verificado, 13B–13D pendientes.
+Ejecución y evidencia por corte: [plan de implementación](2026-09-05-legal-public-document-read-implementation.md).
 
 Baseline backend: `92a1fd1`, rama `codex/lanzamiento-publico-backend`.
 Frontend: `7545201`, rama `codex/frontend-refactor-checkpoint`, sin cambios.
@@ -244,7 +245,7 @@ credenciales, paths internos ni estado editorial oculto. Los errores de paginaci
 ## Secuencia de implementación propuesta
 
 Cada subcorte debe tener su whitelist, pruebas focalizadas y un commit atómico local. El plan
-detallado se prepara después de aprobar este diseño; las siguientes etapas fijan sus dependencias.
+detallado enlazado al inicio registra la ejecución; las siguientes etapas fijan sus dependencias.
 
 | Corte | Resultado revisable | Gate |
 | --- | --- | --- |
@@ -320,5 +321,6 @@ No se ejecutó Maven porque este corte no modifica código, tests, dependencias 
 
 Whitelist del commit: este diseño y la actualización puntual del contrato de agosto para dejar
 explícita la semántica V28 ya aprobada. Se verifican diff, enlaces y preservación de V27/V28.
-El commit documenta una propuesta; no implica aprobación de implementación, activación HTTP ni
-apertura de BACKEND-HANDOFF 1.
+El commit original `10bf5b5` documentó la propuesta. El titular aprobó después comenzar 13A;
+esa aprobación no activa HTTP ni abre BACKEND-HANDOFF 1. La evidencia de implementación se registra
+por separado en el plan enlazado al inicio.
