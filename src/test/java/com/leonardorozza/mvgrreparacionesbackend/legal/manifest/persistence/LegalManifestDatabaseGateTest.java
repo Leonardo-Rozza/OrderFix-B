@@ -51,6 +51,134 @@ class LegalManifestDatabaseGateTest {
             new LegalDatabaseBudgets(15, 5, 1, 1);
 
     @Test
+    void publicRequirementsAccreditsItsMutableBoundaryAndSharedOrderAtPublicBudgets() {
+        PublicReadHarness consumer = publicRequirementsHarness();
+        when(consumer.callback().doInTransaction(any(), any())).thenReturn("requirements");
+        assertThatCode(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), consumer.schema(), consumer.privileges())).doesNotThrowAnyException();
+        assertThat(consumer.gate().executeMutableShared(consumer.callback())).isEqualTo("requirements");
+
+        InOrder order = inOrder(consumer.jdbc(), consumer.schema(), consumer.privileges(), consumer.callback());
+        order.verify(consumer.jdbc()).execute("SET LOCAL statement_timeout TO '5s'");
+        order.verify(consumer.jdbc()).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_isolation')", String.class);
+        order.verify(consumer.jdbc()).queryForObject(
+                "SELECT pg_catalog.current_setting('transaction_read_only')", String.class);
+        order.verify(consumer.schema()).verify();
+        order.verify(consumer.privileges()).verify();
+        order.verify(consumer.jdbc()).execute("SET LOCAL lock_timeout TO '1s'");
+        order.verify(consumer.jdbc()).queryForList(SHARED_LOCK_SQL, LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+        order.verify(consumer.jdbc()).execute("SET LOCAL lock_timeout TO '1s'");
+        order.verify(consumer.jdbc()).queryForObject("SELECT transaction_timestamp()", OffsetDateTime.class);
+        order.verify(consumer.jdbc()).queryForObject("SELECT statement_timestamp()", OffsetDateTime.class);
+        order.verify(consumer.callback()).doInTransaction(any(),
+                eq(new LegalEditorialTimeBoundary(TRANSACTION_AT, OBSERVED_AT)));
+        verify(consumer.transaction(), times(1)).execute(any());
+        verify(consumer.jdbc(), never()).queryForList(EXCLUSIVE_LOCK_SQL,
+                LegalManifestDatabaseGate.EDITORIAL_LOCK_NAME);
+    }
+
+    @Test
+    void publicRequirementsRejectsEveryMissingReorderedForeignOrDuplicatePreflightBeforeIo() {
+        PublicReadHarness consumer = publicRequirementsHarness();
+        LegalDatabasePreflight extra = mock(LegalDatabasePreflight.class);
+        for (List<LegalDatabasePreflight> invalid : List.of(
+                List.<LegalDatabasePreflight>of(), List.of(consumer.schema()),
+                List.of(consumer.schema(), consumer.privileges(), extra),
+                List.of(consumer.privileges(), consumer.schema()))) {
+            var gate = new LegalManifestDatabaseGate(consumer.transaction(), consumer.jdbc(),
+                    PUBLIC_READ_BUDGETS, invalid);
+            assertThatThrownBy(() -> gate.requireExactPublicRequirementsBoundary(
+                    consumer.jdbc(), consumer.schema(), consumer.privileges()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                mock(JdbcTemplate.class), consumer.schema(), consumer.privileges()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), extra, consumer.privileges())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), consumer.schema(), extra)).isInstanceOf(IllegalArgumentException.class);
+        var duplicate = new LegalManifestDatabaseGate(consumer.transaction(), consumer.jdbc(),
+                PUBLIC_READ_BUDGETS, List.of(consumer.schema(), consumer.schema()));
+        assertThatThrownBy(() -> duplicate.requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), consumer.schema(), consumer.schema())).isInstanceOf(IllegalArgumentException.class);
+        when(consumer.schema().usesJdbc(consumer.jdbc())).thenReturn(false);
+        assertThatThrownBy(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), consumer.schema(), consumer.privileges())).isInstanceOf(IllegalArgumentException.class);
+        when(consumer.schema().usesJdbc(consumer.jdbc())).thenReturn(true);
+        when(consumer.privileges().usesJdbc(consumer.jdbc())).thenReturn(false);
+        assertThatThrownBy(() -> consumer.gate().requireExactPublicRequirementsBoundary(
+                consumer.jdbc(), consumer.schema(), consumer.privileges())).isInstanceOf(IllegalArgumentException.class);
+        verify(consumer.transaction(), never()).execute(any());
+        verify(consumer.schema(), never()).verify();
+        verify(consumer.privileges(), never()).verify();
+    }
+
+    @Test
+    void publicRequirementsRejectsUnsafeDeclaredTransactionOrMissingDatasourceBeforeIo() {
+        DataSource dataSource = mock(DataSource.class);
+        var manager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate joining = publicRequirementsTransaction(manager);
+        joining.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+        TransactionTemplate wrongIsolation = publicRequirementsTransaction(manager);
+        wrongIsolation.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        TransactionTemplate wrongTimeout = publicRequirementsTransaction(manager);
+        wrongTimeout.setTimeout(14);
+        TransactionTemplate readOnly = publicRequirementsTransaction(manager);
+        readOnly.setReadOnly(true);
+        var rollbackAfterCommitFailure = new DataSourceTransactionManager(dataSource);
+        rollbackAfterCommitFailure.setRollbackOnCommitFailure(true);
+        TransactionTemplate noManager = new TransactionTemplate();
+        for (TransactionTemplate unsafe : List.of(joining, wrongIsolation, wrongTimeout, readOnly,
+                publicRequirementsTransaction(rollbackAfterCommitFailure),
+                publicRequirementsTransaction(new JdbcTransactionManager(dataSource)), noManager)) {
+            assertUnsafePublicRequirementsBoundary(unsafe, dataSource);
+        }
+        assertUnsafePublicRequirementsBoundary(publicRequirementsTransaction(manager), mock(DataSource.class));
+        assertUnsafePublicRequirementsBoundary(
+                publicRequirementsTransaction(new DataSourceTransactionManager()), null);
+        verifyNoInteractions(dataSource);
+    }
+
+    private static void assertUnsafePublicRequirementsBoundary(TransactionTemplate transaction, DataSource source) {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.getDataSource()).thenReturn(source);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        var gate = new LegalManifestDatabaseGate(transaction, jdbc, PUBLIC_READ_BUDGETS, List.of(schema, privileges));
+        assertThatThrownBy(() -> gate.requireExactPublicRequirementsBoundary(jdbc, schema, privileges))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(schema, never()).verify();
+        verify(privileges, never()).verify();
+    }
+
+    private static TransactionTemplate publicRequirementsTransaction(DataSourceTransactionManager manager) {
+        TransactionTemplate transaction = safeImportTransaction(manager);
+        transaction.setTimeout(PUBLIC_READ_BUDGETS.transactionTimeoutSeconds());
+        return transaction;
+    }
+
+    private static PublicReadHarness publicRequirementsHarness() {
+        DataSource source = mock(DataSource.class);
+        TransactionTemplate transaction = executingMutableTransaction(source);
+        when(transaction.getTimeout()).thenReturn(PUBLIC_READ_BUDGETS.transactionTimeoutSeconds());
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        stubMutableMode(jdbc, source);
+        stubTimeBoundary(jdbc);
+        LegalDatabasePreflight schema = mock(LegalDatabasePreflight.class);
+        LegalDatabasePreflight privileges = mock(LegalDatabasePreflight.class);
+        when(schema.usesJdbc(jdbc)).thenReturn(true);
+        when(privileges.usesJdbc(jdbc)).thenReturn(true);
+        LegalManifestDatabaseGate.EditorialTransactionCallback<String> callback =
+                mock(LegalManifestDatabaseGate.EditorialTransactionCallback.class);
+        var gate = new LegalManifestDatabaseGate(transaction, jdbc, PUBLIC_READ_BUDGETS, List.of(schema, privileges));
+        return new PublicReadHarness(transaction, jdbc, schema, privileges, callback, gate);
+    }
+
+    @Test
     void sharedReadOnlyGateUsesReaderBudgetsAndAccreditsTheCompleteOrder() {
         PublicReadHarness reader = publicReadHarness();
         when(reader.callback().doInTransaction(any(), any())).thenReturn("catalog");

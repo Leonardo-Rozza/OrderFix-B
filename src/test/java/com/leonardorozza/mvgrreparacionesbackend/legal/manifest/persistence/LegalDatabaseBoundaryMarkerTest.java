@@ -10,6 +10,36 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LegalDatabaseBoundaryMarkerTest {
 
     @Test
+    void publicRequirementsAcceptsOnlyItsOwnSingleMarker() {
+        var consumer = new LegalDatabaseBoundaryMarker(LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS);
+        assertThatCode(() -> new LegalDatabaseBoundaryMarker.Guard(
+                List.of(consumer), LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(
+                List.of(), LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(
+                List.of(consumer, consumer), LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS))
+                .isInstanceOf(IllegalStateException.class);
+        for (LegalDatabaseBoundaryMarker.Kind kind : LegalDatabaseBoundaryMarker.Kind.values()) {
+            if (kind == LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS) {
+                continue;
+            }
+            var other = new LegalDatabaseBoundaryMarker(kind);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(
+                    List.of(other), LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(consumer), kind))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(
+                    List.of(consumer, other), LegalDatabaseBoundaryMarker.Kind.PUBLIC_REQUIREMENTS))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(other, consumer), kind))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
     void publicDocumentReadAcceptsExactlyItsOwnMarker() {
         LegalDatabaseBoundaryMarker reader = new LegalDatabaseBoundaryMarker(
                 LegalDatabaseBoundaryMarker.Kind.PUBLIC_DOCUMENT_READ);

@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A completado, 14B–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14B completados, 14C–14E pendientes.
 La aprobación permite implementar el diseño por cortes. No habilita el endpoint ni el enforcement.
 [Plan por cortes](2026-09-05-legal-public-requirements-read-implementation.md).
 
@@ -321,4 +321,10 @@ La whitelist documental se limita a este diseño y su plan. V27 SHA-256
 
 Commit documental: `3351728 docs(legal): diseña requisitos publicos de registro`.
 El titular aprobó después comenzar 14A. Su implementación, decisiones y gate focalizado están
-registrados en el plan. Commit 14A: `feat(legal): acredita requisitos publicos`.
+registrados en el plan. Commit 14A: `efe8484 feat(legal): acredita requisitos publicos`.
+
+Tras la siguiente autorización se completó 14B: contexto `PUBLIC_REQUIREMENTS` independiente,
+ACL propia, recursos acotados y composición del store V28. El gate focal pasó 230 pruebas
+unitarias y 125 PostgreSQL, sin fallos, errores u omisiones. Las decisiones de commit/deadline y
+la evidencia exacta se registran en el plan; aún no hay lector, servicio ni transporte público de
+requisitos. El próximo corte es 14C y el gate integral permanece reservado para 14E.

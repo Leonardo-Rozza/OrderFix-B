@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A completado, 14B–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14B completados, 14C–14E pendientes.
 [Diseño aprobado](2026-09-05-legal-public-requirements-read-design.md).
 Baseline backend `40a31a2`, rama `codex/lanzamiento-publico-backend`.
 
@@ -139,6 +139,12 @@ Próximo corte: 14B, contexto restringido y recursos PostgreSQL acotados.
 
 ## 14B — Contexto, privilegios y recursos acotados
 
+Baseline 14B: `efe8484`, árbol limpio. El titular autorizó continuar el 2026-09-05.
+Se confirma la whitelist de este apartado antes de editar. Se añade nominalmente
+`LegalPublicRequirementsDatabaseContextIT.java` para acreditar el store dentro del contexto
+productivo nuevo con PostgreSQL 16, commit/reutilización y rollback, sin mezclar esas pruebas con
+la matriz de permisos ni esperar al servicio de 14C. Reutiliza fixtures e instrumentación existentes.
+
 Resultado: composición explícita independiente con gate mutable acreditado y store V28 existente;
 todavía sin servicio de consulta pública ni mapping HTTP.
 
@@ -172,6 +178,7 @@ Whitelist nominal:
 - Tests nuevos: `LegalPublicRequirementsDatabaseConfigurationTest.java`,
   `LegalPublicRequirementsDataSourceTest.java`, `LegalPublicRequirementsDeadlineTest.java`,
   `LegalPublicRequirementsPrivilegeVerifierIT.java`, `LegalRestrictedPublicRequirementsRoleFixture.java`.
+- Integración del contexto/store: `LegalPublicRequirementsDatabaseContextIT.java` (nuevo).
 - Regresiones actualizadas: `LegalDatabaseBoundaryMarkerTest.java`, `LegalManifestDatabaseGateTest.java`.
 
 Gate focal: tests nuevos, boundary/gate, contexto agregado y documental existentes, privilegios
@@ -179,6 +186,105 @@ PostgreSQL 16 y rollback del store con el rol nuevo. Registrar cualquier efecto 
 sobre gate/marker y ampliar verificación si corresponde. El futuro endpoint permanece ausente.
 
 Commit: `feat(legal): aisla consulta de requisitos publicos`.
+
+### Decisiones de implementación 14B
+
+- Se incorpora una configuración explícita, sin `@Configuration` ni componente escaneable, bajo
+  el flag interno `ordenfix.legal.public-requirements-context.enabled`. Sólo consume credencial
+  `ordenfix.legal.public-requirements.*`; no activa ni implementa el flag HTTP futuro.
+  El guard exige exclusivamente un marcador `PUBLIC_REQUIREMENTS`. El pool y el wrapper se
+  cierran tanto al cerrar el contexto como al fallar su inicialización.
+- Pool de dos conexiones, minIdle 0, borrow/validación 1 s, driver connect/login 1 s, socket 5 s y
+  cancelSignal 1 s. Sólo se admiten las opciones TLS y `loggerLevel` ya previstas en la URL.
+  El template mutable usa el manager JDBC exacto, REQUIRES_NEW/READ_COMMITTED, timeout 15 s y
+  `rollbackOnCommitFailure=false`; presupuestos 15/5/1/1 s. El gate acredita datasource no nulo,
+  identidad JDBC y el par ordenado de preflights de esquema V28/privilegios propios.
+- La única extensión de producción compartida es un valor nuevo del marcador y un método nuevo
+  de acreditación del gate. Los métodos, verificadores, wrappers y presupuestos de los contextos
+  anteriores permanecen intactos. Se reutilizan store, replay, resolver y calculadores V28 dentro
+  de esta composición; todavía no existe una fachada de lectura ni hidratación pública.
+- El verifier nuevo conserva los controles de identidad, membresías, permisos efectivos, PUBLIC,
+  grant options, columnas, funciones y capacidades sistémicas de V28, con allowlist propia:
+  17 tablas SELECT, dos INSERT, UPDATE sólo de `conjunto_id` en el puntero y siete EXECUTE.
+  El schema verifier V28 acredita además las definiciones y SECURITY INVOKER de las funciones.
+  Estos permisos no restringen filas/perfiles; fijar REGISTRO/ADMIN_TITULAR y validar visibilidad
+  vigente sigue siendo responsabilidad del consumidor de 14C.
+- Deadline y wrapper propios conservan el presupuesto global al anidar operaciones y reducirlo
+  entre sentencias/FETCH. Sellan unwrap y referencias a delegados, permiten rollback/limpieza
+  tras expirar y cancelan el watchdog antes de devolver una conexión al pool. Un reloj inyectable
+  package-private permite probar las fases sin sleeps; no introduce una propiedad productiva.
+- El chequeo previo a COMMIT puede fallar como RuntimeException y permite rollback. Una
+  RuntimeException del COMMIT delegado se convierte en SQLException, igual que un fallo JDBC de
+  commit: Spring informa UNKNOWN y no intenta rollback automático. Tras un COMMIT exitoso no se
+  lanza un error de deadline dentro del proxy: Spring primero informa COMMITTED y limpia recursos;
+  `withinDeadline` comprueba entonces el plazo/interrupción y puede rechazar la entrega. Así un
+  commit confirmado fuera de plazo no se presenta como un rollback conocido.
+- La fixture sólo admite bases efímeras con prefijo `ordenfix_legal_public_requirements_` y un rol
+  nuevo. Las revocaciones PUBLIC pertenecen exclusivamente a ese contenedor de pruebas; no hay
+  provisioning compartido, migraciones ni cambio de credenciales productivas.
+
+### Evidencia de 14B
+
+Gate focalizado: **355 pruebas, 0 fallos, 0 errores, 0 omitidas**. Reportes XML de las doce clases
+Surefire y siete Failsafe contrastados con ambas ejecuciones; no se sumaron reportes históricos
+de otros cortes que permanecen en `target`.
+
+| Ejecución | Pruebas | Finalización 2026-09-05 (-03) | Tiempo Maven |
+| --- | ---: | --- | --- |
+| Surefire focal | 230 | 15:11:49 | 16.667 s |
+| Preparación `-DskipTests package` | No ejecuta pruebas | 15:13:47 | 2.195 s |
+| Failsafe focal PostgreSQL | 125 | 15:15:55 | 1 min 42 s |
+
+Surefire: contexto nuevo 53, datasource nuevo 19, deadline nuevo 9, gate 41, marker 3;
+regresiones del contexto agregado 4, contexto documental 38, datasource documental 13,
+deadline documental 9, store 12, replay 10 y servicio agregado 19.
+Failsafe: privilegios nuevos 53 y contexto/store nuevo 7; regresiones de privilegios V28 6,
+servicio agregado 13, aislamiento agregado 2, privilegios documentales 28 y servicio documental 16.
+
+Entorno observado: Java Corretto 21.0.10 (Amazon), Maven 3.9.11, Spring Boot 4.0.6,
+Spring 7.0.7, PostgreSQL **16.14** (`postgres:16-alpine`), JDBC 42.7.10,
+Testcontainers 2.0.5 y Surefire/Failsafe 3.5.5. Las tres ejecuciones terminaron `BUILD SUCCESS`.
+
+Los siete casos del contexto real acreditan la credencial dedicada y la transacción efectiva,
+COMMITTED visible desde otra conexión, CREATED con una cabecera/scope y repetición secuencial
+REUSED con cero DML. Un fallo del consumidor posterior al store revierte ambas filas nuevas;
+sobre REUSED conserva el agregado confirmado sin reescritura. REQUIRES_NEW usa otra conexión,
+restaura la transacción externa SERIALIZABLE y su commit sobrevive al rollback externo.
+Deriva de privilegios y checksum Flyway rechazan antes del lock/DML; lock editorial exclusivo
+provoca SQLSTATE `55P03`. Tras restaurar cada condición hay recuperación y recursos liberados.
+Estas pruebas aún no acreditan hidratación pública ni corrupción de contenido, previstas en 14C.
+
+La matriz PostgreSQL contrasta las allowlists nominales contra capacidades efectivas, revoca cada
+SELECT/EXECUTE requerido y comprueba pérdida de INSERT/UPDATE exactos. Rechaza privilegios extras,
+grants por columna, grant options, PUBLIC, membresías, suplantación de sesión y capacidades
+sistémicas. `FOR SHARE` real funciona sobre el puntero; UPDATE real y no-op sobre una fila existente
+fallan `23514`, preservando el guard congelado. Lectura personal/evidencia, DML extra, secuencias,
+DDL y locks de sesión están denegados.
+
+Los unitarios del wrapper usan un TransactionTemplate real con conexiones simuladas para
+acreditar notificaciones ROLLED_BACK, UNKNOWN y COMMITTED en sus respectivas fases; no se presentan
+como pruebas de un fallo remoto durante commit. La inyección PostgreSQL de esas fases pertenece
+a 14C. También cubren remanente entre FETCH/sentencias, deadline anidado, interrupción, referencias
+JDBC selladas, cierre tras fallo y watchdog tardío sin abortar una conexión devuelta.
+
+Comandos ejecutados desde backend con Java 21 explícito:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalPublicRequirementsDatabaseConfigurationTest,LegalPublicRequirementsDataSourceTest,LegalPublicRequirementsDeadlineTest,LegalManifestDatabaseGateTest,LegalDatabaseBoundaryMarkerTest,LegalRequiredSetAggregateDatabaseConfigurationTest,LegalPublicDocumentReadDatabaseConfigurationTest,LegalPublicDocumentDataSourceTest,LegalPublicDocumentDeadlineTest,LegalRequiredSetAggregateStoreTest,LegalRequiredSetAggregateReplayVerifierTest,LegalRequiredSetAggregateServiceTest test
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -DskipTests package
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicRequirementsPrivilegeVerifierIT,LegalPublicRequirementsDatabaseContextIT,LegalV28AggregatePrivilegeVerifierIT,LegalRequiredSetAggregateServiceIT,LegalRequiredSetAggregateDatabaseIsolationIT,LegalPublicDocumentPrivilegeVerifierIT,LegalPublicDocumentReadServiceIT failsafe:integration-test failsafe:verify
+```
+
+No hubo fallos ni cambios al comportamiento de los consumidores anteriores. La extensión aditiva
+de gate/marker se verificó junto con sus contextos y regresiones PostgreSQL; no justifica ampliar
+esta ejecución al `clean verify`, reservado para 14E. Revisiones independientes de contexto/gate,
+wrapper/commit, ACL/fixtures y decisiones documentales no encontraron defectos materiales.
+
+Whitelist final: siete archivos de producción (cinco nuevos y dos extensiones), ocho de tests
+(seis nuevos, incluida la fixture, y dos existentes), este plan y el diseño: **17 archivos**.
+V27/V28 conservan los SHA-256 del diseño. Frontend `7545201` y sus dos directorios no versionados
+se preservan. No hay HTTP nuevo, habilitación de producción, migraciones ni push.
+Próximo corte: 14C, hidratación y servicio PostgreSQL en esta misma transacción.
 
 ## 14C — Hidratación y servicio PostgreSQL
 
@@ -327,4 +433,5 @@ autorizados del corte; confirmar rama, HEAD, frontend y hashes V27/V28 antes y d
 Diseño y plan preparados a partir del baseline 13D, con revisión independiente de wire, V28,
 privilegios y resultados transaccionales. No se ejecutó Maven ni se modificó código/configuración.
 El titular aprobó después el diseño y autorizó implementar 14A. Su evidencia se registra en el
-apartado correspondiente; 14B–14E permanecen pendientes.
+apartado correspondiente. Tras la autorización siguiente también se completó 14B;
+14C–14E permanecen pendientes.

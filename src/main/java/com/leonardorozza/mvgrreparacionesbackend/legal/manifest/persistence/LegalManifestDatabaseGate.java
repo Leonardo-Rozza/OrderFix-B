@@ -255,6 +255,25 @@ final class LegalManifestDatabaseGate {
         }
     }
 
+    /** Accredits the public requirements consumer's own mutable transaction and exact preflights. */
+    void requireExactPublicRequirementsBoundary(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema,
+            LegalDatabasePreflight privileges) {
+        requireCommitOutcomeSafe();
+        if (jdbc != candidate
+                || jdbc.getDataSource() == null
+                || schema == privileges
+                || preflights.size() != 2
+                || preflights.get(0) != schema
+                || preflights.get(1) != privileges
+                || !schema.usesJdbc(candidate)
+                || !privileges.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "Los requisitos públicos requieren schema y privilegios propios acreditados y ordenados");
+        }
+    }
+
     private void requireReadOnlyBoundary() {
         Object transactionManager = transactionTemplate.getTransactionManager();
         if (transactionManager == null
