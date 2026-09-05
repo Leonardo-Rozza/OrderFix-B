@@ -60,9 +60,11 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     internas de validación, simulación, importación, promoción, reemplazo, retiro y readiness
     editorial están implementadas, junto con el núcleo y servicio interno de agregados V28.
     `requiredSetRevision` representa los conjuntos completos aplicables y permanece estable al
-    filtrar pendientes, incluso con `requisitos: []`. Siguen pendientes controllers/APIs legales,
-    catálogo, `documentSetRevision`, aceptación de aplicación, idempotencia HTTP, respuestas legales
-    `409/428/503`, seguridad/enforcement, contenido definitivo, staging y deploy.
+    filtrar pendientes, incluso con `requisitos: []`. 13A–13C implementan catálogo documental,
+    `documentSetRevision` y documento exacto con rol restringido, ETag, errores, seguridad y rate limit,
+    detrás de un flag apagado. Quedan el gate integral 13D, requisitos HTTP, aceptación de aplicación,
+    idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
+    staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
@@ -210,9 +212,11 @@ Errores: `401` (email o contraseña incorrectos).
 > agregados multicontexto, preservación de historia y un servicio interno que materializa/reutiliza
 > la composición bajo gate compartido y rol restringido. El contrato de un único token opaco se
 > mantiene; representa conjuntos completos y no depende de la evidencia ni de la lista pendiente.
-> Siguen pendientes controllers/endpoints legales, catálogo, `documentSetRevision`, ETag/readiness
-> pública, aceptación de aplicación, idempotencia HTTP, respuestas legales `409/428/503`, enforcement,
-> contenido real, staging y deploy. Las rutas de esta sección siguen sin existir en runtime:
+> 13A–13C implementan los dos GET documentales, revisión, ETag, errores y políticas HTTP con lector
+> restringido. Están apagados por defecto; encenderlos exige configuración documental explícita.
+> Quedan el gate integral 13D, requisitos públicos/autenticados, aceptación de aplicación, historial
+> propio, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido real,
+> staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
 > activo. No actives la UI basándote solamente en esta documentación.
 
@@ -226,6 +230,23 @@ Errores: `401` (email o contraseña incorrectos).
 | GET | `/api/requisitos-legales` | ADMIN/USER | Requisitos pendientes del actor actual |
 | GET | `/api/aceptaciones-legales?page=0&size=20` | ADMIN/USER | Evidencia propia; `contexto` es opcional |
 | POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
+
+Sólo las dos primeras filas están implementadas en 13C. El flag
+`ordenfix.legal.public-documents.enabled` vale `false` por defecto: apagado no registra mappings
+documentales ni excepciones de autenticación. Sólo `true` (sin distinguir mayúsculas) activa las
+tres políticas y los mappings; aliases como `yes`, `on` o `1` no habilitan lectura pública.
+Al encenderlo se requieren
+`ordenfix.legal.public-document-read.jdbc-url`, `.username` y `.password` en configuración del backend;
+no se heredan `spring.datasource.*`. Estas credenciales pertenecen a la frontera lectora acreditada
+en 13B, con preflight V27/V28 y permisos efectivos restringidos en cada operación. El contexto
+separado no ejecuta Flyway y se cierra con la aplicación. No se provisionaron roles en una base
+compartida ni se habilitó el flag en este corte.
+
+La policy `security.rate-limit.public-legal-documents` comparte una ventana por IP para ambos GET:
+`requests=60`, `window=1m` inicialmente, bajo el switch general de rate limit existente. Incluye
+UUID inválidos y peticiones condicionales. Se mantiene la política de confianza de forwarded headers
+existente. HEAD, otros métodos, rutas vecinas y subrutas no heredan autorización pública documental;
+OPTIONS preflight continúa bajo CORS. Un Authorization inválido no altera estos GET públicos.
 
 `locale` es obligatorio en los dos GET públicos de colección y v1 sólo admite `es-AR`; el GET por
 UUID no recibe locale. `contexto` es obligatorio en requisitos públicos; inicialmente sólo se
@@ -308,7 +329,7 @@ export interface PageMeta {
 export interface DocumentosLegalesResponse {
   contexto: ContextoLegal | null;
   locale: LocaleLegal;
-  documentSetRevision: string; // opaco; formato previsto sha256:<64-hex>; implementación pendiente
+  documentSetRevision: string; // opaco; formato sha256:<64-hex>; catálogo completo del filtro
   documentos: DocumentoLegalResumen[];
   page: PageMeta;
 }
@@ -391,8 +412,9 @@ completos de los contextos aplicables, resueltos por el servidor. Cambiar una re
 composición aplicable cambia el token; una edición en un contexto excluido no lo cambia. Registrar,
 modificar o retirar evidencia y filtrar algunos o todos los pendientes tampoco lo cambia. Esta
 semántica reemplaza la interpretación anterior de un hash de la respuesta filtrada, tanto para el
-registro como para las respuestas autenticadas futuras. `documentSetRevision` conserva su contrato
-de catálogo y su implementación continúa pendiente.
+registro como para las respuestas autenticadas futuras. `documentSetRevision` está implementado
+como hash canónico del catálogo completo del filtro, independiente de page/size, con el mismo
+render UTC y UUID que los resúmenes enviados por HTTP.
 
 #### Catálogo público
 
@@ -1113,11 +1135,11 @@ de pendientes. El alcance y la evidencia están en
 1. Mantener 2.3C como operación interna V27, sin exposición HTTP.
 2. V28 multicontexto está implementada como núcleo y persistencia internos; conservar su frontera
    aislada y usar su cierre como base de los cortes HTTP pendientes.
-3. Implementar controllers, catálogo, `documentSetRevision`, documentos, requisitos HTTP y ETag con
-   enforcement apagado.
+3. 13A–13C implementan catálogo, `documentSetRevision`, documento exacto, ETag y sus políticas HTTP,
+   con flag apagado. Completar el gate integral 13D y después requisitos HTTP; enforcement sigue apagado.
 4. Implementar aceptación y registro atómicos, idempotencia HTTP y respuestas legales `409/428/503`.
-5. Aplicar seguridad, CORS, rate limits y enforcement compatible, todavía desactivado hasta completar
-   la validación.
+5. Extender la clasificación cerrada, seguridad, CORS y rate limits a los recursos pendientes;
+   implementar enforcement compatible y mantenerlo desactivado hasta completar la validación.
 6. Desplegar y migrar las capas backend compatibles en staging; luego importar/promover el release
    definitivo aprobado y validar readiness pública y smokes remotos.
 7. Sólo entonces acreditar `BACKEND-HANDOFF 1`.
@@ -2201,9 +2223,10 @@ window.location.href = data.initPoint;
   `validate`, `dry-run`, `import`, promoción, reemplazo, retiro y readiness editorial. El import
   sella versiones nuevas en `BORRADOR`; los siete comandos editoriales operan después sin exponer
   HTTP. V28 agrega materialización interna de una revisión de conjuntos completos, procedencia y
-  replay. Siguen pendientes controllers/APIs legales, catálogo, `documentSetRevision`, aceptación
-  de aplicación, idempotencia HTTP, respuestas legales `409/428/503`, seguridad/enforcement,
-  contenido definitivo, staging y deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
+  replay. 13A–13C agregan lectura HTTP de catálogo/documento exacto, revisión, ETag y políticas con
+  rol restringido y flag apagado. Quedan el gate integral 13D, requisitos HTTP, aceptación de
+  aplicación, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido
+  definitivo, staging y deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 

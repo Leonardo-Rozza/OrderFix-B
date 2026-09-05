@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.config;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.JwtFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,6 +33,7 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
     private final PublicEndpointRateLimitFilter publicEndpointRateLimitFilter;
     private final UserDetailsService userDetailsService;
+    private final LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -40,6 +42,7 @@ public class SecurityConfig {
                 .cors(withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(legalPublicDocumentRequestMatcher).permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/pagos/webhook").permitAll()
                         .requestMatchers("/api/seguimiento/**").permitAll()

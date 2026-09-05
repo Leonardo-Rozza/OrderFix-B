@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.config.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.RateLimitProperties;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ApiError;
 import jakarta.servlet.FilterChain;
@@ -8,7 +9,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -23,14 +24,26 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Component
-@RequiredArgsConstructor
 public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimitProperties properties;
     private final Clock clock;
+    private final LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final Map<String, SlidingWindow> windows = new ConcurrentHashMap<>();
     private final AtomicLong requestsSeen = new AtomicLong();
+
+    @Autowired
+    public PublicEndpointRateLimitFilter(RateLimitProperties properties, Clock clock,
+                                        LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher) {
+        this.properties = properties;
+        this.clock = clock;
+        this.legalPublicDocumentRequestMatcher = legalPublicDocumentRequestMatcher;
+    }
+
+    public PublicEndpointRateLimitFilter(RateLimitProperties properties, Clock clock) {
+        this(properties, clock, new LegalPublicDocumentRequestMatcher(false));
+    }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -57,6 +70,9 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
         response.setHeader("X-RateLimit-Limit", String.valueOf(policy.limit().getRequests()));
         response.setHeader("X-RateLimit-Remaining", String.valueOf(decision.remaining()));
         if (!decision.allowed()) {
+            if (legalPublicDocumentRequestMatcher.matches(request)) {
+                response.setHeader("Cache-Control", "no-store");
+            }
             response.setHeader("Retry-After", String.valueOf(decision.retryAfterSeconds()));
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
@@ -75,6 +91,9 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
     }
 
     private Policy policy(HttpServletRequest request) {
+        if (legalPublicDocumentRequestMatcher.matches(request)) {
+            return new Policy("public-legal-documents", properties.getPublicLegalDocuments());
+        }
         String path = request.getRequestURI();
         String method = request.getMethod();
         if ("POST".equals(method) && "/api/auth/login".equals(path)) {
@@ -132,6 +151,7 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
                 properties.getAccountRecovery(),
                 properties.getPublicTrackingRead(),
                 properties.getPublicTrackingAction(),
+                properties.getPublicLegalDocuments(),
                 properties.getMercadoPagoWebhook()}) {
             if (limit.getWindow().compareTo(longest) > 0) {
                 longest = limit.getWindow();

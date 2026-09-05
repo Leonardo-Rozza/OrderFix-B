@@ -24,6 +24,7 @@ public class RateLimitProperties {
     private Limit accountRecovery = new Limit(5, Duration.ofMinutes(15));
     private Limit publicTrackingRead = new Limit(60, Duration.ofMinutes(1));
     private Limit publicTrackingAction = new Limit(10, Duration.ofMinutes(10));
+    private Limit publicLegalDocuments = new Limit(60, Duration.ofMinutes(1));
     private Limit mercadoPagoWebhook = new Limit(300, Duration.ofMinutes(1));
 
     @PostConstruct
@@ -33,13 +34,14 @@ public class RateLimitProperties {
         validate("account-recovery", accountRecovery);
         validate("public-tracking-read", publicTrackingRead);
         validate("public-tracking-action", publicTrackingAction);
+        validate("public-legal-documents", publicLegalDocuments);
         validate("mercado-pago-webhook", mercadoPagoWebhook);
     }
 
     private void validate(String name, Limit limit) {
         if (limit == null || limit.requests < 1 || limit.requests > MAX_REQUESTS_PER_WINDOW
-                || limit.window == null || limit.window.isZero() || limit.window.isNegative()
-                || limit.window.compareTo(MAX_WINDOW) > 0) {
+                || limit.window == null || limit.window.isNegative()
+                || limit.window.compareTo(MAX_WINDOW) > 0 || limit.window.toMillis() < 1) {
             throw new IllegalStateException("Rate limit inválido para " + name + '.');
         }
     }

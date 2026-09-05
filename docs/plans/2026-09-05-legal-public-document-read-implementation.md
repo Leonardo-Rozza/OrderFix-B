@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: 13A–13B completados y verificados; 13C–13D pendientes.
+Estado: 13A–13C completados y verificados; 13D pendiente.
 
 Diseño aprobado: [lectura pública documental](2026-09-05-legal-public-document-read-design.md),
 commit `10bf5b5`. El titular autorizó comenzar 13A el 2026-09-05.
@@ -266,7 +266,30 @@ Commit previsto: `feat(legal): lee documentos con rol restringido`.
 
 ## 13C — Transporte público y políticas conjuntas
 
-Dependencia: lector 13B acreditado. Cerrar whitelist antes de editar seguridad/HTTP.
+Dependencia acreditada: lector 13B, commit `a05c057`, árbol limpio. Continuación autorizada por el
+titular el 2026-09-05. Whitelist cerrada antes de editar seguridad/HTTP:
+
+- Bajo `src/main/java/com/leonardorozza/mvgrreparacionesbackend/config/`:
+  `SecurityConfig.java`, `CorsConfig.java`, `filter/JwtFilter.java`,
+  `filter/PublicEndpointRateLimitFilter.java`, `security/RateLimitProperties.java` y
+  `security/LegalPublicDocumentRequestMatcher.java` (nuevo).
+- Bajo `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/http/`, todos nuevos:
+  `LegalPublicDocumentHttpConfiguration.java`, `LegalPublicDocumentController.java`,
+  `LegalPublicDocumentResponses.java`, `LegalPublicDocumentHttpException.java` y
+  `LegalPublicDocumentExceptionHandler.java`.
+- Bajo `src/test/java/com/leonardorozza/mvgrreparacionesbackend/`:
+  `LegalPublicDocumentSecurityTest.java`, `config/security/LegalPublicDocumentRequestMatcherTest.java`,
+  `config/security/LegalPublicDocumentRateLimitPropertiesTest.java`,
+  `legal/http/LegalPublicDocumentControllerTest.java`,
+  `legal/http/LegalPublicDocumentHttpConfigurationTest.java`,
+  `legal/manifest/persistence/LegalPublicDocumentHttpIT.java` (nuevos) y
+  `PublicEndpointRateLimitFilterTests.java` (regresión aditiva si corresponde).
+- Este plan, estado del diseño aprobado y `FRONTEND_INTEGRATION.md`.
+
+No se modifica el lector/preflight/gate acreditado, el envelope global ni las migraciones V27/V28.
+El contexto documental se crea sin parent y expone sólo su fachada al contexto HTTP; requiere
+credenciales dedicadas al habilitar el flag. Se verifican el cierre del contexto y la ausencia de
+beans JDBC/transaction manager adicionales en la aplicación web.
 
 1. Crear sólo los dos GET documentales y sus DTO wire, reutilizando el formato canónico de fechas.
 2. Flag apagado por defecto: sin mappings ni excepciones de autenticación nuevas cuando está off.
@@ -278,6 +301,74 @@ Dependencia: lector 13B acreditado. Cerrar whitelist antes de editar seguridad/H
 5. Gate focal MockMvc/seguridad y lectura real: flag off/on, variantes UUID, query y path vecinos,
    400/404/503/429, headers, condicionales débiles/listas/*, errores no-store. Regresión obligatoria
    de AuthTests, JwtSecurityIntegrationTests, PublicEndpointRateLimitFilterTests y ApiErrorContractTests.
+
+### Decisiones y resultado de 13C
+
+- Se registran exclusivamente los GET de catálogo y documento exacto bajo el flag HTTP apagado por
+  defecto. Se exponen DTOs wire con nombres españoles, contexto null explícito, fechas mediante
+  `effectiveAtUtc()` y UUID canónico. No se serializan entidades, claves de manifiesto ni Markdown
+  en los resúmenes. La paginación inválida usa ApiError 400 sin incorporar un código legal nuevo.
+- El bridge crea un `AnnotationConfigApplicationContext` independiente, sin parent. Copia sólo
+  URL, usuario y contraseña dedicados, más su flag interno; elimina fuentes de entorno por defecto
+  y no hereda perfiles/beans web. Publica únicamente `LegalPublicDocumentReadService`. El owner
+  cierra contexto/pool en shutdown y ante errores de refresh o creación; no inicia conexiones al
+  arrancar ni ejecuta Flyway. El preflight/rol/gate/lector 13B no cambia.
+- La clasificación compartida usa método GET y URI con context path comprobado. Admite catálogo
+  exacto o un único segmento documental no vacío, antes de validar UUID. HEAD, otros métodos,
+  requisitos, rutas vecinas y subrutas no reciben la excepción pública. Un Bearer inválido no
+  consulta JWT ni al actor para estos GET; la autenticación histórica conserva su principal DB.
+- El flag se compara como string mediante `equalsIgnoreCase("true")`, igual que
+  `ConditionalOnProperty(havingValue="true")`. Una conversión booleana de Spring habría admitido
+  aliases `yes`/`on`/`1` sin registrar controllers. Las pruebas cruzan ambos mecanismos, incluso
+  mayúsculas y espacios, y acreditan su equivalencia cerrada.
+- La policy documental tiene inicialmente 60 solicitudes/minuto por IP, configurable, con ventana
+  compartida para catálogo, exactos, UUID inválidos y condicionales. Conserva el switch general,
+  política de forwarded headers, limpieza y envelope 429 existente; el rechazo documental envía
+  no-store y Retry-After. CORS agrega los tres headers de cuota/reintento y conserva Authorization.
+  La validación común rechaza ventanas menores a 1 ms, pues el algoritmo trabaja en milisegundos:
+  una duración de 1 ns antes se convertía a cero. Se prueba también sobre la policy histórica login.
+- La consulta y acreditación completa ocurren antes de evaluar If-None-Match. Los ETags débiles
+  incluyen page/size para catálogo y estado para exactos; las versiones terminales usan caché
+  immutable. Spring 7.0.7 no resuelve el wildcard GET con la misma rama que métodos no seguros:
+  después de `checkNotModified` con el ETag real se usa su propio parser `ETag.parse` para reconocer
+  `*`, sólo tras una observación exitosa y status 200. Se conservan las precondiciones procesadas
+  por Spring, tags débiles/fuertes, listas y headers múltiples. Ningún error conocido se transforma
+  en 304; los errores documentales usan el envelope existente, no-store y sin ETag.
+- UUID malformado (incluida la forma abreviada que Java acepta), desconocido, BORRADOR y PUBLICADA
+  responden el mismo 404. Los fallos de lectura/acreditación responden 503 con contexto/locale
+  contractuales, sin SQL, credenciales o detalles editoriales. El advice está limitado al controller
+  documental; no se modifica `ApiError` ni `GlobalExceptionHandler`.
+
+### Evidencia de 13C
+
+- Primer gate: 141 pruebas unitarias/MVC, 0 fallos/errores/omitidas; `BUILD SUCCESS`, 15.768 s.
+- Regresión obligatoria AuthTests y JwtSecurityIntegrationTests: 8 pruebas aprobadas. Junto con
+  PublicEndpointRateLimitFilterTests y ApiErrorContractTests del primer gate cubren las cuatro
+  familias exigidas por el diseño.
+- 7 IT HTTP con PostgreSQL 16.14 aprobados: composición productiva del bridge, controller, advice,
+  seguridad y lector con credencial restringida real. Los únicos mocks son colaboradores JWT;
+  no se reemplazan consultas, transacción, pool, preflight ni gate. Se usan fixtures editoriales
+  efímeros con import/PROMOTE/REPLACE y transiciones auditadas.
+- Esos IT acreditan revisión completa entre páginas, página vacía, contenido/digest original,
+  context path, ausencia de DML por conteos y secuencias, 304 con headers, reemplazo/retirada reales,
+  estados ocultos, catálogo vacío, pérdida/restauración de SELECT y corrupción deliberada de digest.
+  ETags previos y wildcard no esconden 404/503; el contenido interno de los fallos no llega al JSON.
+- La revisión final aisló los fixtures MVC con `@TestConfiguration` para excluirlos del escaneo
+  de las regresiones Spring Boot. Se repitió el gate focal completo sobre ese ajuste de tests:
+  `BUILD SUCCESS`, 57.274 s, finalizado el 2026-09-05 a las 13:09:18 -03.
+- Total distinto: **149 Surefire + 7 Failsafe = 156 pruebas**, sin fallos, errores ni omitidas.
+  Java Corretto 21.0.10. No se ejecuta clean verify en este corte: no cambiaron contratos internos
+  del lector, migraciones ni envelope global; el gate integral permanece en 13D.
+- V27/V28 conservan los SHA-256 registrados en 13A. Frontend sigue en `7545201`, con sus archivos
+  no versionados preservados. No se habilita producción ni se hace push. BACKEND-HANDOFF 1 sigue cerrado.
+
+Comando focal final desde backend:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalPublicDocumentControllerTest,LegalPublicDocumentHttpConfigurationTest,LegalPublicDocumentSecurityTest,LegalPublicDocumentRequestMatcherTest,LegalPublicDocumentRateLimitPropertiesTest,PublicEndpointRateLimitFilterTests,ApiErrorContractTests,AuthTests,JwtSecurityIntegrationTests -Dit.test=LegalPublicDocumentHttpIT test failsafe:integration-test failsafe:verify
+```
+
+Commit previsto: `feat(legal): publica consulta documental`.
 
 ## 13D — Capacidad y cierre integral
 

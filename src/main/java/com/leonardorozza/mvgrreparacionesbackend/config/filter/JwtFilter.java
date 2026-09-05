@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.config.filter;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.UserDetailsServiceImpl;
 import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
@@ -10,8 +11,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -23,17 +24,30 @@ import java.io.IOException;
 
 @Component
 @Slf4j
-@RequiredArgsConstructor
 public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtUtils jwtUtils;
     private final UserDetailsServiceImpl userDetailsService;
+    private final LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher;
+
+    @Autowired
+    public JwtFilter(JwtUtils jwtUtils, UserDetailsServiceImpl userDetailsService,
+                     LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher) {
+        this.jwtUtils = jwtUtils;
+        this.userDetailsService = userDetailsService;
+        this.legalPublicDocumentRequestMatcher = legalPublicDocumentRequestMatcher;
+    }
+
+    public JwtFilter(JwtUtils jwtUtils, UserDetailsServiceImpl userDetailsService) {
+        this(jwtUtils, userDetailsService, new LegalPublicDocumentRequestMatcher(false));
+    }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         // No filtramos login, el webhook de MercadoPago ni el health (entran sin JWT).
-        return path.startsWith("/api/auth/")
+        return legalPublicDocumentRequestMatcher.matches(request)
+                || path.startsWith("/api/auth/")
                 || path.equals("/api/pagos/webhook")
                 || path.startsWith("/api/seguimiento/")
                 || path.startsWith("/actuator/health");
