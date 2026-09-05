@@ -2,7 +2,13 @@
 
 Fecha: 2026-08-23
 
-Estado: contrato congelado; implementación pendiente
+Estado: contrato HTTP congelado; implementación HTTP pendiente. Núcleo/persistencia V28 cerrados.
+
+Actualización de continuidad (2026-09-05): el
+[cierre V28](2026-09-01-legal-required-set-aggregate-v28-closure.md) acredita núcleo y persistencia
+internos; el [diseño de lectura documental](2026-09-05-legal-public-document-read-design.md) propone
+el primer bloque HTTP. `BACKEND-HANDOFF 1` continúa cerrado. La semántica agregada de
+`requiredSetRevision` indicada abajo sustituye la formulación inicial basada en una respuesta filtrada.
 
 Alcance: diseño y contrato HTTP del backend; sin tablas, migraciones, controllers, seeds ni UI
 
@@ -16,7 +22,7 @@ La fuente normativa del wire queda en `FRONTEND_INTEGRATION.md`, sección **4.1.
 conserva las decisiones, invariantes, compatibilidad y secuencia de despliegue; no duplica todos los
 ejemplos del contrato.
 
-## Contexto actual
+## Contexto original al 2026-08-23
 
 - El backend todavía no posee entidades, endpoints ni migraciones legales.
 - `POST /api/auth/register` aún acepta el request histórico sin evidencia legal.
@@ -120,24 +126,32 @@ valor decodificado.
 `documentSetRevision` y `requiredSetRevision` usan el formato servidor `sha256:<64-hex>`, pero son
 valores opacos para el frontend: el cliente sólo los conserva, compara y reenvía.
 
-Para evitar revisiones dependientes del orden de propiedades JSON, `requiredSetRevision` se calcula
-sobre su response completo sin el propio campo. `documentSetRevision` incluye explícitamente
-`contexto`, `locale` y el catálogo filtrado completo de resúmenes, antes de paginar y sin campos de
-revisión/página. En ambos casos:
+`requiredSetRevision` usa `AGGREGATE_V1`: se calcula sobre las revisiones de los conjuntos completos
+de scopes aplicables resueltos por el servidor, antes de filtrar por actor/evidencia. Su proyección,
+orden y bytes están congelados en el
+[diseño V28](2026-09-01-legal-required-set-aggregate-v28-design.md). No se calcula sobre el response
+de pendientes ni incluye la procedencia física interna.
+
+`documentSetRevision` conserva la proyección `{contexto, locale, documentos}` con el catálogo
+filtrado completo de resúmenes, antes de paginar y sin campos de revisión/página. Para ambas
+proyecciones:
 
 1. se conserva el orden contractual de los arrays;
 2. se canonicaliza como JSON mediante RFC 8785;
 3. se calcula SHA-256 sobre los bytes UTF-8 canónicos;
 4. se antepone `sha256:`.
 
-La revisión cambia ante cualquier cambio representable del conjunto, no sólo ante un nuevo ID. Los
-requisitos mantienen el orden del manifiesto importado. El catálogo ordena por el orden exacto del
+La revisión documental cambia ante cualquier cambio representable del catálogo, no sólo ante un
+nuevo ID. La revisión requerida cambia al cambiar las revisiones completas o la composición de los
+scopes incluidos, no al satisfacer pendientes. Los requisitos mantienen el orden del manifiesto
+importado. El catálogo ordena por el orden exacto del
 enum `TipoDocumentoLegal` publicado en `FRONTEND_INTEGRATION.md`, luego `vigenteDesde` descendente y
 finalmente UUID ascendente.
 
 Un conjunto público de registro vacío o incompleto responde `503`; nunca habilita un alta sin
 contrato. Un usuario autenticado que ya satisfizo todos sus requisitos recibe legítimamente
-`requisitos: []` y la revisión determinística del conjunto vacío.
+`requisitos: []` y conserva la revisión de sus conjuntos completos aplicables. No representa un
+agregado sin scopes ni genera un hash del conjunto vacío.
 
 ### Reaceptación y herencia editorial
 
