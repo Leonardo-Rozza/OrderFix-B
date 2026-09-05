@@ -34,6 +34,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -226,6 +227,10 @@ class LegalRequiredSetAggregateStoreTest {
                 any(RowMapper.class),
                 aryEq(TWO_SCOPE_POINTER_ARGUMENTS));
         order.verify(harness.jdbc()).query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected)));
+        order.verify(harness.jdbc()).query(
                 eq(INSERT_HEADER_SQL),
                 any(RowMapper.class),
                 aryEq(insertArguments(CANDIDATE_ID, expected)));
@@ -354,6 +359,10 @@ class LegalRequiredSetAggregateStoreTest {
                 any(RowMapper.class),
                 aryEq(pointerArguments));
         verify(harness.jdbc()).query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected)));
+        verify(harness.jdbc()).query(
                 eq(INSERT_HEADER_SQL),
                 any(RowMapper.class),
                 aryEq(insertArguments(CANDIDATE_ID, expected)));
@@ -372,6 +381,138 @@ class LegalRequiredSetAggregateStoreTest {
     }
 
     @Test
+    void exactExistingIdentityReplaysWithoutGeneratingUuidOrExecutingDml() {
+        Harness harness = harness(CANDIDATE_ID);
+        LegalApplicableScopeSet scopes = authenticatedScopes(
+                ContextoLegal.USO_CONTINUADO,
+                ContextoLegal.ATESTACION_FOTOS);
+        List<PointerData> pointers = exactPointers(REQUIRED_SET_A, PUBLICATION_A,
+                REQUIRED_SET_B, PUBLICATION_B);
+        Identity expected = identity(scopes, pointers, harness);
+        stubPointerRows(harness.jdbc(), POINTER_SQL_TWO, TWO_SCOPE_POINTER_ARGUMENTS, pointers);
+        stubHeaderRows(
+                harness.jdbc(),
+                SELECT_HEADER_BY_IDENTITY_SQL,
+                identityArguments(expected),
+                List.of(header(REUSED_ID, expected, HISTORICAL_CREATED_AT)));
+        stubReplay(harness, REUSED_ID, Outcome.REUSED, HISTORICAL_CREATED_AT);
+
+        LegalRequiredSetAggregateReceipt receipt = harness.store().materialize(scopes, boundary());
+
+        ArgumentCaptor<ExpectedAggregate> replayExpected =
+                ArgumentCaptor.forClass(ExpectedAggregate.class);
+        InOrder order = inOrder(harness.jdbc(), harness.replayVerifier());
+        order.verify(harness.jdbc()).query(
+                eq(POINTER_SQL_TWO),
+                any(RowMapper.class),
+                aryEq(TWO_SCOPE_POINTER_ARGUMENTS));
+        order.verify(harness.jdbc()).query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected)));
+        order.verify(harness.replayVerifier()).verify(
+                eq(REUSED_ID),
+                eq(Outcome.REUSED),
+                replayExpected.capture(),
+                eq(boundary()));
+        verifyNoMoreInteractions(harness.jdbc(), harness.replayVerifier());
+        verifyNoInteractions(harness.aggregateIdGenerator());
+        assertThat(replayExpected.getValue().projection()).isEqualTo(expected.projection());
+        assertThat(replayExpected.getValue().provenance()).isEqualTo(expected.provenance());
+        assertThat(replayExpected.getValue().token()).isEqualTo(expected.token());
+        assertThat(replayExpected.getValue().fingerprint()).isEqualTo(expected.fingerprint());
+        assertThat(receipt.outcome()).isEqualTo(Outcome.REUSED);
+        assertThat(receipt.aggregateId()).isEqualTo(REUSED_ID);
+        assertThat(receipt.requiredSetRevision()).isEqualTo(expected.token());
+        assertThat(receipt.provenanceFingerprint()).isEqualTo(expected.fingerprint());
+        assertThat(receipt.provenance()).isEqualTo(expected.provenance());
+        assertThat(receipt.createdAt()).isEqualTo(HISTORICAL_CREATED_AT);
+    }
+
+    @Test
+    void nullDuplicateOrCorruptInitialLookupFailsBeforeUuidDmlAndReplay() {
+        for (int scenario = 0; scenario < 4; scenario++) {
+            Harness harness = harness(CANDIDATE_ID);
+            LegalApplicableScopeSet scopes = authenticatedScopes(
+                    ContextoLegal.USO_CONTINUADO,
+                    ContextoLegal.ATESTACION_FOTOS);
+            List<PointerData> pointers = exactPointers(REQUIRED_SET_A, PUBLICATION_A,
+                    REQUIRED_SET_B, PUBLICATION_B);
+            Identity expected = identity(scopes, pointers, harness);
+            HeaderData exact = header(REUSED_ID, expected, HISTORICAL_CREATED_AT);
+            stubPointerRows(
+                    harness.jdbc(), POINTER_SQL_TWO, TWO_SCOPE_POINTER_ARGUMENTS, pointers);
+            if (scenario == 0) {
+                when(harness.jdbc().query(
+                        eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                        any(RowMapper.class),
+                        aryEq(identityArguments(expected)))).thenReturn(null);
+            } else {
+                List<HeaderData> rows = switch (scenario) {
+                    case 1 -> List.of(exact, exact);
+                    case 2 -> List.of(exact.withFingerprint(digest('9')));
+                    default -> List.of(header(null, expected, HISTORICAL_CREATED_AT));
+                };
+                stubHeaderRows(
+                        harness.jdbc(), SELECT_HEADER_BY_IDENTITY_SQL,
+                        identityArguments(expected), rows);
+            }
+
+            assertThatThrownBy(() -> harness.store().materialize(scopes, boundary()))
+                    .as("invalid initial lookup scenario %s", scenario)
+                    .isInstanceOf(IllegalStateException.class);
+
+            verify(harness.jdbc()).query(
+                    eq(POINTER_SQL_TWO),
+                    any(RowMapper.class),
+                    aryEq(TWO_SCOPE_POINTER_ARGUMENTS));
+            verify(harness.jdbc()).query(
+                    eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                    any(RowMapper.class),
+                    aryEq(identityArguments(expected)));
+            verifyNoMoreInteractions(harness.jdbc());
+            verifyNoInteractions(harness.replayVerifier(), harness.aggregateIdGenerator());
+        }
+    }
+
+    @Test
+    void reusedReplayFailurePropagatesWithoutUuidOrDml() {
+        Harness harness = harness(CANDIDATE_ID);
+        LegalApplicableScopeSet scopes = authenticatedScopes(
+                ContextoLegal.USO_CONTINUADO,
+                ContextoLegal.ATESTACION_FOTOS);
+        List<PointerData> pointers = exactPointers(REQUIRED_SET_A, PUBLICATION_A,
+                REQUIRED_SET_B, PUBLICATION_B);
+        Identity expected = identity(scopes, pointers, harness);
+        stubPointerRows(harness.jdbc(), POINTER_SQL_TWO, TWO_SCOPE_POINTER_ARGUMENTS, pointers);
+        stubHeaderRows(
+                harness.jdbc(),
+                SELECT_HEADER_BY_IDENTITY_SQL,
+                identityArguments(expected),
+                List.of(header(REUSED_ID, expected, HISTORICAL_CREATED_AT)));
+        IllegalStateException failure = new IllegalStateException("persisted aggregate drift");
+        when(harness.replayVerifier().verify(
+                eq(REUSED_ID),
+                eq(Outcome.REUSED),
+                any(ExpectedAggregate.class),
+                eq(boundary()))).thenThrow(failure);
+
+        assertThatThrownBy(() -> harness.store().materialize(scopes, boundary()))
+                .isSameAs(failure);
+
+        verify(harness.jdbc()).query(
+                eq(POINTER_SQL_TWO),
+                any(RowMapper.class),
+                aryEq(TWO_SCOPE_POINTER_ARGUMENTS));
+        verify(harness.jdbc()).query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected)));
+        verifyNoMoreInteractions(harness.jdbc());
+        verifyNoInteractions(harness.aggregateIdGenerator());
+    }
+
+    @Test
     void exactConflictIsReusedWithoutBatchAndMayKeepHistoricalCreatedAt() {
         Harness harness = harness(CANDIDATE_ID);
         LegalApplicableScopeSet scopes = authenticatedScopes(
@@ -386,16 +527,23 @@ class LegalRequiredSetAggregateStoreTest {
                 INSERT_HEADER_SQL,
                 insertArguments(CANDIDATE_ID, expected),
                 List.of());
-        stubHeaderRows(
+        stubIdentityRowsAfterInitialMiss(
                 harness.jdbc(),
-                SELECT_HEADER_BY_IDENTITY_SQL,
-                identityArguments(expected),
+                expected,
                 List.of(header(REUSED_ID, expected, HISTORICAL_CREATED_AT)));
         stubReplay(harness, REUSED_ID, Outcome.REUSED, HISTORICAL_CREATED_AT);
 
         LegalRequiredSetAggregateReceipt receipt = harness.store().materialize(scopes, boundary());
 
         InOrder order = inOrder(harness.jdbc(), harness.replayVerifier());
+        order.verify(harness.jdbc()).query(
+                eq(POINTER_SQL_TWO),
+                any(RowMapper.class),
+                aryEq(TWO_SCOPE_POINTER_ARGUMENTS));
+        order.verify(harness.jdbc()).query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected)));
         order.verify(harness.jdbc()).query(
                 eq(INSERT_HEADER_SQL),
                 any(RowMapper.class),
@@ -432,11 +580,7 @@ class LegalRequiredSetAggregateStoreTest {
                 List.of());
         HeaderData different = header(REUSED_ID, expected, HISTORICAL_CREATED_AT)
                 .withFingerprint(digest('9'));
-        stubHeaderRows(
-                harness.jdbc(),
-                SELECT_HEADER_BY_IDENTITY_SQL,
-                identityArguments(expected),
-                List.of(different));
+        stubIdentityRowsAfterInitialMiss(harness.jdbc(), expected, List.of(different));
 
         assertThatThrownBy(() -> harness.store().materialize(scopes, boundary()))
                 .isInstanceOf(IllegalStateException.class);
@@ -504,7 +648,7 @@ class LegalRequiredSetAggregateStoreTest {
         assertThatThrownBy(() -> harness.store().materialize(scopes, boundary()))
                 .isSameAs(failure);
 
-        verify(harness.jdbc(), never()).query(
+        verify(harness.jdbc()).query(
                 eq(SELECT_HEADER_BY_IDENTITY_SQL),
                 any(RowMapper.class),
                 aryEq(identityArguments(expected)));
@@ -673,6 +817,22 @@ class LegalRequiredSetAggregateStoreTest {
                 sql,
                 arguments,
                 rows.stream().map(LegalRequiredSetAggregateStoreTest::headerResultSet).toList());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void stubIdentityRowsAfterInitialMiss(
+            JdbcTemplate jdbc,
+            Identity expected,
+            List<HeaderData> rows) {
+        List<ResultSet> persisted = rows.stream()
+                .map(LegalRequiredSetAggregateStoreTest::headerResultSet)
+                .toList();
+        when(jdbc.query(
+                eq(SELECT_HEADER_BY_IDENTITY_SQL),
+                any(RowMapper.class),
+                aryEq(identityArguments(expected))))
+                .thenReturn(List.of())
+                .thenAnswer(invocation -> mapRows(invocation.getArgument(1), persisted));
     }
 
     @SuppressWarnings("unchecked")
@@ -851,6 +1011,7 @@ class LegalRequiredSetAggregateStoreTest {
         return arguments.toArray();
     }
 
+    @SuppressWarnings("unchecked")
     private static Harness harness(UUID candidateId) {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         LegalRequiredSetAggregateRevisionCalculator semantic =
@@ -859,15 +1020,17 @@ class LegalRequiredSetAggregateStoreTest {
                 new LegalRequiredSetAggregateProvenanceCalculator();
         LegalRequiredSetAggregateReplayVerifier replay =
                 mock(LegalRequiredSetAggregateReplayVerifier.class);
+        Supplier<UUID> aggregateIdGenerator = mock(Supplier.class);
+        when(aggregateIdGenerator.get()).thenReturn(candidateId);
         when(replay.usesJdbc(jdbc)).thenReturn(true);
         LegalRequiredSetAggregateStore store = new LegalRequiredSetAggregateStore(
                 jdbc,
                 semantic,
                 provenance,
                 replay,
-                () -> candidateId);
-        clearInvocations(jdbc, replay);
-        return new Harness(jdbc, semantic, provenance, replay, store);
+                aggregateIdGenerator);
+        clearInvocations(jdbc, replay, aggregateIdGenerator);
+        return new Harness(jdbc, semantic, provenance, replay, store, aggregateIdGenerator);
     }
 
     private static LegalEditorialTimeBoundary boundary() {
@@ -892,7 +1055,8 @@ class LegalRequiredSetAggregateStoreTest {
             LegalRequiredSetAggregateRevisionCalculator semanticCalculator,
             LegalRequiredSetAggregateProvenanceCalculator provenanceCalculator,
             LegalRequiredSetAggregateReplayVerifier replayVerifier,
-            LegalRequiredSetAggregateStore store) {
+            LegalRequiredSetAggregateStore store,
+            Supplier<UUID> aggregateIdGenerator) {
     }
 
     private record Identity(

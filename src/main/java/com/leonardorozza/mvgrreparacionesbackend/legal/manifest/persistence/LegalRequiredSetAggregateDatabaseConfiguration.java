@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalApplicableScopeResolver;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
 import org.springframework.beans.factory.annotation.Value;
@@ -102,6 +103,29 @@ public class LegalRequiredSetAggregateDatabaseConfiguration {
                 jdbcTemplate,
                 legalDatabaseBudgets,
                 List.of(schemaVerifier, privilegeVerifier));
+    }
+
+    @Bean
+    LegalApplicableScopeResolver legalApplicableScopeResolver() {
+        return new LegalApplicableScopeResolver();
+    }
+
+    @Bean
+    LegalRequiredSetAggregateService legalRequiredSetAggregateService(
+            LegalApplicableScopeResolver resolver,
+            JdbcTemplate jdbcTemplate,
+            LegalManifestDatabaseGate legalAggregateDatabaseGate,
+            LegalRequiredSetAggregateStore store,
+            LegalV28AggregateSchemaVerifier schemaVerifier,
+            LegalV28AggregatePrivilegeVerifier privilegeVerifier,
+            LegalDatabaseBoundaryMarker.Guard legalAggregateDatabaseBoundaryGuard) {
+        return new LegalRequiredSetAggregateService(
+                resolver,
+                jdbcTemplate,
+                legalAggregateDatabaseGate,
+                store,
+                schemaVerifier,
+                privilegeVerifier);
     }
 
     @Bean

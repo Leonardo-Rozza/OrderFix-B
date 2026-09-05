@@ -143,13 +143,7 @@ final class LegalRequiredSetAggregateStore {
                 provenance,
                 provenanceFingerprint);
 
-        UUID candidateId = Objects.requireNonNull(
-                aggregateIdGenerator.get(),
-                "aggregateIdGenerator result");
-        ResolvedHeader resolved = insertOrResolveHeader(
-                candidateId,
-                expected,
-                timeBoundary);
+        ResolvedHeader resolved = findOrCreateHeader(expected, timeBoundary);
         if (resolved.outcome() == Outcome.CREATED) {
             insertScopes(resolved.header().id(), accredited, snapshot);
         }
@@ -239,10 +233,19 @@ final class LegalRequiredSetAggregateStore {
         return List.copyOf(normalized);
     }
 
-    private ResolvedHeader insertOrResolveHeader(
-            UUID candidateId,
+    private ResolvedHeader findOrCreateHeader(
             ExpectedAggregate expected,
             LegalEditorialTimeBoundary boundary) {
+        List<HeaderRow> existing = readHeadersByIdentity(expected);
+        if (!existing.isEmpty()) {
+            return new ResolvedHeader(
+                    Outcome.REUSED,
+                    requireExpectedHeader(existing.getFirst(), expected));
+        }
+
+        UUID candidateId = Objects.requireNonNull(
+                aggregateIdGenerator.get(),
+                "aggregateIdGenerator result");
         List<HeaderRow> inserted = jdbc.query(
                 INSERT_HEADER_SQL,
                 LegalRequiredSetAggregateStore::mapHeaderRow,
@@ -270,6 +273,19 @@ final class LegalRequiredSetAggregateStore {
             return new ResolvedHeader(Outcome.CREATED, created);
         }
 
+        // A concurrent shared materializer may have committed after the initial SELECT.
+        // READ_COMMITTED makes that winning identity visible to this separate statement.
+        existing = readHeadersByIdentity(expected);
+        if (existing.size() != 1) {
+            throw new IllegalStateException(
+                    "El conflicto agregado no resolvió una identidad física única");
+        }
+        return new ResolvedHeader(
+                Outcome.REUSED,
+                requireExpectedHeader(existing.getFirst(), expected));
+    }
+
+    private List<HeaderRow> readHeadersByIdentity(ExpectedAggregate expected) {
         List<HeaderRow> existing = jdbc.query(
                 SELECT_HEADER_BY_IDENTITY_SQL,
                 LegalRequiredSetAggregateStore::mapHeaderRow,
@@ -278,13 +294,11 @@ final class LegalRequiredSetAggregateStore {
                 expected.projection().audience().name(),
                 expected.requiredSetRevision(),
                 expected.provenanceFingerprint());
-        if (existing == null || existing.size() != 1) {
+        if (existing == null || existing.size() > 1) {
             throw new IllegalStateException(
-                    "El conflicto agregado no resolvió una identidad física única");
+                    "La consulta agregada no resolvió una identidad física única");
         }
-        return new ResolvedHeader(
-                Outcome.REUSED,
-                requireExpectedHeader(existing.getFirst(), expected));
+        return existing;
     }
 
     private static HeaderRow requireExpectedHeader(

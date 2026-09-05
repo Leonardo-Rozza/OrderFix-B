@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-01
 
-Estado: listo para ejecución
+Estado: 12A–12E completados. 12F y 12G pendientes.
 
 Diseño aprobado:
 
@@ -70,6 +70,12 @@ de alcance.
    corte; no se rebaja a warning.
 8. Ningún commit intermedio habilita producción ni `BACKEND-HANDOFF 1`.
 9. No versionar `target/`, logs, reportes temporales, secretos o credenciales de roles de prueba.
+
+### Política de pruebas actualizada el 2026-09-05
+
+Por instrucción del titular, 12E y 12F usan pruebas focalizadas. El `clean verify` integral se
+reserva para 12G, salvo un cambio transversal o un fallo que requiera ampliar la verificación.
+Los comandos históricos de 12A–12D conservan la evidencia y el alcance de esos subcortes.
 
 ## Preflight común
 
@@ -520,6 +526,11 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persisten
 
 No modificar V28.
 
+La whitelist efectiva de 12E incluye además
+`src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRequiredSetAggregateStoreTest.java`
+para acreditar la lectura previa sin DML y conservar la prueba de conflicto concurrente, y este
+plan para registrar decisiones y validación. El replay existente se compone sin modificarlo.
+
 ### Implementación y pruebas
 
 1. El servicio solicita el valor opaco al resolver autoritativo; no acepta contextos crudos.
@@ -542,8 +553,7 @@ No modificar V28.
 
 ```bash
 ./mvnw -Dtest=LegalRequiredSetAggregateServiceTest,LegalRequiredSetAggregateStoreTest,LegalRequiredSetAggregateReplayVerifierTest test
-./mvnw -Dit.test=LegalRequiredSetAggregateServiceIT,LegalRequiredSetAggregateIT,LegalRequiredSetAggregateDatabaseIsolationIT,LegalV28AggregatePersistenceIT verify
-./mvnw clean verify
+./mvnw -Dit.test=LegalRequiredSetAggregateServiceIT,LegalRequiredSetAggregateIT,LegalRequiredSetAggregateDatabaseIsolationIT,LegalV28AggregatePersistenceIT test-compile failsafe:integration-test failsafe:verify
 git diff --check
 ```
 
@@ -552,6 +562,89 @@ Commit:
 ```text
 feat(legal): materializa agregados legales v28
 ```
+
+### Decisiones de implementación de 12E — 2026-09-05
+
+- `LegalRequiredSetAggregateService` es interno, sin anotaciones Spring/HTTP ni constructor de
+  scopes de transporte. Solicita el valor opaco al resolver servidor y sólo entrega el receipt
+  después del retorno exitoso del gate transaccional. No captura fallos ni implementa retry.
+- La configuración explícita crea el resolver mínimo y el servicio después del guard
+  `AGGREGATE`. El constructor acredita el par exacto de preflights V28, la misma sesión JDBC de
+  gate/store/replay y la frontera `REQUIRES_NEW/READ_COMMITTED` con commit seguro.
+- El store consulta primero la identidad física completa. Un hallazgo válido ejecuta replay y
+  devuelve `REUSED` sin DML ni UUID nuevo. Si inicialmente no existe, conserva el INSERT con
+  `ON CONFLICT DO NOTHING` y la relectura en otra sentencia para observar al ganador concurrente.
+  Una colisión de UUID ajena no se convierte en replay.
+- La completitud y vigencia de los snapshots V27 siguen respaldadas por sus guards, el sello
+  inmutable y el preflight del esquema. El snapshot se lee después de adquirir el lock compartido.
+  No se amplían privilegios ni se duplican lecturas de contenido legal que el rol materializador
+  no tiene autorizadas.
+- El IT obtiene el servicio desde la configuración productiva y un datasource restringido. Las
+  inyecciones de snapshot/replay alteran únicamente filas devueltas o un binding en pruebas;
+  ejecutan SQL real sobre la misma transacción y comprueban rollback, sin modificar migraciones,
+  guards ni datos persistidos para fabricar corrupción.
+- La estabilidad ante evidencia usa una simulación explícita de consumidor sobre requisitos
+  reales del snapshot: sin evidencia, parcial, modificada, completa y retirada. Conserva el token
+  incluso con `requisitos: []`. No acredita una API de pendientes ni escritura de aceptaciones;
+  esas capas continúan fuera de alcance y el runtime no consulta evidencia.
+- El fixture de cada caso limpia también cabeceras V28; cambiar una procedencia física usa
+  DELETE/INSERT de punteros y slots documentales dentro del mismo lock exclusivo, respetando
+  la prohibición V27 de UPDATE y validando las constraints antes del commit.
+- V27 y V28 permanecen congeladas. No hay cambios de frontend, controller, endpoint, contenido
+  legal real, credenciales productivas ni habilitación de `BACKEND-HANDOFF 1`.
+
+### Validación de 12E — 2026-09-05
+
+Baseline backend: `7b6afd6`, rama `codex/lanzamiento-publico-backend`. Java Amazon Corretto
+21.0.10, Maven 3.9.11, Testcontainers 2.0.5 y PostgreSQL 16.14 (`postgres:16-alpine`).
+
+Última evidencia de cada suite focalizada: **75 pruebas unitarias y 39 de integración**, todas
+con cero fallos, errores u omisiones. Los ajustes durante la validación quedaron limitados a
+los nuevos fixtures de Mockito/PostgreSQL; no requirieron cambios de esquema ni de producción.
+
+| Suite | Pruebas aprobadas |
+| --- | ---: |
+| `LegalRequiredSetAggregateServiceTest` | 19 |
+| `LegalRequiredSetAggregateStoreTest` | 12 |
+| `LegalRequiredSetAggregateReplayVerifierTest` | 10 |
+| `LegalRequiredSetAggregateDatabaseConfigurationTest` | 4 |
+| `LegalManifestDatabaseGateTest` | 30 |
+| `LegalRequiredSetAggregateServiceIT` | 13 |
+| `LegalRequiredSetAggregateIT` | 1 |
+| `LegalRequiredSetAggregateDatabaseIsolationIT` | 2 |
+| `LegalV28AggregatePersistenceIT` | 3 |
+| `LegalRequiredSetAggregateConcurrencyIT` | 4 |
+| `LegalV28AggregatePrivilegeVerifierIT` | 6 |
+| `LegalV28UpgradeIT` | 1 |
+| `LegalPersistenceIT` | 9 |
+
+Las regresiones adicionales acreditan la carrera existente con lectura previa, causalidad,
+constraints/FK/inmutabilidad, privilegios, pertenencia de actos, `xmin`, rechazo de nuevos
+`SCOPE_V1` y preservación de historia V27. Ejecutar la concurrencia existente no implementa 12F;
+quedan pendientes sus escenarios nuevos y capacidad.
+
+Comandos reproducibles con Java 21:
+
+```bash
+./mvnw -Dtest=LegalRequiredSetAggregateServiceTest,LegalRequiredSetAggregateStoreTest,LegalRequiredSetAggregateReplayVerifierTest,LegalRequiredSetAggregateDatabaseConfigurationTest,LegalManifestDatabaseGateTest test
+./mvnw -Dit.test=LegalRequiredSetAggregateServiceIT test-compile failsafe:integration-test failsafe:verify
+./mvnw -Dit.test=LegalRequiredSetAggregateIT,LegalRequiredSetAggregateDatabaseIsolationIT,LegalV28AggregatePersistenceIT,LegalRequiredSetAggregateConcurrencyIT,LegalV28AggregatePrivilegeVerifierIT,LegalV28UpgradeIT,LegalPersistenceIT failsafe:integration-test failsafe:verify
+git diff --check
+```
+
+Los IT se ejecutaron directamente con Failsafe sobre clases compiladas para evitar repetir toda
+la suite y el empaquetado; no se ejecutó `clean verify`. El gate integral sigue reservado para 12G.
+Flyway alcanzó V28 en las bases efímeras; no se migró ninguna base de aplicación.
+
+SHA-256 de los archivos de migración, idénticos al baseline:
+
+```text
+V27 52fd5f3eda14fde228e218f127b5e9362c8542dc7e26df7b502ba65061332b9b
+V28 1227c8261cfcca1263a0b2105bf0dc797c1f59f3b5bdc71225464fc4aa154a5e
+```
+
+El corte conserva los no versionados del frontend y se registra en un único commit local
+`feat(legal): materializa agregados legales v28`, sin push.
 
 ## Subcorte 12F — Concurrencia, causalidad y capacidad
 
@@ -598,7 +691,6 @@ No modificar V28.
 ```bash
 ./mvnw -Dtest=LegalJdbcMetricsSupportTest,LegalManifestDatabaseGateTest test
 ./mvnw -Dit.test=LegalRequiredSetAggregateConcurrencyIT,LegalRequiredSetAggregateCapacityIT,LegalEditorialConcurrencyIT,LegalEditorialCapacityIT verify
-./mvnw clean verify
 git diff --check
 ```
 
