@@ -12,9 +12,15 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 >   manuales históricos.
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
 > - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — contrato y rollout legal v1
->   congelados; V27, importación/sello y los siete comandos editoriales internos están disponibles.
->   Siguen pendientes V28, controllers/API, ETag/readiness público, aceptación, enforcement,
->   contenido definitivo y staging.
+>   congelados; V27, importación/sello, los siete comandos editoriales y el núcleo interno V28
+>   están implementados. Siguen pendientes controllers/API, catálogo, `documentSetRevision`,
+>   ETag/readiness público, aceptación de aplicación, idempotencia HTTP, respuestas legales
+>   `409/428/503`, enforcement, contenido definitivo, staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
+> - **`docs/plans/2026-09-01-legal-required-set-aggregate-v28-closure.md`** — cierre de V28:
+>   materialización interna con rol restringido, preflight, gate compartido, replay y preservación
+>   de historia V27. `requiredSetRevision` representa los conjuntos completos aplicables y permanece
+>   estable al filtrar pendientes, incluso con `requisitos: []`; el wire conserva un único token
+>   opaco, sin mapa de revisiones por contexto. No habilita APIs legales ni lanzamiento público.
 > - **`docs/plans/2026-08-25-legal-manifest-import-closure.md`** — cierre reproducible de la Fase
 >   2.3B y fronteras pendientes.
 > - **`docs/runbooks/legal-manifest-import-postgresql.md`** — operación PostgreSQL restringida del
@@ -24,8 +30,8 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 >   editorial interna: no publica APIs ni acredita contenido real, readiness público, staging o
 >   deploy.
 > - **`docs/plans/2026-08-27-legal-manifest-promotion-closure.md`** — cierre reproducible de la Fase
->   2.3C como plataforma editorial interna sobre V27; no habilita V28, APIs, contenido real,
->   staging ni deploy.
+>   2.3C como plataforma editorial interna sobre V27; su evidencia es específica de esa superficie,
+>   sin habilitar APIs, contenido real, staging ni deploy.
 
 ---
 
@@ -199,6 +205,7 @@ El `429` protege login, registro, recuperación/verificación, seguimiento públ
 | V25 | QR raster normalizado, aislado 1:1 por taller |
 | V26 | Tenant/roles válidos y un único ADMIN titular por taller |
 | V27 | Persistencia legal append-only para publicaciones, documentos, requisitos, transiciones y proyecciones editoriales internas |
+| V28 | Agregados legales multicontexto inmutables, procedencia exacta, vínculo de lotes nuevos y preservación de evidencia histórica V27; materialización interna sin HTTP |
 
 ---
 
@@ -281,5 +288,5 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/
 ├── persistence/       # entity/ (+ enums) y repository/
 ├── exceptions/        # GlobalExceptionHandler + excepciones de dominio
 └── utils/             # mappers (MapStruct) + jwt
-src/main/resources/db/migration/   # Flyway V1..V27
+src/main/resources/db/migration/   # Flyway V1..V28
 ```

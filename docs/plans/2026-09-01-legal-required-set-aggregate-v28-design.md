@@ -2,7 +2,15 @@
 
 Fecha: 2026-09-01
 
-Estado: diseño aprobado; implementación pendiente
+Estado: implementado y verificado; Cortes 12A–12G completos (2026-09-05).
+
+Evidencia de implementación y cierre:
+
+- [Plan y commits 12A–12F](2026-09-01-legal-required-set-aggregate-v28-implementation.md).
+- [Gate integral e inventario de 12G](2026-09-01-legal-required-set-aggregate-v28-closure.md).
+
+El cierre acredita núcleo y persistencia internos. Los flujos HTTP y de aceptación de aplicación
+descritos a futuro en este documento siguen pendientes; `BACKEND-HANDOFF 1` permanece cerrado.
 
 Continuidad:
 
@@ -127,8 +135,10 @@ legal pública.
 ## Autoridad de aplicabilidad
 
 La autoridad no es `LegalCoverageMatrix`, la existencia de punteros ni un array recibido por HTTP.
-Un resolver interno y tipado construirá un `LegalApplicableScopeSet` según la operación, el ciclo de
-vida y el actor acreditado por el backend.
+`LegalApplicableScopeResolver` construye un `LegalApplicableScopeSet` desde perfil, locale y audiencia
+tipados del caller interno. La política productiva mínima fija `REGISTRATION` en
+`REGISTRO/ADMIN_TITULAR` y `AUTHENTICATED_PENDING` en `USO_CONTINUADO`. Las reglas adicionales del
+ciclo de vida y su conexión con el actor autenticado corresponden a la futura capa de aplicación.
 
 El materializador recibe ese valor sólo desde código servidor. Las futuras fronteras HTTP nunca
 aceptarán contexto, audiencia, rol o tenant como autoridad del request. Audiencia, usuario y taller
@@ -141,9 +151,9 @@ V28 congela dos perfiles servidor:
 - `AUTHENTICATED_PENDING`, compartido por el futuro `GET /api/requisitos-legales`,
   `POST /api/aceptaciones-legales` y las reconstrucciones de estado para `409` y `428`.
 
-El segundo perfil se resuelve siempre con la misma función autoritativa a partir del actor y su
-estado servidor. Contiene como mínimo `USO_CONTINUADO`; otros contextos sólo se agregan por reglas
-allowlisteadas del ciclo de vida. Por lo tanto, las respuestas autenticadas mono o multicontexto
+El segundo perfil se resuelve siempre con la misma función autoritativa; su futura integración
+derivará el actor y su estado servidor. Contiene como mínimo `USO_CONTINUADO`; otros contextos sólo
+se agregarán por reglas allowlisteadas del ciclo de vida. Por lo tanto, las respuestas autenticadas mono o multicontexto
 siempre poseen al menos un scope, incluso cuando el scope sea un snapshot deliberadamente vacío o
 la evidencia del actor deje `requisitos: []`.
 
@@ -271,8 +281,10 @@ constraint. Un trigger V28 sobre el sidecar compara la revisión componente con 
 referenciada usando las FKs existentes, sin agregar constraints ni cambiar fingerprints de tablas
 V27. El calculator tipado es el único constructor del digest y un replay Java, antes de confirmar la
 misma transacción, reconstruye cabecera y sidecar para comprobar bytes canónicos, revisión semántica
-y fingerprint de procedencia. El verificador V28 repite esa prueba sobre el esquema persistido. Los
-privilegios de escritura se limitan a ese camino y forman parte del inventario V28.
+y fingerprint de procedencia. `LegalRequiredSetAggregateReplayVerifier` realiza esa reconstrucción
+para cada agregado; `LegalV28AggregateSchemaVerifier` acredita catálogos, topología, funciones y
+Flyway, no hace replay de todas las filas. Los privilegios de escritura se limitan a ese camino y
+forman parte del inventario V28.
 
 El UUID V27 conserva procedencia auditable, pero no integra los bytes canónicos wire. Si un puntero
 futuro apunta a otro snapshot con la misma revisión de contenido, el token puede seguir siendo
@@ -318,21 +330,29 @@ un INSERT genérico capaz de saltar el materializador/guard.
 
 ## Resolución y materialización
 
-Una operación interna sigue esta secuencia en una sola transacción y sesión JDBC:
+`LegalRequiredSetAggregateDatabaseConfiguration` compone explícitamente el contexto `AGGREGATE`,
+habilitado por `ordenfix.legal.aggregate-context.enabled=true`, con datasource restringido dedicado.
+No es una configuración escaneada por la aplicación web. El servicio resuelve primero el vector en
+memoria y ejecuta el trabajo PostgreSQL en una única transacción `REQUIRES_NEW/READ_COMMITTED`:
 
-1. Derivar locale, audiencia y vector de contextos mediante la autoridad servidor.
-2. Adquirir en modo compartido la misma key del advisory transaction lock global usado en modo
+1. Resolver el vector acreditado desde perfil, locale y audiencia tipados del caller servidor.
+2. Abrir la transacción y ejecutar los preflights V28 de esquema y privilegios en la misma sesión.
+3. Adquirir en modo compartido la misma key del advisory transaction lock global usado en modo
    exclusivo por import, dry-run y operaciones editoriales.
-3. Leer y bloquear los punteros V27 incluidos en orden locale, audiencia y `ContextoLegal`.
-4. Fallar cerrado si falta un puntero, el snapshot no está completo, su revisión es inválida o sus
+4. Capturar la frontera temporal post-lock, leer y bloquear los punteros V27 incluidos en orden
+   locale, audiencia y `ContextoLegal`, mediante una consulta acotada a nueve filas.
+5. Fallar cerrado si falta un puntero, el snapshot no está completo, su revisión es inválida o sus
    documentos/requisitos no sostienen el estado actual.
-5. Construir la proyección canónica desde las revisiones completas V27.
-6. Calcular `requiredSetRevision`.
-7. Calcular el fingerprint de procedencia e insertar o reutilizar la cabecera física exacta.
-8. Persistir el vector y ejecutar el replay Java dentro de la misma transacción.
-9. Ante una colisión única concurrente, releer y exigir coincidencia física exacta; nunca
+6. Construir la proyección canónica desde las revisiones completas V27 y calcular
+   `requiredSetRevision` y el fingerprint de procedencia.
+7. Consultar la identidad física completa. Si ya existe, ejecutar replay y devolver `REUSED`
+   sin DML ni UUID nuevo.
+8. Si no existe, insertar la cabecera y los miembros en batch y ejecutar replay en la misma
+   transacción. El INSERT de cabecera usa `ON CONFLICT DO NOTHING` para resolver carreras.
+9. Ante una colisión única concurrente, releer en otra sentencia y exigir coincidencia física exacta; nunca
    reinterpretar un conflicto distinto como replay exitoso.
-10. Confirmar sólo si cabecera y todos los miembros están completos.
+10. Confirmar sólo si cabecera y todos los miembros están completos. El servicio entrega el receipt
+    después del commit exitoso y no implementa retry automático.
 
 Los resolvers, materializadores y aceptaciones pueden coexistir con locks compartidos. Los writers
 editoriales conservan el lock exclusivo y esperan a que terminen esos lectores. Por eso cada
@@ -345,6 +365,10 @@ Los agregados quedan inmutables aunque dejen de ser actuales. No se eliminan al 
 reescriben para seguir una nueva publicación.
 
 ## Aceptación futura
+
+La composición transaccional de esta capa requiere su propio diseño: llamar al servicio actual
+`REQUIRES_NEW` no incorpora la materialización a una transacción exterior de aceptación. Los fixtures
+SQL de aceptación acreditan los guards de V28, no un servicio de aplicación ya disponible.
 
 El servicio futuro de aceptación volverá a derivar actor, taller, rol, audiencia, locale y contextos;
 no confiará en el vector del GET ni en datos de autorización enviados por el browser. Dentro de la
@@ -458,9 +482,14 @@ V28 queda lista para los cortes HTTP posteriores cuando:
 7. clean install, upgrade, concurrencia, rollback e inventario pasan el gate completo;
 8. no se introduce endpoint, cambio frontend, contenido real, deploy ni push.
 
-## Secuencia posterior
+## Ejecución registrada y continuidad
 
-La implementación se dividirá en cortes atómicos. Primero se congelarán el modelo canónico y sus
-vectores; luego el esquema V28; después la materialización JDBC y concurrencia; a continuación la
-compatibilidad de lotes y guards; finalmente inventarios, upgrade, documentación y gate integral.
-Cada corte tendrá pruebas y commit propio.
+La implementación siguió el plan en commits atómicos locales: 12A `981b678` (contrato canónico),
+12B `b3d8fab` (gate compartido), 12C `cd7f2bb` (store y replay), 12D `7b6afd6` (V28 congelada),
+12E `a65614c` (servicio e integración) y 12F `6f2a1cc` (concurrencia, causalidad y capacidad).
+12G documenta el resultado del gate integral en el cierre enlazado al inicio.
+
+Las pruebas de filtrado por evidencia usan un consumidor simulado; las de lotes y causalidad usan
+SQL de prueba sobre snapshots reales. No acreditan cálculo de pendientes, carry-forward ni aceptación
+de aplicación. El siguiente trabajo requiere diseñar la capa HTTP, manteniendo un token wire opaco,
+sin mapa por contexto. Este corte no inicia esa implementación ni habilita el handoff frontend.

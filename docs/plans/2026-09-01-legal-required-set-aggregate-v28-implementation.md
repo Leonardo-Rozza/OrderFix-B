@@ -2,7 +2,10 @@
 
 Fecha: 2026-09-01
 
-Estado: 12A–12F completados. 12G pendiente.
+Estado: 12A–12G completados; núcleo y persistencia internos verificados (2026-09-05).
+
+Evidencia integral e inventario: [cierre V28](2026-09-01-legal-required-set-aggregate-v28-closure.md).
+`BACKEND-HANDOFF 1` permanece cerrado; la capa HTTP sigue pendiente.
 
 Diseño aprobado:
 
@@ -810,8 +813,8 @@ FRONTEND_INTEGRATION.md
 1. Marcar diseño/plan implementados con SHAs de 12A–12F.
 2. Crear closure con JDK, Maven, Flyway, Testcontainers, PostgreSQL, conteos Surefire/Failsafe,
    duración, checksums V27/V28 y hashes de JARs.
-3. Registrar clean install, tres upgrades, historia preservada, locks shared/exclusive, causalidad,
-   rollback, capacidad e inventario.
+3. Registrar las tres rutas de migración (instalación limpia, upgrade vacío y upgrade con historia),
+   historia preservada, locks shared/exclusive, causalidad, rollback, capacidad e inventario.
 4. Corregir la vieja semántica del hash filtrado en `FRONTEND_INTEGRATION.md`: token agregado de
    conjuntos completos, estable aunque `requisitos: []`.
 5. Mantener el wire opaco y sin mapa por contexto; no editar el repositorio frontend.
@@ -847,6 +850,46 @@ Commit:
 docs(legal): cierra persistencia multicontexto v28
 ```
 
+### Decisiones y validación de 12G — 2026-09-05
+
+La whitelist efectiva es exactamente la documental prevista: diseño, este plan, closure, README y
+FRONTEND_INTEGRATION. No se modificó código productivo, tests ni migraciones durante 12G.
+
+| Corte implementado | Commit local |
+| --- | --- |
+| 12A — contrato canónico | `981b678` |
+| 12B — gate compartido | `b3d8fab` |
+| 12C — store y replay | `cd7f2bb` |
+| 12D — V28 congelada | `7b6afd6` |
+| 12E — servicio e integración | `a65614c` |
+| 12F — concurrencia y capacidad | `6f2a1cc` |
+
+El diseño ahora distingue la política mínima implementada de las reglas futuras de ciclo de vida,
+replay por agregado de preflight de esquema y materialización `REQUIRES_NEW` de una futura
+transacción de aceptación. FRONTEND_INTEGRATION corrige la semántica del hash filtrado: el token
+representa los conjuntos completos aplicables, incluso con `requisitos: []`, y mantiene un único
+wire opaco sin mapa por contexto. No modifica tipos ni payloads HTTP.
+
+El `clean verify` fresco sobre baseline `6f2a1cc` terminó `BUILD SUCCESS` en **09:13 min**,
+el 2026-09-05 a las **11:29:59 -03:00**: **4366 pruebas Surefire y 306 Failsafe**, con cero fallos,
+errores u omisiones. Se ejecutó con Amazon Corretto 21.0.10, Maven 3.9.11 y PostgreSQL 16.14.
+No hubo fallos que exigieran cambiar código ni repetir el gate. Los resultados se contrastaron
+con los XML generados desde cero en ambas carpetas de reportes.
+
+El [closure](2026-09-01-legal-required-set-aggregate-v28-closure.md) registra versiones, conteos,
+duración, inventario, checksums Flyway/SHA-256 y hashes de los JARs. Las tres rutas son instalación
+limpia V1→V28, V26→V27 vacío→V28 y V27 con historia→V28; no se afirma un tercer upgrade independiente
+además de la instalación limpia.
+
+El gate acredita `search_path` seguro de todas las funciones legales. V28 revoca PUBLIC en sus nueve
+funciones creadas/reemplazadas; la revocación global de EXECUTE sobre las funciones históricas
+corresponde al provisioning restringido, no a una propiedad nueva de V27. Los procesos editoriales
+empaquetados verifican importador/editorial sobre latest sin ampliar sus allowlists a V28.
+
+V27 y V28 conservaron sus hashes y quedan congeladas. No hubo cambios de frontend, contenido real,
+controllers, DTO HTTP, endpoints, push ni deploy. Los no versionados conocidos se preservan.
+Se mantiene `BACKEND-HANDOFF 1` cerrado y no se inicia automáticamente el siguiente diseño HTTP.
+
 ## Matriz de parada
 
 | Hallazgo | Acción |
@@ -863,9 +906,9 @@ docs(legal): cierra persistencia multicontexto v28
 | Se requiere decidir scopes desde HTTP | Fuera de alcance; detener y diseñar el corte HTTP |
 | Se requiere cambiar el wire frontend | Fuera de alcance; coordinar después de V28 |
 
-## Resultado esperado
+## Resultado alcanzado
 
-Al cerrar Corte 12 deben existir siete commits funcionales/documentales posteriores al commit de
-este plan, todos locales y sin push. V28 podrá resolver y persistir una revisión agregada auditable,
-pero OrdenFix seguirá sin APIs legales públicas. El siguiente diseño será la capa HTTP; no se inicia
-automáticamente dentro de este corte.
+Corte 12 se cierra en siete commits funcionales/documentales posteriores al commit de este plan,
+todos locales y sin push. V28 resuelve y persiste una revisión agregada auditable; OrdenFix sigue sin
+APIs legales públicas. El siguiente diseño es la capa HTTP y no se inicia automáticamente dentro
+de este corte.

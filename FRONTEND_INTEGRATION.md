@@ -58,10 +58,12 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     alias `/recibo` sigue temporalmente disponible con el mismo JSON, pero está deprecado.
 19. **Contrato legal v1 y operación interna segura** (§4.1.a): schema/persistencia V27 y las CLI
     internas de validación, simulación, importación, promoción, reemplazo, retiro y readiness
-    editorial están implementadas. La operación editorial usa siete comandos y mantiene separada
-    la readiness interna del grafo respecto de la readiness pública. Siguen pendientes V28,
-    controllers/APIs legales, aceptación, seguridad/enforcement, contenido definitivo, staging y
-    deploy.
+    editorial están implementadas, junto con el núcleo y servicio interno de agregados V28.
+    `requiredSetRevision` representa los conjuntos completos aplicables y permanece estable al
+    filtrar pendientes, incluso con `requisitos: []`. Siguen pendientes controllers/APIs legales,
+    catálogo, `documentSetRevision`, aceptación de aplicación, idempotencia HTTP, respuestas legales
+    `409/428/503`, seguridad/enforcement, contenido definitivo, staging y deploy.
+    `BACKEND-HANDOFF 1` continúa cerrado.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
@@ -202,14 +204,17 @@ Errores: `401` (email o contraseña incorrectos).
 > **Rutas nuevas que el front debe tener**: `/reset-password` y `/verificar-email` (leen `?token=`
 > de la URL). El link "¿Olvidaste tu contraseña?" va en la pantalla de login.
 
-### 4.1.a Legal versionado — contrato v1 congelado y operación interna 2.3A–2.3C
+### 4.1.a Legal versionado — contrato v1 y persistencia interna V27/V28
 
-> **Estado al 2026-08-31:** 2.3A y 2.3B validan, simulan, importan y sellan; 2.3C permite planificar
-> y aplicar promoción, reemplazo o retiro y consultar readiness editorial mediante una CLI interna.
-> Esa readiness sólo inspecciona el grafo V27: no existe todavía V28, controllers/endpoints legales,
-> contenido real, staging, deploy ni readiness pública. Las rutas de esta sección siguen sin existir
-> en runtime, `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1
-> continúa activo. No actives la UI basándote solamente en esta documentación.
+> **Estado al 2026-09-05:** 2.3A–2.3C conservan la operación editorial interna V27. V28 implementa
+> agregados multicontexto, preservación de historia y un servicio interno que materializa/reutiliza
+> la composición bajo gate compartido y rol restringido. El contrato de un único token opaco se
+> mantiene; representa conjuntos completos y no depende de la evidencia ni de la lista pendiente.
+> Siguen pendientes controllers/endpoints legales, catálogo, `documentSetRevision`, ETag/readiness
+> pública, aceptación de aplicación, idempotencia HTTP, respuestas legales `409/428/503`, enforcement,
+> contenido real, staging y deploy. Las rutas de esta sección siguen sin existir en runtime:
+> `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
+> activo. No actives la UI basándote solamente en esta documentación.
 
 #### Endpoints y autorización
 
@@ -303,7 +308,7 @@ export interface PageMeta {
 export interface DocumentosLegalesResponse {
   contexto: ContextoLegal | null;
   locale: LocaleLegal;
-  documentSetRevision: string; // opaco; hoy sha256:<64-hex>
+  documentSetRevision: string; // opaco; formato previsto sha256:<64-hex>; implementación pendiente
   documentos: DocumentoLegalResumen[];
   page: PageMeta;
 }
@@ -378,7 +383,16 @@ El importador primero exige bytes UTF-8 válidos, Unicode NFC, saltos LF y ausen
 calcula el digest sobre esos bytes originales, sin normalizarlos ni reescribirlos. Para una
 afirmación, hashea los bytes UTF-8 de su string exacto, sujeto a las mismas invariantes.
 `documentSetRevision` y `requiredSetRevision` son opacos para el front: nunca los interpretes como
-fecha, contador ni partes separables.
+fecha, contador ni partes separables. El wire conserva un único `requiredSetRevision`; no incorpora
+un mapa por contexto, revisiones componentes ni el fingerprint de procedencia interno.
+
+`requiredSetRevision` usa la semántica agregada `AGGREGATE_V1` de V28: representa los conjuntos
+completos de los contextos aplicables, resueltos por el servidor. Cambiar una revisión incluida o la
+composición aplicable cambia el token; una edición en un contexto excluido no lo cambia. Registrar,
+modificar o retirar evidencia y filtrar algunos o todos los pendientes tampoco lo cambia. Esta
+semántica reemplaza la interpretación anterior de un hash de la respuesta filtrada, tanto para el
+registro como para las respuestas autenticadas futuras. `documentSetRevision` conserva su contrato
+de catálogo y su implementación continúa pendiente.
 
 #### Catálogo público
 
@@ -498,6 +512,8 @@ Respuesta `200`:
 
 Los requisitos aceptables sólo enlazan documentos `VIGENTE`. Debe existir al menos un requisito
 obligatorio completo para `REGISTRO`; de lo contrario el backend falla cerrado con `503`.
+El token previsto para registro es el agregado de su único contexto `REGISTRO`; el frontend lo
+conserva y reenvía sin calcular revisiones por contexto.
 
 #### Requisitos pendientes autenticados
 
@@ -506,9 +522,10 @@ GET /api/requisitos-legales
 Authorization: Bearer <token>
 ```
 
-Devuelve `200 RequisitosLegalesPendientesResponse`. El backend filtra por el actor, su rol actual y
-las evidencias ya registradas. Puede incluir más de un contexto. No envíes rol ni tenant para elegir
-el resultado.
+Devuelve `200 RequisitosLegalesPendientesResponse`. El backend resuelve primero la composición
+aplicable y su revisión agregada sobre conjuntos completos; después filtra la lista por el actor,
+su rol actual y las evidencias ya registradas. Puede incluir más de un contexto. No envíes perfil,
+audiencia, rol, tenant ni un vector de contextos para elegir o reducir el resultado.
 
 Incluye requisitos aplicables todavía no evidenciados, tanto obligatorios como opcionales. Sólo la
 ausencia de un requisito `requerido=true` puede disparar `428`; omitir uno opcional nunca bloquea la
@@ -534,8 +551,11 @@ Si el actor satisfizo todo, la respuesta válida es:
 }
 ```
 
-La revisión es autoritativa, aunque el valor de ejemplo no debe recalcularse ni asumirse en el
-cliente.
+La revisión es autoritativa y conserva el mismo valor que antes de satisfacer esos requisitos,
+mientras no cambie la composición aplicable ni sus revisiones. `requisitos: []` no representa un
+agregado sin scopes ni provoca un hash nuevo del conjunto vacío. El valor de ejemplo no debe
+recalcularse ni asumirse en el cliente. El cálculo de pendientes y las reglas de herencia descritas
+arriba siguen pendientes en la capa de aplicación.
 
 #### Registrar aceptación autenticada
 
@@ -1073,12 +1093,29 @@ El perfil PostgreSQL, las confirmaciones, la captura sin pipelines, la reconcili
 credenciales están en `docs/runbooks/legal-manifest-editorial-postgresql.md`. Readiness editorial
 `READY` no abre una ruta HTTP ni acredita contenido, seguridad, staging o disponibilidad pública.
 
+#### Materialización agregada interna (V28)
+
+V28 materializa y reconstruye agregados inmutables mediante un servicio interno, sin controller,
+endpoint ni comando para el frontend. Usa un contexto aislado con credencial restringida, preflight
+V28 y transacción `REQUIRES_NEW/READ_COMMITTED` bajo el gate editorial compartido. La misma identidad
+física devuelve `REUSED` sin DML; un snapshot físico distinto puede conservar el token semántico y
+registrar otra procedencia. V27 y V28 permanecen congeladas y la historia V27 conserva su identidad.
+
+El resolver productivo mínimo fija `REGISTRATION` en `REGISTRO/ADMIN_TITULAR` y
+`AUTHENTICATED_PENDING` en `USO_CONTINUADO`. Las reglas de ciclo de vida que amplíen este último
+perfil siguen pendientes; los fixtures de ocho contextos prueban capacidad sin habilitar esos
+flujos. La persistencia y los guards de lotes no implementan el servicio de aceptación ni el cálculo
+de pendientes. El alcance y la evidencia están en
+`docs/plans/2026-09-01-legal-required-set-aggregate-v28-closure.md`.
+
 #### Orden de rollout
 
 1. Mantener 2.3C como operación interna V27, sin exposición HTTP.
-2. Diseñar e implementar V28 multicontexto.
-3. Implementar controllers, catálogo, documentos, requisitos HTTP y ETag con enforcement apagado.
-4. Implementar aceptación y registro atómicos, incluidos `409` y `428`.
+2. V28 multicontexto está implementada como núcleo y persistencia internos; conservar su frontera
+   aislada y usar su cierre como base de los cortes HTTP pendientes.
+3. Implementar controllers, catálogo, `documentSetRevision`, documentos, requisitos HTTP y ETag con
+   enforcement apagado.
+4. Implementar aceptación y registro atómicos, idempotencia HTTP y respuestas legales `409/428/503`.
 5. Aplicar seguridad, CORS, rate limits y enforcement compatible, todavía desactivado hasta completar
    la validación.
 6. Desplegar y migrar las capas backend compatibles en staging; luego importar/promover el release
@@ -1087,8 +1124,8 @@ credenciales están en `docs/runbooks/legal-manifest-editorial-postgresql.md`. R
 8. Conectar la Tarea 3, desplegar un frontend compatible en staging y ejecutar E2E.
 9. Después decidir la activación productiva y la reaceptación, sin autoaceptar a cuentas legacy.
 
-La readiness editorial `READY` sólo inspecciona el grafo V27; no acredita V28, HTTP, aceptación,
-seguridad, staging ni disponibilidad pública.
+La readiness editorial `READY` sólo inspecciona el grafo V27; no sustituye el preflight V28 ni
+acredita HTTP, aceptación de aplicación, seguridad, staging o disponibilidad pública.
 
 Las decisiones y lo que queda fuera de esta fase están documentados en
 `docs/plans/2026-08-23-legal-api-contract-v1-design.md`.
@@ -2160,11 +2197,13 @@ window.location.href = data.initPoint;
 - **Exportación a Excel** (§4.14): el ADMIN descarga todos los datos del taller en un `.xlsx`.
 - **Gating por plan**: inventario, cobros manuales/datos de cobro y multi-empleado son PRO
   (402 + mapa `funciones` en §4.2). Perfil y dashboard son FREE.
-- **Operación legal interna (Fases 2.3A–2.3C)**: schema v1, persistencia V27 y CLI aisladas para
+- **Operación legal interna (V27/V28)**: schema v1, persistencia V27 y CLI aisladas para
   `validate`, `dry-run`, `import`, promoción, reemplazo, retiro y readiness editorial. El import
   sella versiones nuevas en `BORRADOR`; los siete comandos editoriales operan después sin exponer
-  HTTP. Todavía no existen V28, controllers/APIs legales, aceptaciones, seguridad/enforcement,
-  contenido definitivo, staging o deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
+  HTTP. V28 agrega materialización interna de una revisión de conjuntos completos, procedencia y
+  replay. Siguen pendientes controllers/APIs legales, catálogo, `documentSetRevision`, aceptación
+  de aplicación, idempotencia HTTP, respuestas legales `409/428/503`, seguridad/enforcement,
+  contenido definitivo, staging y deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).
 - Spring Boot 4 / Java 21, migraciones con Flyway.
 
@@ -2274,10 +2313,12 @@ Usá esta lista para marcar qué está integrado en el repo del frontend.
 ### Legal versionado (cuando las APIs del backend estén implementadas)
 
 Estado: contrato de diseño; `BACKEND-HANDOFF 1` continúa cerrado y esta lista no describe runtime
-disponible.
+HTTP disponible. V28 sólo implementa el núcleo y la persistencia internos.
 
 - [ ] El registro obtiene `REGISTRO/es-AR`, presenta todo el set y envía revisión, IDs, actos y
       digests con un `Idempotency-Key` estable por intento lógico.
+- [ ] La UI conserva y reenvía una única `requiredSetRevision` opaca, también con `requisitos: []`;
+      no la recalcula desde pendientes ni envía un mapa de revisiones por contexto.
 - [ ] `409 DOCUMENTOS_LEGALES_DESACTUALIZADOS` conserva los campos no legales, reemplaza el set y
       solicita revisar nuevamente sólo las aceptaciones afectadas.
 - [ ] `428 ACEPTACION_LEGAL_REQUERIDA` monta un gate resoluble y nunca provoca logout o retry global.
