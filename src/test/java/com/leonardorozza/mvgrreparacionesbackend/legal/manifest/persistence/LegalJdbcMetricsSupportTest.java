@@ -15,6 +15,8 @@ import java.sql.Types;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalJdbcMetricsSupport.AdvisoryLockMode.EXCLUSIVE;
+import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalJdbcMetricsSupport.AdvisoryLockMode.SHARED;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalJdbcMetricsSupport.Category.ADVISORY_LOCK;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalJdbcMetricsSupport.Category.DML;
 import static com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalJdbcMetricsSupport.Category.OTHER;
@@ -282,6 +284,8 @@ class LegalJdbcMetricsSupportTest {
         LegalJdbcMetricsSupport.Snapshot snapshot = support.snapshot();
 
         assertThat(snapshot.executions(ADVISORY_LOCK)).isEqualTo(2L);
+        assertThat(snapshot.advisoryLockExecutions(SHARED)).isEqualTo(1L);
+        assertThat(snapshot.advisoryLockExecutions(EXCLUSIVE)).isEqualTo(1L);
         assertThat(snapshot.executions(ROW_LOCK)).isEqualTo(1L);
         assertThat(snapshot.executions(TX_CONTROL)).isEqualTo(1L);
         assertThat(snapshot.executions(DML)).isEqualTo(1L);
@@ -300,6 +304,42 @@ class LegalJdbcMetricsSupportTest {
         assertThat(LegalJdbcMetricsSupport.categoryOf(
                 "SELECT pg_catalog.pg_advisory_xact_lock_shared(?)"))
                 .isEqualTo(ADVISORY_LOCK);
+    }
+
+    @Test
+    void separatesSharedAndExclusiveLockExecutionsAndDurationsWithoutDoubleCounting()
+            throws Exception {
+        PreparedStatement driverStatement = mock(PreparedStatement.class);
+        when(driverConnection.prepareStatement(anyString())).thenReturn(driverStatement);
+        when(driverStatement.execute()).thenReturn(false);
+        LegalJdbcMetricsSupport support = LegalJdbcMetricsSupport.instrument(
+                delegate,
+                Duration.ZERO);
+        Connection connection = support.dataSource().getConnection();
+
+        execute(connection, "SELECT pg_catalog.pg_advisory_xact_lock_shared(?)");
+        execute(connection, "SELECT pg_catalog.pg_advisory_xact_lock_shared(?)");
+        execute(connection, "SELECT pg_catalog.pg_advisory_xact_lock(?)");
+        execute(connection, "SELECT id FROM legal_publicaciones");
+        LegalJdbcMetricsSupport.Snapshot snapshot = support.snapshot();
+
+        assertThat(snapshot.statementExecutions()).isEqualTo(4L);
+        assertThat(snapshot.executions(ADVISORY_LOCK)).isEqualTo(3L);
+        assertThat(snapshot.executions(SELECT)).isEqualTo(1L);
+        assertThat(snapshot.advisoryLockExecutions(SHARED)).isEqualTo(2L);
+        assertThat(snapshot.advisoryLockExecutions(EXCLUSIVE)).isEqualTo(1L);
+        assertThat(snapshot.byCategory().values().stream().mapToLong(Long::longValue).sum())
+                .isEqualTo(snapshot.statementExecutions());
+        assertThat(snapshot.maximumAdvisoryLockDuration(SHARED)).isEqualTo(snapshot.bySql()
+                .get("SELECT pg_catalog.pg_advisory_xact_lock_shared(?)").maximumDuration());
+        assertThat(snapshot.maximumAdvisoryLockDuration(EXCLUSIVE)).isEqualTo(snapshot.bySql()
+                .get("SELECT pg_catalog.pg_advisory_xact_lock(?)").maximumDuration());
+        assertThat(snapshot.maximumAdvisoryLockDuration()).isEqualTo(
+                java.util.stream.Stream.of(
+                                snapshot.maximumAdvisoryLockDuration(SHARED),
+                                snapshot.maximumAdvisoryLockDuration(EXCLUSIVE))
+                        .max(Duration::compareTo)
+                        .orElseThrow());
     }
 
     @Test
@@ -387,6 +427,10 @@ class LegalJdbcMetricsSupportTest {
         assertThat(snapshot.rowsRead()).isZero();
         assertThat(snapshot.maximumStatementDuration()).isZero();
         assertThat(snapshot.maximumAdvisoryLockDuration()).isZero();
+        assertThat(snapshot.advisoryLockExecutions(SHARED)).isZero();
+        assertThat(snapshot.advisoryLockExecutions(EXCLUSIVE)).isZero();
+        assertThat(snapshot.maximumAdvisoryLockDuration(SHARED)).isZero();
+        assertThat(snapshot.maximumAdvisoryLockDuration(EXCLUSIVE)).isZero();
         assertThat(snapshot.byCategory()).containsOnly(
                 org.assertj.core.api.Assertions.entry(ADVISORY_LOCK, 0L),
                 org.assertj.core.api.Assertions.entry(DML, 0L),

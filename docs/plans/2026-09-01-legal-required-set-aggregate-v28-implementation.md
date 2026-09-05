@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-01
 
-Estado: 12A–12E completados. 12F y 12G pendientes.
+Estado: 12A–12F completados. 12G pendiente.
 
 Diseño aprobado:
 
@@ -699,6 +699,95 @@ Commit:
 ```text
 test(legal): acredita concurrencia de agregados v28
 ```
+
+### Decisiones de implementación de 12F — 2026-09-05
+
+- La whitelist efectiva comprende este plan, `LegalRequiredSetAggregateConcurrencyIT`,
+  `LegalRequiredSetAggregateCapacityIT`, `LegalJdbcMetricsSupport` y su test. No fue necesario
+  modificar `LegalManifestPersistenceITSupport` ni código de producción.
+- La carrera editorial coordina dos materializadores y un writer exclusivo con latches y PIDs.
+  El writer es un fixture SQL owner de la base efímera: mueve slots y punteros mediante
+  DELETE/INSERT, valida constraints y pausa tras mover sólo `REGISTRO`. El segundo materializador
+  permanece fuera del callback mientras el vector está incompleto. Los receipts conservan el
+  vector anterior o posterior íntegro, el mismo token semántico y distinta procedencia física.
+  Se conserva además la carrera de identidad idéntica: un `CREATED`, un `REUSED`, una cabecera.
+- Timeout, deadlock y terminación de sesión se provocan después del INSERT real de cabecera y
+  miembros, dentro del gate y con el rol materializador restringido. Las claves advisory
+  auxiliares sólo establecen el punto de fallo del test; no cambian el protocolo editorial.
+  `55P03` con el blocker retenido y `40P01` con ambos PIDs en el detalle PostgreSQL acreditan los
+  fallos sin depender de observar una espera de un segundo antes de que desaparezca.
+- Cada intento ejecuta una sola vez su callback. La víctima pierde cabecera y miembros; en el
+  deadlock se preserva el agregado confirmado por la otra transacción. El retry explícito conserva
+  token y procedencia del intento abortado, crea un UUID nuevo y luego devuelve `REUSED`. Tras
+  terminar una sesión, el pool continúa con otro PID. No se agregó retry automático.
+- La causalidad cubre `creado_en` y `aceptado_en`: una transacción iniciada antes de la espera usa
+  un timestamp de sentencia posterior a adquirir el lock y al estado observado. La aceptación
+  completa y el fallo diferido por metadata IP ausente usan un consumidor SQL owner explícito,
+  sobre requisitos reales del snapshot. Comprueban lotes, actos, documentos y metadata, pero no
+  acreditan un servicio de aceptación productivo ni conceden esos permisos al materializador.
+  El fallo diferido del lote revierte toda su evidencia y preserva el agregado previamente
+  confirmado; se conserva también el caso de cardinalidad diferida con rollback del agregado.
+- Capacidad obtiene el servicio desde la configuración Spring productiva, sobre PostgreSQL y
+  credencial restringida. Sólo la política del servidor es fixture para acreditar uno u ocho
+  contextos. La consulta única de punteros usa `LIMIT 9 FOR SHARE`, los miembros se insertan en un
+  único batch y replay conserva el orden canónico. `REUSED` ejecuta cero DML.
+- No existe un noveno `ContextoLegal` y la unicidad SQL impide nueve punteros válidos. El sentinel
+  se prueba añadiendo una novena fila al resultado JDBC de ocho filas reales: falla antes de DML,
+  hace rollback y sólo un retry explícito puede avanzar. Una política de nueve entradas falla
+  antes de acceder a la base. Ninguna prueba altera guards o constraints para fabricar corrupción.
+- Las métricas conservan la categoría advisory existente y distinguen ejecuciones/duración de
+  shared y exclusive. Cuentan ejecuciones JDBC lógicas, con un batch como una ejecución; no miden
+  el SQL interno de triggers ni equivalen a un benchmark de throughput.
+
+### Validación de 12F — 2026-09-05
+
+Baseline backend: `a65614c` (`feat(legal): materializa agregados legales v28`), rama
+`codex/lanzamiento-publico-backend`. Java Amazon Corretto 21.0.10, Maven 3.9.11,
+Testcontainers 2.0.5 y PostgreSQL 16.14 (`postgres:16-alpine`).
+
+Gate focalizado aprobado: **42 pruebas unitarias y 18 de integración**, con cero fallos,
+errores u omisiones.
+
+| Suite | Pruebas aprobadas |
+| --- | ---: |
+| `LegalJdbcMetricsSupportTest` | 12 |
+| `LegalManifestDatabaseGateTest` | 30 |
+| `LegalRequiredSetAggregateConcurrencyIT` | 10 |
+| `LegalRequiredSetAggregateCapacityIT` | 3 |
+| `LegalEditorialConcurrencyIT` | 4 |
+| `LegalEditorialCapacityIT` | 1 |
+
+Mediciones de las llamadas al servicio, tras separar el arranque del contexto Spring:
+
+| Scopes | Sentencias CREATED | Sentencias REUSED | Filas leídas por llamada |
+| --- | ---: | ---: | ---: |
+| 1 | 55 | 53 | 1473 |
+| 8 | 55 | 53 | 1487 |
+
+El trabajo propio del grafo usa seis ejecuciones JDBC para crear y cuatro para reutilizar,
+independientemente de N; lee `2N + 2` filas. Las otras 49 ejecuciones corresponden a preflight,
+lock y control del gate, cuyas métricas se comparan por separado y no crecen con los scopes.
+La regresión editorial conserva sus presupuestos y su fixture V27; los nuevos IT migran hasta
+V28. Todas las bases son efímeras. Los mensajes de conexión terminada y error de rollback JDBC
+durante session kill son esperados; PostgreSQL acredita la ausencia de filas del intento abortado.
+
+Comandos reproducibles con Java 21:
+
+```bash
+./mvnw -Dtest=LegalJdbcMetricsSupportTest,LegalManifestDatabaseGateTest test
+./mvnw -Dit.test=LegalRequiredSetAggregateConcurrencyIT,LegalRequiredSetAggregateCapacityIT test-compile failsafe:integration-test failsafe:verify
+./mvnw -Dit.test=LegalEditorialConcurrencyIT,LegalEditorialCapacityIT failsafe:integration-test failsafe:verify
+git diff --check
+```
+
+Se usó Failsafe directamente para ejecutar sólo el gate focalizado; `clean verify` queda para
+12G. La revisión independiente contrastó los diez escenarios del corte y no encontró vacíos
+bloqueantes. V27 y V28 conservan los SHA-256 registrados en 12E, sin cambios de esquema,
+privilegios, frontend ni HTTP. Los no versionados del frontend se preservan.
+
+El corte se registra en un único commit local
+`test(legal): acredita concurrencia de agregados v28`, sin push. 12G continúa pendiente y
+`BACKEND-HANDOFF 1` permanece deshabilitado.
 
 ## Subcorte 12G — Cierre documental y gate integral
 

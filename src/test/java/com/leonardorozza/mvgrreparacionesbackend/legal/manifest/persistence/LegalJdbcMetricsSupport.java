@@ -88,12 +88,8 @@ final class LegalJdbcMetricsSupport {
 
     static Category categoryOf(String sql) {
         String normalized = normalizeSql(sql).toLowerCase(java.util.Locale.ROOT);
-        if (normalized.contains("pg_advisory_xact_lock_shared(")
-                || normalized.contains("pg_advisory_xact_lock(")
-                || normalized.contains("pg_try_advisory_xact_lock(")
-                || normalized.contains("pg_advisory_lock(")
-                || normalized.contains("pg_try_advisory_lock(")
-                || normalized.contains("pg_advisory_unlock(")) {
+        if (isAdvisoryLock(normalized, AdvisoryLockMode.SHARED)
+                || isAdvisoryLock(normalized, AdvisoryLockMode.EXCLUSIVE)) {
             return Category.ADVISORY_LOCK;
         }
         if (normalized.contains(" for update")
@@ -117,6 +113,17 @@ final class LegalJdbcMetricsSupport {
             return Category.SELECT;
         }
         return Category.OTHER;
+    }
+
+    private static boolean isAdvisoryLock(String normalizedSql, AdvisoryLockMode mode) {
+        return switch (mode) {
+            case SHARED -> normalizedSql.contains("pg_advisory_xact_lock_shared(");
+            case EXCLUSIVE -> normalizedSql.contains("pg_advisory_xact_lock(")
+                    || normalizedSql.contains("pg_try_advisory_xact_lock(")
+                    || normalizedSql.contains("pg_advisory_lock(")
+                    || normalizedSql.contains("pg_try_advisory_lock(")
+                    || normalizedSql.contains("pg_advisory_unlock(");
+        };
     }
 
     private static boolean startsWithAny(String value, String... prefixes) {
@@ -345,6 +352,11 @@ final class LegalJdbcMetricsSupport {
         OTHER
     }
 
+    enum AdvisoryLockMode {
+        SHARED,
+        EXCLUSIVE
+    }
+
     record SqlSnapshot(
             String sql,
             Category category,
@@ -391,6 +403,28 @@ final class LegalJdbcMetricsSupport {
 
         long executions(Category category) {
             return byCategory.getOrDefault(Objects.requireNonNull(category, "category"), 0L);
+        }
+
+        long advisoryLockExecutions(AdvisoryLockMode mode) {
+            return advisoryLocks(mode)
+                    .mapToLong(SqlSnapshot::executions)
+                    .sum();
+        }
+
+        Duration maximumAdvisoryLockDuration(AdvisoryLockMode mode) {
+            return advisoryLocks(mode)
+                    .map(SqlSnapshot::maximumDuration)
+                    .max(Duration::compareTo)
+                    .orElse(Duration.ZERO);
+        }
+
+        private java.util.stream.Stream<SqlSnapshot> advisoryLocks(AdvisoryLockMode mode) {
+            Objects.requireNonNull(mode, "mode");
+            return bySql.values().stream()
+                    .filter(sql -> sql.category() == Category.ADVISORY_LOCK)
+                    .filter(sql -> isAdvisoryLock(
+                            sql.sql().toLowerCase(java.util.Locale.ROOT),
+                            mode));
         }
 
         long executionsContaining(String... fragments) {
