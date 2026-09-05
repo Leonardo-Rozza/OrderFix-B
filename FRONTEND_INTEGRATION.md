@@ -60,9 +60,9 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     internas de validación, simulación, importación, promoción, reemplazo, retiro y readiness
     editorial están implementadas, junto con el núcleo y servicio interno de agregados V28.
     `requiredSetRevision` representa los conjuntos completos aplicables y permanece estable al
-    filtrar pendientes, incluso con `requisitos: []`. 13A–13C implementan catálogo documental,
+    filtrar pendientes, incluso con `requisitos: []`. El bloque 13 implementa catálogo documental,
     `documentSetRevision` y documento exacto con rol restringido, ETag, errores, seguridad y rate limit,
-    detrás de un flag apagado. Quedan el gate integral 13D, requisitos HTTP, aceptación de aplicación,
+    detrás de un flag apagado y con gate integral acreditado en 13D. Quedan requisitos HTTP, aceptación de aplicación,
     idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
     staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
@@ -212,9 +212,9 @@ Errores: `401` (email o contraseña incorrectos).
 > agregados multicontexto, preservación de historia y un servicio interno que materializa/reutiliza
 > la composición bajo gate compartido y rol restringido. El contrato de un único token opaco se
 > mantiene; representa conjuntos completos y no depende de la evidencia ni de la lista pendiente.
-> 13A–13C implementan los dos GET documentales, revisión, ETag, errores y políticas HTTP con lector
+> El bloque 13 implementa los dos GET documentales, revisión, ETag, errores y políticas HTTP con lector
 > restringido. Están apagados por defecto; encenderlos exige configuración documental explícita.
-> Quedan el gate integral 13D, requisitos públicos/autenticados, aceptación de aplicación, historial
+> El gate integral 13D está acreditado. Quedan requisitos públicos/autenticados, aceptación de aplicación, historial
 > propio, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido real,
 > staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
@@ -247,6 +247,10 @@ La policy `security.rate-limit.public-legal-documents` comparte una ventana por 
 UUID inválidos y peticiones condicionales. Se mantiene la política de confianza de forwarded headers
 existente. HEAD, otros métodos, rutas vecinas y subrutas no heredan autorización pública documental;
 OPTIONS preflight continúa bajo CORS. Un Authorization inválido no altera estos GET públicos.
+
+El [cierre documental 13D](docs/plans/2026-09-05-legal-public-document-read-closure.md) registra
+capacidad, concurrencia HTTP y el gate integral fresco. Esa evidencia no certifica los grants de
+un entorno compartido ni habilita contenido definitivo, requisitos/aceptaciones o el handoff.
 
 `locale` es obligatorio en los dos GET públicos de colección y v1 sólo admite `es-AR`; el GET por
 UUID no recibe locale. `contexto` es obligatorio en requisitos públicos; inicialmente sólo se
@@ -1135,8 +1139,8 @@ de pendientes. El alcance y la evidencia están en
 1. Mantener 2.3C como operación interna V27, sin exposición HTTP.
 2. V28 multicontexto está implementada como núcleo y persistencia internos; conservar su frontera
    aislada y usar su cierre como base de los cortes HTTP pendientes.
-3. 13A–13C implementan catálogo, `documentSetRevision`, documento exacto, ETag y sus políticas HTTP,
-   con flag apagado. Completar el gate integral 13D y después requisitos HTTP; enforcement sigue apagado.
+3. El bloque 13 completa catálogo, `documentSetRevision`, documento exacto, ETag y sus políticas HTTP,
+   con flag apagado y gate integral acreditado. Diseñar e implementar requisitos HTTP; enforcement sigue apagado.
 4. Implementar aceptación y registro atómicos, idempotencia HTTP y respuestas legales `409/428/503`.
 5. Extender la clasificación cerrada, seguridad, CORS y rate limits a los recursos pendientes;
    implementar enforcement compatible y mantenerlo desactivado hasta completar la validación.
@@ -2223,8 +2227,8 @@ window.location.href = data.initPoint;
   `validate`, `dry-run`, `import`, promoción, reemplazo, retiro y readiness editorial. El import
   sella versiones nuevas en `BORRADOR`; los siete comandos editoriales operan después sin exponer
   HTTP. V28 agrega materialización interna de una revisión de conjuntos completos, procedencia y
-  replay. 13A–13C agregan lectura HTTP de catálogo/documento exacto, revisión, ETag y políticas con
-  rol restringido y flag apagado. Quedan el gate integral 13D, requisitos HTTP, aceptación de
+  replay. El bloque 13 agrega lectura HTTP de catálogo/documento exacto, revisión, ETag y políticas con
+  rol restringido, flag apagado y gate integral acreditado. Quedan requisitos HTTP, aceptación de
   aplicación, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido
   definitivo, staging y deploy; `BACKEND-HANDOFF 1` y la Tarea 3 siguen cerrados.
 - **Salud** (`/actuator/health`) y **tests** (aislamiento de tenant, 402, firma de webhook).

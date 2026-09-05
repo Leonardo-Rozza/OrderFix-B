@@ -13,14 +13,18 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > - **`docs/legal/READINESS-PLAN-AR.md`** — plan legal/fiscal argentino previo a vender.
 > - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — contrato y rollout legal v1
 >   congelados; V27, importación/sello, los siete comandos editoriales y el núcleo interno V28
->   están implementados. Siguen pendientes controllers/API, catálogo, `documentSetRevision`,
->   ETag/readiness público, aceptación de aplicación, idempotencia HTTP, respuestas legales
->   `409/428/503`, enforcement, contenido definitivo, staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
+>   están implementados. El bloque 13 agrega los dos GET documentales, `documentSetRevision`, ETag,
+>   errores y políticas HTTP con lector restringido y flag apagado. Quedan requisitos HTTP,
+>   aceptación/registro de aplicación, idempotencia HTTP, enforcement, contenido definitivo,
+>   staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
 > - **`docs/plans/2026-09-01-legal-required-set-aggregate-v28-closure.md`** — cierre de V28:
 >   materialización interna con rol restringido, preflight, gate compartido, replay y preservación
 >   de historia V27. `requiredSetRevision` representa los conjuntos completos aplicables y permanece
 >   estable al filtrar pendientes, incluso con `requisitos: []`; el wire conserva un único token
 >   opaco, sin mapa de revisiones por contexto. No habilita APIs legales ni lanzamiento público.
+> - **`docs/plans/2026-09-05-legal-public-document-read-closure.md`** — cierre de lectura documental:
+>   catálogo y versión exacta, frontera PostgreSQL aislada, seguridad/caché, capacidad y gate integral.
+>   El flag `ordenfix.legal.public-documents.enabled` sigue apagado; este cierre no habilita producción.
 > - **`docs/plans/2026-08-25-legal-manifest-import-closure.md`** — cierre reproducible de la Fase
 >   2.3B y fronteras pendientes.
 > - **`docs/runbooks/legal-manifest-import-postgresql.md`** — operación PostgreSQL restringida del

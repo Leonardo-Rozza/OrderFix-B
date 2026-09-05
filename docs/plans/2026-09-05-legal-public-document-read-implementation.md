@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: 13A–13C completados y verificados; 13D pendiente.
+Estado: 13A–13D completados y verificados; gate integral acreditado.
 
 Diseño aprobado: [lectura pública documental](2026-09-05-legal-public-document-read-design.md),
 commit `10bf5b5`. El titular autorizó comenzar 13A el 2026-09-05.
@@ -372,6 +372,21 @@ Commit previsto: `feat(legal): publica consulta documental`.
 
 ## 13D — Capacidad y cierre integral
 
+Baseline: `30526ef`, árbol backend limpio. El titular autorizó continuar el 2026-09-05.
+Se preserva el frontend `7545201` y sus archivos no versionados. Whitelist inicial del corte:
+
+- Nuevos tests bajo `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/`:
+  `LegalPublicDocumentHttpITSupport.java`, `LegalPublicDocumentHttpCapacityIT.java` y
+  `LegalPublicDocumentHttpConcurrencyIT.java`.
+- Este plan, estado del diseño, `FRONTEND_INTEGRATION.md`, estado e índice en `README.md` y nuevo cierre
+  `docs/plans/2026-09-05-legal-public-document-read-closure.md`.
+
+Las pruebas HTTP de capacidad componen el controller, advice, seguridad y lector productivos;
+instrumentan la frontera JDBC del fixture para medir cursor y sincronizar lectores/writer sin
+introducir consultas falsas. Los presupuestos reducidos se declaran sólo en pruebas. La composición
+completa del bridge sigue acreditada por 13C y se vuelve a ejecutar en el gate integral.
+No se prevén cambios productivos; cualquier hallazgo se registra antes de ampliar la whitelist.
+
 1. Acreditar concurrencia HTTP, historia grande, cursor/fetch, cancelación, deadline y conteos extremos.
 2. Completar contrato/inventario/documentación con evidencia de cada corte y riesgos remanentes.
 3. Ejecutar `clean verify` con PostgreSQL 16, conservar conteos exactos y hashes de migraciones.
@@ -379,3 +394,46 @@ Commit previsto: `feat(legal): publica consulta documental`.
 
 Requisitos, aceptación/registro y enforcement requieren bloques separados. Se mantiene la semántica
 V28 de agregados completos y el registro histórico mientras esos contratos no estén implementados.
+
+### Ejecución de 13D
+
+- Revisión independiente: sin bloqueantes productivos; se conservan lector, deadlines, protocolo
+  transaccional, wire y seguridad de 13A–13C. Se corrige únicamente el estado documental del README.
+- Se agregan cuatro IT de capacidad sobre 143 versiones y cuatro de concurrencia HTTP, con helper
+  MVC que compone las políticas productivas sobre el lector restringido instrumentado del fixture.
+  El bridge completo sigue cubierto por LegalPublicDocumentHttpIT; no se sustituyen queries/resultados.
+- Capacidad acredita portal PostgreSQL real, buffer máximo 128, una sola consulta/pasada, ausencia
+  de Markdown/N+1, filtros históricos y páginas extremas. La inspección de portal/buffer usa reflexión
+  del driver fijado. La última fila cambia el hash completo sin cambiar page=0; una fecha inválida en
+  posición 131 falla con rollback/cancelación/cierre, aun con If-None-Match previo.
+- Concurrencia observa shared 2→1→0 antes de permitir REPLACE; respuestas anteriores/nuevas mantienen
+  hash, páginas, total y estados coherentes. Lock y pool saturados producen 503 recuperable.
+  Un cursor lento controlado posterior al catálogo real acredita deadline de prueba de 2 s y evita
+  publicar incluso un resultado ya construido; no se presenta como benchmark del SELECT documental.
+- Los 13 tests numéricos existentes acreditan offsets largos y límites seguros JSON, sin fabricar
+  cantidades impracticables de filas. No fue necesario sumar otra prueba que repitiera la aritmética.
+- Primer foco: 13 unitarias y tres de cuatro IT de concurrencia pasan. La expectativa de SQLSTATE
+  del caso deadline sólo recorría getCause; Spring preservó el error 08006 original fuera de esa cadena
+  al fallar rollback. Se corrige sólo el helper de inspección y se exige también el deadline real
+  vencido, hilo sin interrupción, 64 filas, 503/no-store y recursos libres.
+- Foco final: **13 Surefire + 8 Failsafe = 21 pruebas distintas**, todas aprobadas. Concurrencia
+  observó lock 1123 ms, pool 1018 ms y deadline 2046 ms (64 filas, 08006). Son mediciones del fixture.
+  La evidencia detallada y los límites se conservan en el [cierre](2026-09-05-legal-public-document-read-closure.md).
+
+Comandos focales (Java 21 explícito como en los cortes anteriores):
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalPublicDocumentCatalogTest -Dit.test=LegalPublicDocumentHttpConcurrencyIT test failsafe:integration-test failsafe:verify
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicDocumentHttpCapacityIT test-compile failsafe:integration-test failsafe:verify
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicDocumentHttpConcurrencyIT test-compile failsafe:integration-test failsafe:verify
+```
+
+Gate integral fresco: `clean verify`, **BUILD SUCCESS**, **12:07 min**, finalizado el
+2026-09-05 a las **13:39:36 -03**. Los 141 XML Surefire suman **4649** pruebas y los 49 XML Failsafe,
+**370**: total **5019**, con cero fallos, errores u omisiones. Las ocho pruebas nuevas pasan también
+en esta corrida; no hubo que modificar código ni repetir el gate integral.
+El build acredita además ausencia de secretos en ambos JARs. Se contrastaron sus hashes y bytes de
+las 28 migraciones con el repositorio; V27/V28 conservan los hashes congelados. Artefactos, versiones
+y límites de la evidencia quedan en el cierre enlazado. `git diff --check` aprobado; frontend y
+archivos ajenos preservados, flag apagado y ningún push/deploy.
+Commit previsto: `test(legal): cierra lectura documental publica`.

@@ -2,8 +2,9 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 13A–13C completados y verificados, 13D pendiente.
+Estado: diseño aprobado por el titular el 2026-09-05; 13A–13D completados y gate integral acreditado.
 Ejecución y evidencia por corte: [plan de implementación](2026-09-05-legal-public-document-read-implementation.md).
+Cierre e inventario: [lectura documental](2026-09-05-legal-public-document-read-closure.md).
 
 Baseline backend: `92a1fd1`, rama `codex/lanzamiento-publico-backend`.
 Frontend: `7545201`, rama `codex/frontend-refactor-checkpoint`, sin cambios.
