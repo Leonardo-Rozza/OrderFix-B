@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalApplicableScopeResolver;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalPublicRegistrationRequirements;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.AudienciaLegal;
@@ -28,6 +29,9 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.lang.reflect.Modifier;
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +42,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class LegalPublicRequirementsDatabaseConfigurationTest {
 
@@ -82,6 +88,8 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
             assertThat(context.getBeansOfType(TransactionTemplate.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalManifestDatabaseGate.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalRequiredSetAggregateStore.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReader.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReadService.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalDatabaseBoundaryMarker.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalDatabaseBoundaryMarker.Guard.class)).isEmpty();
         }
@@ -170,11 +178,13 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
         properties.put(ENABLED, flag);
         HikariDataSource pool;
         LegalPublicRequirementsDataSource dataSource;
+        LegalPublicRequirementsReadService service;
 
         try (AnnotationConfigApplicationContext context = newContext(properties)) {
             context.refresh();
             pool = context.getBean("legalPublicRequirementsPool", HikariDataSource.class);
             dataSource = context.getBean(LegalPublicRequirementsDataSource.class);
+            service = context.getBean(LegalPublicRequirementsReadService.class);
             JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
             DataSourceTransactionManager manager = context.getBean(DataSourceTransactionManager.class);
             TransactionTemplate transaction = context.getBean(TransactionTemplate.class);
@@ -186,6 +196,7 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
             LegalRequiredSetAggregateStore store = context.getBean(LegalRequiredSetAggregateStore.class);
             LegalRequiredSetAggregateReplayVerifier replay =
                     context.getBean(LegalRequiredSetAggregateReplayVerifier.class);
+            LegalPublicRequirementsReader reader = context.getBean(LegalPublicRequirementsReader.class);
 
             assertPoolPolicy(pool);
             assertThat(pool.getHikariPoolMXBean().getTotalConnections()).isZero();
@@ -211,6 +222,9 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
             assertThat(gate.usesJdbc(jdbc)).isTrue();
             assertThat(store.usesJdbc(jdbc)).isTrue();
             assertThat(replay.usesJdbc(jdbc)).isTrue();
+            assertThat(reader.usesJdbc(jdbc)).isTrue();
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReadService.class)).hasSize(1);
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReader.class)).hasSize(1);
             assertThat(schema.usesJdbc(jdbc)).isTrue();
             assertThat(schema.expectedSchema()).isEqualTo("public");
             assertThat(privileges.usesJdbc(jdbc)).isTrue();
@@ -232,6 +246,7 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
         assertThat(pool.isClosed()).isTrue();
         assertThatThrownBy(() -> dataSource.withinDeadline(deadline -> "closed"))
                 .isInstanceOf(LegalPublicRequirementsReadException.class);
+        assertThatThrownBy(service::readRegistration).isInstanceOf(LegalPublicRequirementsReadException.class);
     }
 
     @ParameterizedTest
@@ -267,8 +282,7 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
         AtomicReference<LegalPublicRequirementsDataSource> observedDataSource = new AtomicReference<>();
         try (AnnotationConfigApplicationContext context = newContext(enabledProperties())) {
             context.registerBean("failAfterLegalGraph", Object.class, () -> {
-                context.getBean(LegalManifestDatabaseGate.class);
-                context.getBean(LegalRequiredSetAggregateStore.class);
+                context.getBean(LegalPublicRequirementsReadService.class);
                 observedPool.set(context.getBean(HikariDataSource.class));
                 observedDataSource.set(context.getBean(LegalPublicRequirementsDataSource.class));
                 throw new IllegalStateException("configuration-test-refresh-failure");
@@ -280,6 +294,134 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
             assertThat(observedDataSource.get()).isNotNull();
             assertThatThrownBy(() -> observedDataSource.get().withinDeadline(deadline -> "closed"))
                     .isInstanceOf(LegalPublicRequirementsReadException.class);
+        }
+    }
+
+    @Test
+    void serviceConstructorRejectsForeignStoreAndReaderEvenWhenTheirDatasourceMatches() {
+        try (ServiceComposition composition = new ServiceComposition()) {
+            JdbcTemplate otherJdbc = new JdbcTemplate(composition.dataSource);
+            LegalRequiredSetAggregateStore foreignStore = composition.storeFor(otherJdbc);
+            LegalPublicRequirementsReader foreignReader = new LegalPublicRequirementsReader(otherJdbc);
+
+            assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                    composition.gate(), foreignStore, composition.reader));
+            assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                    composition.gate(), composition.store, foreignReader));
+            verifyNoInteractions(composition.pool);
+        }
+    }
+
+    @Test
+    void serviceConstructorRejectsADifferentBoundedDatasourceOrGateJdbcBeforeBorrowing() {
+        try (ServiceComposition composition = new ServiceComposition();
+             LegalPublicRequirementsDataSource otherSource =
+                     new LegalPublicRequirementsDataSource(composition.pool, Duration.ofSeconds(15))) {
+            assertThatIllegalArgumentException().isThrownBy(() -> new LegalPublicRequirementsReadService(
+                    composition.jdbc, otherSource, composition.gate(), composition.resolver,
+                    composition.store, composition.reader, composition.schema, composition.privileges));
+
+            LegalManifestDatabaseGate foreignGate = new LegalManifestDatabaseGate(
+                    composition.transaction, new JdbcTemplate(composition.dataSource), composition.budgets,
+                    List.of(composition.schema, composition.privileges));
+            assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                    foreignGate, composition.store, composition.reader));
+            verifyNoInteractions(composition.pool);
+        }
+    }
+
+    @Test
+    void serviceConstructorReaccreditsTheMutableTransactionAndExactPreflightPair() {
+        try (ServiceComposition composition = new ServiceComposition()) {
+            LegalManifestDatabaseGate gate = composition.gate();
+            composition.transaction.setReadOnly(true);
+            assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                    gate, composition.store, composition.reader));
+            composition.transaction.setReadOnly(false);
+            composition.transaction.setTimeout(14);
+            assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                    gate, composition.store, composition.reader));
+            composition.transaction.setTimeout(15);
+
+            LegalV28AggregateSchemaVerifier foreignSchema =
+                    new LegalV28AggregateSchemaVerifier(new JdbcTemplate(composition.dataSource), "public");
+            for (List<LegalDatabasePreflight> preflights : List.<List<LegalDatabasePreflight>>of(
+                    List.<LegalDatabasePreflight>of(),
+                    List.of(composition.schema),
+                    List.of(composition.privileges, composition.schema),
+                    List.of(composition.schema, composition.privileges, composition.schema),
+                    List.of(foreignSchema, composition.privileges))) {
+                LegalManifestDatabaseGate invalidGate = new LegalManifestDatabaseGate(
+                        composition.transaction, composition.jdbc, composition.budgets, preflights);
+                assertThatIllegalArgumentException().isThrownBy(() -> composition.service(
+                        invalidGate, composition.store, composition.reader));
+            }
+            assertThatCode(() -> composition.service(composition.gate(), composition.store, composition.reader))
+                    .doesNotThrowAnyException();
+            verifyNoInteractions(composition.pool);
+        }
+    }
+
+    @Test
+    void serviceExposesOnlyParameterlessRegistrationWithoutHttpOrPublicConstruction() {
+        Class<?> type = LegalPublicRequirementsReadService.class;
+        assertThat(Modifier.isPublic(type.getModifiers())).isTrue();
+        assertThat(Modifier.isFinal(type.getModifiers())).isTrue();
+        assertThat(type.getConstructors()).isEmpty();
+        assertThat(type.getDeclaredAnnotations()).isEmpty();
+        assertThat(Arrays.stream(type.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers())))
+                .singleElement().satisfies(method -> {
+                    assertThat(method.getName()).isEqualTo("readRegistration");
+                    assertThat(method.getParameterTypes()).isEmpty();
+                    assertThat(method.getReturnType()).isEqualTo(LegalPublicRegistrationRequirements.class);
+                    assertThat(method.getDeclaredAnnotations()).isEmpty();
+                });
+    }
+
+    private static final class ServiceComposition implements AutoCloseable {
+        private final LegalPublicRequirementsDatabaseConfiguration configuration =
+                new LegalPublicRequirementsDatabaseConfiguration();
+        private final DataSource pool = mock(DataSource.class);
+        private final LegalPublicRequirementsDataSource dataSource =
+                new LegalPublicRequirementsDataSource(pool, Duration.ofSeconds(15));
+        private final JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        private final LegalDatabaseBudgets budgets = configuration.legalPublicRequirementsBudgets();
+        private final TransactionTemplate transaction = configuration.legalPublicRequirementsTransactionTemplate(
+                configuration.legalPublicRequirementsTransactionManager(dataSource), budgets);
+        private final LegalV28AggregateSchemaVerifier schema =
+                configuration.legalPublicRequirementsSchemaVerifier(jdbc);
+        private final LegalPublicRequirementsPrivilegeVerifier privileges =
+                configuration.legalPublicRequirementsPrivilegeVerifier(jdbc, configuredEnvironment());
+        private final LegalApplicableScopeResolver resolver = configuration.legalPublicRequirementsScopeResolver();
+        private final LegalRequiredSetAggregateStore store = storeFor(jdbc);
+        private final LegalPublicRequirementsReader reader = configuration.legalPublicRequirementsReader(jdbc);
+
+        private LegalManifestDatabaseGate gate() {
+            return configuration.legalPublicRequirementsGate(transaction, jdbc, budgets, schema, privileges,
+                    configuration.legalPublicRequirementsBoundaryGuard(
+                            List.of(configuration.legalPublicRequirementsBoundaryMarker())));
+        }
+
+        private LegalRequiredSetAggregateStore storeFor(JdbcTemplate candidate) {
+            LegalRequiredSetAggregateRevisionCalculator revision =
+                    configuration.legalPublicRequirementsRevisionCalculator();
+            LegalRequiredSetAggregateProvenanceCalculator provenance =
+                    configuration.legalPublicRequirementsProvenanceCalculator();
+            LegalRequiredSetAggregateReplayVerifier replay =
+                    configuration.legalPublicRequirementsReplayVerifier(candidate, revision, provenance);
+            return configuration.legalPublicRequirementsStore(candidate, revision, provenance, replay);
+        }
+
+        private LegalPublicRequirementsReadService service(LegalManifestDatabaseGate candidateGate,
+                LegalRequiredSetAggregateStore candidateStore, LegalPublicRequirementsReader candidateReader) {
+            return new LegalPublicRequirementsReadService(jdbc, dataSource, candidateGate, resolver,
+                    candidateStore, candidateReader, schema, privileges);
+        }
+
+        @Override
+        public void close() {
+            dataSource.close();
         }
     }
 

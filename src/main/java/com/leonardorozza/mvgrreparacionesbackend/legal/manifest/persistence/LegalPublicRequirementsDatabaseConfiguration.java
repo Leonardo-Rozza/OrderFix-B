@@ -155,6 +155,21 @@ public class LegalPublicRequirementsDatabaseConfiguration {
         return new LegalRequiredSetAggregateStore(jdbc, revisionCalculator, provenanceCalculator, replayVerifier);
     }
 
+    @Bean
+    LegalPublicRequirementsReader legalPublicRequirementsReader(JdbcTemplate jdbc) {
+        return new LegalPublicRequirementsReader(jdbc);
+    }
+
+    @Bean
+    LegalPublicRequirementsReadService legalPublicRequirementsReadService(
+            JdbcTemplate jdbc, LegalPublicRequirementsDataSource dataSource, LegalManifestDatabaseGate gate,
+            LegalApplicableScopeResolver resolver, LegalRequiredSetAggregateStore store,
+            LegalPublicRequirementsReader reader, LegalV28AggregateSchemaVerifier schema,
+            LegalPublicRequirementsPrivilegeVerifier privileges, LegalDatabaseBoundaryMarker.Guard guard) {
+        return new LegalPublicRequirementsReadService(
+                jdbc, dataSource, gate, resolver, store, reader, schema, privileges);
+    }
+
     private static String required(Environment environment, String suffix) {
         String value = environment.getRequiredProperty(PROPERTY_PREFIX + suffix);
         if (value.isBlank()) {

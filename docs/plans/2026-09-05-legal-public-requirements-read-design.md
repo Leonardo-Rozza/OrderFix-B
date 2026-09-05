@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14B completados, 14C–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14C completados, 14D–14E pendientes.
 La aprobación permite implementar el diseño por cortes. No habilita el endpoint ni el enforcement.
 [Plan por cortes](2026-09-05-legal-public-requirements-read-implementation.md).
 
@@ -327,4 +327,12 @@ Tras la siguiente autorización se completó 14B: contexto `PUBLIC_REQUIREMENTS`
 ACL propia, recursos acotados y composición del store V28. El gate focal pasó 230 pruebas
 unitarias y 125 PostgreSQL, sin fallos, errores u omisiones. Las decisiones de commit/deadline y
 la evidencia exacta se registran en el plan; aún no hay lector, servicio ni transporte público de
-requisitos. El próximo corte es 14C y el gate integral permanece reservado para 14E.
+requisitos en ese corte. Commit 14B: `208397d feat(legal): aisla consulta de requisitos publicos`.
+
+14C se completó tras la autorización siguiente: fachada `readRegistration()` sin parámetros,
+hidratación completa, comparación de ambas revisiones y resultado tras commit/cierre bajo la misma
+transacción del store. Se corrigió la entrega potencial tras un error de cierre absorbido por
+Spring, conservando el resultado transaccional real. El gate consolidado acredita 248 unitarios
+y 135 PostgreSQL aprobados; el plan detalla los dos problemas de preparación de tests y sus
+correcciones, conteos y límites de esa evidencia. No hay HTTP nuevo. El próximo corte es 14D;
+concurrencia/capacidad y `clean verify` permanecen reservados para 14E.

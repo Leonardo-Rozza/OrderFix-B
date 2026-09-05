@@ -4,6 +4,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 /** Monotonic budget beginning before connection acquisition, never reset by a new phase/FETCH. */
@@ -12,6 +13,7 @@ final class LegalPublicRequirementsDeadline {
     private final LongSupplier clock;
     private final long startedAt;
     private final long budgetNanos;
+    private final AtomicReference<Throwable> cleanupFailure = new AtomicReference<>();
 
     LegalPublicRequirementsDeadline(Duration budget) {
         this(budget, System::nanoTime);
@@ -32,11 +34,26 @@ final class LegalPublicRequirementsDeadline {
     }
 
     int remainingMillis() {
+        Throwable failure = cleanupFailure.get();
+        if (failure != null) {
+            throw new LegalPublicRequirementsReadException(failure);
+        }
         long remaining = budgetNanos - (clock.getAsLong() - startedAt);
         if (remaining <= 0 || Thread.currentThread().isInterrupted()) {
             throw new LegalPublicRequirementsReadException();
         }
         return Math.toIntExact((remaining + 999_999L) / 1_000_000L);
+    }
+
+    /** Spring may absorb release errors; the owning operation must still reject delivery. */
+    void recordCleanupFailure(Throwable failure) {
+        Objects.requireNonNull(failure, "failure");
+        if (!cleanupFailure.compareAndSet(null, failure)) {
+            Throwable first = cleanupFailure.get();
+            if (first != failure) {
+                first.addSuppressed(failure);
+            }
+        }
     }
 
     /** Cleanup must not replace the primary failure; driver cancellation has its own timeout. */

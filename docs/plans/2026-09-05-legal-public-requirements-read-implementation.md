@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14B completados, 14C–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14C completados, 14D–14E pendientes.
 [Diseño aprobado](2026-09-05-legal-public-requirements-read-design.md).
 Baseline backend `40a31a2`, rama `codex/lanzamiento-publico-backend`.
 
@@ -288,6 +288,15 @@ Próximo corte: 14C, hidratación y servicio PostgreSQL en esta misma transacci�
 
 ## 14C — Hidratación y servicio PostgreSQL
 
+Baseline 14C: `208397d`, árbol limpio. El titular autorizó continuar el 2026-09-05.
+Whitelist nominal confirmada antes de editar; no se amplía la superficie HTTP ni el rol de 14B.
+
+Ampliación motivada durante revisión: `LegalPublicRequirementsDataSource.java` y
+`LegalPublicRequirementsDeadline.java`, sólo para conservar un error de cierre que Spring puede
+absorber y rechazar la entrega después de un commit confirmado. Se verifica mediante CommitIT
+con cierre real seguido de SQLException/RuntimeException, conservando COMMITTED y recuperación.
+No cambia el wrapper documental, el protocolo de commit ni las migraciones congeladas.
+
 Resultado: fachada estrecha que devuelve requisitos completos sólo tras commit confirmado.
 No recibe audiencia, perfil ni actor del caller público; usa el resolver servidor para REGISTRO.
 
@@ -330,6 +339,127 @@ Revisar queries y bytes transferidos, cancelación y ausencia de DML en repetici
 No presentar el `ON CONFLICT DO NOTHING` de una carrera como REUSED sin intento de DML.
 
 Commit: `feat(legal): consulta requisitos con agregado v28`.
+
+### Decisiones de implementación 14C
+
+- La única API de la fachada es `readRegistration()`, sin argumentos: el resolver fija
+  REGISTRATION/es-AR/ADMIN_TITULAR dentro del deadline. El constructor acredita la misma frontera
+  JDBC, store, reader y el par exacto de preflights. Toda la lectura sucede dentro del gate mutable
+  compartido de 14B; no hay llamada a otra fachada ni transacción secundaria de materialización.
+- El lector contrasta el receipt con cabecera y sidecar V28, conjunto V27 y puntero actual,
+  incluyendo IDs físicos, publicación, perfil, audiencia, locale, ordinal, revisiones y fecha de
+  creación del agregado. Comprueba publicación SELLADO y fechas de publicación/conjunto/puntero
+  no posteriores a la frontera post-lock. No exige que las versiones se introdujeran en esa
+  publicación: sí exige su membresía y que el slot documental vigente apunte a ella, como V27.
+- Membresía bilateral por UUID, línea y ordinal: lee los miembros exactos del conjunto y los
+  requisitos aplicables de esa publicación. LEFT JOIN conserva filas huérfanas para rechazarlas;
+  la selección por audiencia no elimina versiones/líneas desconocidas. Mantiene los huecos
+  legítimos del orden de requisitos y exige documentos consecutivos desde 1 en cada requisito.
+- Antes de transferir afirmación/Markdown se acreditan enlaces, estados, fechas, metadatos
+  documentales y límites estructurales/de bytes. Canonicidad y digests se verifican después sobre
+  los bytes originales.
+  Dos conteos limitados a 129 documentos y 257 requisitos comprueban capacidad de la publicación
+  completa sin hidratar otros scopes. El grafo exige hasta 256 requisitos, 16 referencias por
+  requisito y 128 UUID documentales; suma los bytes Markdown por referencia con `Math.addExact`
+  hasta 16 MiB. Afirmaciones: hasta 1000 codepoints/4000 bytes UTF-8; Markdown: hasta 1 MiB/UUID.
+- Cada query del lector tiene sentinela máximo + 1 y cursor forward-only de 32 filas. Afirmaciones
+  y documentos se cargan en lotes de 32 UUID, con CASE que devuelve bytea sólo dentro del límite;
+  el número de bytes se vuelve a contrastar con la metadata previa. Cada documento se carga una
+  sola vez y se comparte entre referencias. Son como máximo 20 SELECT emitidos por el lector para
+  los máximos estructurales; excluye gate, preflights, store y SET LOCAL del wrapper. No es una
+  medición de viajes de red ni implica que toda combinación extrema sea editorialmente válida.
+- Se verifica texto canónico y digest de los bytes originales, se acredita la proyección completa
+  con 14A y se exige igualdad de SCOPE_V1 persistido y AGGREGATE_V1 del receipt. Opcionales inválidos
+  hacen fallar todo el conjunto. No se normaliza, filtra o rellena contenido para obtener éxito.
+- Un fallo operativo se traduce a `LegalPublicRequirementsReadException` con mensaje fijo y causa
+  interna cuando existe; no hay retries. El resultado sólo sale tras commit, liberación y chequeo
+  externo del deadline. La fase de fallo distingue rollback previo, commit indeterminado y commit
+  confirmado cuya entrega falla; una consulta posterior vuelve a acreditar todo el contenido.
+- Se conserva el primer error SQLException/RuntimeException de `Connection.close` en el deadline
+  de esa operación; errores adicionales quedan suprimidos. El wrapper vuelve a lanzar la causa y,
+  aunque Spring la absorba durante cleanup, el chequeo externo impide entregar éxito. El estado se
+  comparte al anidar operaciones y no se hereda en una solicitud nueva. Esto no promete liberar
+  físicamente una conexión si el driver falla antes de hacerlo; las pruebas simulan pérdida de
+  confirmación del cierre después de cerrar el delegado real y acreditan rechazo/recuperación.
+
+### Evidencia de 14C
+
+Gate consolidado: **383 pruebas aprobadas, 0 fallos, 0 errores, 0 omitidas en las últimas
+ejecuciones de cada clase**: 248 Surefire + 135 Failsafe. Se contrastaron los ocho XML unitarios
+y siete de integración; los 135 de PostgreSQL combinan las seis clases aprobadas de la primera
+ejecución con el reporte final de ServiceIT, sin sumar dos veces sus invocaciones.
+
+| Ejecución | Resultado | Finalización 2026-09-05 (-03) | Tiempo Maven |
+| --- | --- | --- | --- |
+| Compilación focal inicial | Error de tipos en test, sin ejecutar pruebas | 16:04:55 | 13.773 s |
+| Surefire focal corregido | 248 aprobadas | 16:09:45 | 37.479 s |
+| Preparación `-DskipTests package` | BUILD SUCCESS, sin pruebas | 16:10:04 | 3.126 s |
+| Failsafe focal inicial | 108 aprobadas, 27 fallos de fixture | 16:13:00 | 2 min 43 s |
+| Recompilación del fixture | BUILD SUCCESS, sin pruebas | 16:15:04 | 11.957 s |
+| Failsafe ServiceIT corregido | 34 aprobadas | 16:15:38 | 29.642 s |
+
+La primera compilación detectó una inferencia genérica demasiado amplia en una lista del nuevo
+test de configuración; se corrigió el tipo explícito del fixture sin cambiar producción ni
+comportamiento compartido.
+La primera ejecución PostgreSQL completó 135 invocaciones: 108 aprobadas y 27 fallos de preparación
+del fixture, antes de ejecutar el lector. `Corruption.name()` producía un publicationId en mayúsculas,
+rechazado por el patrón congelado del JSON Schema. Se corrigió sólo ese identificador sintético
+con `toLowerCase(Locale.ROOT)` y se repitió únicamente `LegalPublicRequirementsReadServiceIT`.
+Los 34 casos pasaron después, incluyendo las 27 corrupciones que ahora sí ejecutaron la frontera
+productiva. No se flexibilizaron schema, guards ni validadores para hacer pasar los fixtures.
+
+Surefire: configuración 57, núcleo 14A 81, datasource 19, deadline 9, gate 41, store 12, replay 10
+y servicio agregado 19. Failsafe: ServiceIT 34, CommitIT 10, contexto 14B 7, privilegios 14B 53,
+servicio agregado 13, aislamiento agregado 2 y servicio documental 16.
+Entorno observado: Corretto 21.0.10 (Amazon), Maven 3.9.11, Spring Boot 4.0.6, Spring 7.0.7,
+PostgreSQL 16.14 (`postgres:16-alpine`), JDBC 42.7.10, Testcontainers 2.0.5 y Surefire/Failsafe 3.5.5.
+
+ServiceIT acredita dos requisitos —obligatorio y opcional— en ordinales 1 y 7, cinco referencias
+y tres UUID documentales: una consulta de texto para dos afirmaciones y otra para tres documentos,
+también al reutilizar. La proyección coincide con la observación independiente del owner;
+CREATED emite dos DML y REUSED secuencial cero, preservando identidad, filas editoriales y secuencias.
+REPLACE real de otra línea mantiene el contenido/token de REGISTRO pero cambia conjunto/publicación
+y crea otra identidad física; las versiones conservan su publicación de introducción anterior.
+REQUIRES_NEW confirma el resultado completo y restaura la transacción exterior, aun si ésta revierte.
+
+Las 27 corrupciones cubren afirmación y Markdown (digest, canonicidad y exceso), afirmación invisible,
+falta de obligatorio, revisión componente, versión documental incompatible, opcional sin documentos,
+huérfanos, membresía incompleta, slot/contexto ausente, ordinales, audiencia, estados y fecha futura,
+publicación sin sellar y excesos globales de 129 documentos/257 requisitos. Todas revierten las dos
+filas nuevas después de que el store real devolvió CREATED. Los excesos de texto/publicación fallan
+antes de emitir consultas de TEXT. Sobre REUSED, una alteración de afirmación con digest válido
+preserva el agregado confirmado; restaurar el contenido permite reutilizarlo sin DML.
+Deriva de esquema/ACL se rechaza antes de lock/DML y recupera tras restauración.
+
+CommitIT acredita diez escenarios con PostgreSQL real, observación de TransactionSynchronization,
+contadores físicos y otra conexión owner: fallo/deadline precommit revierten; perder el acuse SQL
+o Runtime después de un COMMIT real informa UNKNOWN sin rollback; callback/deadline/cierre tras
+confirmación mantienen COMMITTED y rechazan entrega. Los errores SQL/Runtime posteriores al cierre
+físico también rechazan éxito aunque Spring los absorba, incluso si el caller captura un error
+anidado. La operación siguiente recupera CREATED o REUSED según corresponda; no hay retry implícito,
+filas parciales ni conexiones activas al terminar los escenarios probados. El reloj inyectado
+acredita fases deterministas, no una latencia real ni un SLA de teardown.
+
+Comandos focalizados ejecutados con Java 21 explícito:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalPublicRequirementsDatabaseConfigurationTest,LegalPublicRequirementsValidatorTest,LegalPublicRequirementsDataSourceTest,LegalPublicRequirementsDeadlineTest,LegalManifestDatabaseGateTest,LegalRequiredSetAggregateStoreTest,LegalRequiredSetAggregateReplayVerifierTest,LegalRequiredSetAggregateServiceTest test
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -DskipTests package
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicRequirementsReadServiceIT,LegalPublicRequirementsCommitIT,LegalPublicRequirementsDatabaseContextIT,LegalPublicRequirementsPrivilegeVerifierIT,LegalRequiredSetAggregateServiceIT,LegalRequiredSetAggregateDatabaseIsolationIT,LegalPublicDocumentReadServiceIT failsafe:integration-test failsafe:verify
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicRequirementsReadServiceIT failsafe:integration-test failsafe:verify
+```
+
+La corrección de cierre se limita al contexto 14B nuevo; se verificaron sus unitarios, contexto y
+permisos reales además de CommitIT. Los fallos de compilación/preparación no revelaron regresión
+compartida: no justifican repetir clases sin cambios ni ampliar a `clean verify`, reservado para
+14E. Revisiones independientes cubrieron SQL/pertenencia, recursos/commit, fixtures y documentación.
+Concurrencia editorial, extremos de capacidad válidos, transporte y gate integral siguen pendientes.
+
+Whitelist final: cinco archivos de producción (reader/servicio nuevos y tres extensiones de 14B),
+cuatro de tests (tres nuevos y configuración existente), plan y diseño: **11 archivos**.
+Sin cambios a métricas compartidas, HTTP, ACL, esquema, contenido legal real o frontend. V27/V28
+conservan los hashes del diseño; frontend `7545201` y sus dos directorios no versionados se preservan.
+Commit local sin push. Próximo corte: 14D, transporte HTTP bajo su flag apagado por defecto.
 
 ## 14D — HTTP público y políticas cerradas
 
@@ -433,5 +563,5 @@ autorizados del corte; confirmar rama, HEAD, frontend y hashes V27/V28 antes y d
 Diseño y plan preparados a partir del baseline 13D, con revisión independiente de wire, V28,
 privilegios y resultados transaccionales. No se ejecutó Maven ni se modificó código/configuración.
 El titular aprobó después el diseño y autorizó implementar 14A. Su evidencia se registra en el
-apartado correspondiente. Tras la autorización siguiente también se completó 14B;
-14C–14E permanecen pendientes.
+apartado correspondiente. Tras las autorizaciones siguientes se completaron 14B y 14C;
+14D–14E permanecen pendientes.

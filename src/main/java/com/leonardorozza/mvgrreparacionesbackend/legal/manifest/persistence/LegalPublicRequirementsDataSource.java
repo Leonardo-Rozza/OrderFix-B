@@ -29,6 +29,7 @@ import java.util.function.LongSupplier;
  * not a wall-clock SLA: cancellation/driver teardown can finish after the deadline. No expired
  * observation is returned, including when commit/cleanup completed too late. A successful mutable
  * commit is first reported to Spring; only the outer operation checks expiry after that commit.
+ * Release failures are retained by the shared operation deadline even if Spring absorbs them.
  */
 final class LegalPublicRequirementsDataSource extends AbstractDataSource implements AutoCloseable {
 
@@ -328,7 +329,12 @@ final class LegalPublicRequirementsDataSource extends AbstractDataSource impleme
                 leases.remove(this);
                 expiration.cancel(false);
                 // Never let a late watchdog abort a connection already returned to the pool.
-                connection.close();
+                try {
+                    connection.close();
+                } catch (SQLException | RuntimeException failure) {
+                    deadline.recordCleanupFailure(failure);
+                    throw failure;
+                }
             }
         }
     }
