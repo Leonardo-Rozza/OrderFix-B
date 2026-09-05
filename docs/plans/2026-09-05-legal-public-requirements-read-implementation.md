@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14D completados; 14E pendiente.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14E completados; gate integral aprobado.
 [Diseño aprobado](2026-09-05-legal-public-requirements-read-design.md).
 Baseline backend `40a31a2`, rama `codex/lanzamiento-publico-backend`.
 
@@ -596,6 +596,24 @@ Commit atómico local sin push: `feat(legal): publica requisitos de registro`. S
 
 ## 14E — Concurrencia, capacidad y gate integral
 
+Baseline 14E: `82b6708`, árbol backend limpio. El titular autorizó continuar el 2026-09-05.
+Whitelist confirmada antes de editar. Se añade nominalmente
+`LegalPublicRequirementsHttpDeadlineIT.java` para separar los escenarios de pool, locks,
+cancelación, commit y cierre de las pruebas de causalidad y capacidad. El helper
+`LegalPublicRequirementsHttpITSupport` recibe la fachada real de un grafo PostgreSQL restringido
+propiedad del test y sólo administra MVC/seguridad; el puente de producción ya está acreditado
+por `LegalPublicRequirementsHttpIT`, que se conserva en el gate. Las dependencias JWT/usuarios
+pueden ser mocks; el servicio, store, gate, JDBC, transacción y PostgreSQL permanecen reales.
+Se añade `LegalPublicRequirementsCapacityITSupport.java` como helper nuevo de tests compartido
+por capacidad y deadline: importa/promueve manifiestos válidos y calcula expectativas owner por
+fuera de la instrumentación del consumidor. Evita duplicar el generador de 65/251 miembros y no
+modifica el fixture de 14C. Concurrencia puede provisionar un segundo rol documental dentro de su
+propia base Testcontainers para comprobar HTTP histórico después de RETIRE; valida el nombre de
+base y la ausencia de la identidad antes de crearlo, mantiene la allowlist documental exacta y
+no amplía el rol de requisitos ni los prefijos de seguridad de fixtures anteriores.
+No hay cambios de producción previstos. Si se detecta un defecto, se documentará y corregirá en
+un corte atómico previo conforme al plan, sin ocultarlo en el commit de cierre.
+
 Resultado: evidencia de cierre de toda la superficie implementada, sin ampliar su alcance.
 
 1. Probar dos observadores shared simultáneos y writer REPLACE/PROMOTE/RETIRO exclusivo esperando.
@@ -630,6 +648,69 @@ Whitelist nominal:
 
 Commit previsto: `test(legal): cierra requisitos publicos de registro`.
 
+### Preparación y alcance de evidencia 14E
+
+El generador compartido usa importación y promoción/reemplazo reales. La publicación extrema
+contiene 256 requisitos totales: 251 de REGISTRO y los cinco necesarios para cubrir los otros
+contextos de la matriz congelada. No se presenta como un scope de 256 requisitos acreditado por
+la vía editorial. La proyección pura de 256 y sus límites permanecen verificados por
+`LegalPublicRequirementsValidatorTest`. El máximo de Markdown expandido se prueba con 253
+referencias a tres UUID vigentes y 393.216 bytes distintos, que suman 16.777.216 bytes expandidos.
+Los tests miden por separado los bytes del wire; no infieren un límite de JSON ni de heap.
+
+Los tests nuevos de causalidad conservan el código real de gate/store/reader y usan barreras
+explícitas: antes de hidratar para REPLACE/RETIRE, antes del store para PROMOTE sin puntero y en
+el proveedor de UUID existente para forzar dos lookups vacíos concurrentes. Esta carrera puede
+intentar dos INSERT de cabecera; la ausencia de DML se exige a una repetición estable posterior.
+Los casos de vencimiento diferencian rollback, commit confirmado y acuse incierto. Un reloj
+controlado después del cálculo real acredita el chequeo cooperativo, no una medición de CPU.
+
+Preparación focal con Java 21:
+
+```bash
+./mvnw -Dtest=LegalPublicRequirementsValidatorTest package
+./mvnw -Dit.test=LegalPublicRequirementsHttpConcurrencyIT,LegalPublicRequirementsHttpCapacityIT,LegalPublicRequirementsHttpDeadlineIT,LegalPublicRequirementsHttpIT failsafe:integration-test failsafe:verify
+```
+
+El primer `package` falló al compilar por un import del test de concurrencia: `ValidatedEditorialPlan`
+es un tipo anidado de `LegalEditorialPlanValidator`. Se corrigió el import, sin tocar producción ni
+assertions. El segundo `package` pasó 81 pruebas de acreditación pura, cero fallos/errores/omitidas,
+y preparó los artefactos: Maven 15.144 s, final 2026-09-05 17:18:53 -03:00.
+La integración inicial acreditó 47/48 casos: RETIRE fue bloqueado por un symlink en la ruta
+`@TempDir` de macOS antes de ejecutar. Se corrigió el fixture con `directory.toRealPath()` y se
+repitieron los cinco casos de concurrencia: aprobados, Maven 23.920 s, final 17:22:51 -03:00.
+Capacidad 7, deadline 9 y puente HTTP 27 habían pasado sin cambios. Revisión posterior reforzó el
+criterio 14E de recursos cerrados en DeadlineIT: un poll independiente acotado a 5 s por rol y base
+comprueba ausencia de transacciones/advisory locks, permitiendo conexiones idle. Se ejecuta antes
+de afirmar cero filas durables tras FETCH/UNKNOWN y no redefine el resultado transaccional.
+La repetición de DeadlineIT aprobó sus 9 casos, cero fallos/errores/omitidas: Maven 21.251 s,
+final 2026-09-05 17:27:46 -03:00. El focal consolidado queda en 81 Surefire y 48 Failsafe.
+Lock/pool/FETCH registraron 1176/1015/3018 ms; excluyen el poll posterior de recursos del servidor.
+El FETCH registró 64 filas, STATUS_UNKNOWN y ningún SQLSTATE extraído; no se afirma rollback conocido.
+
+### Cierre y gate integral fresco de 14E
+
+`./mvnw clean verify` con Corretto 21.0.10 terminó en **BUILD SUCCESS** el
+**2026-09-05T17:42:44-03:00**, Maven **14 min 44 s**, sobre PostgreSQL 16.14.
+Ejecutó **5.492 pruebas**: **4.970 Surefire en 150 suites** y
+**522 Failsafe en 57 suites**, sin fallos, errores ni omitidas.
+Los 207 XML frescos y `failsafe-summary.xml` confirman los conteos; no hubo flakes, timeout
+ni failureMessage. Esta corrida no requirió correcciones ni repeticiones.
+
+El [cierre de requisitos públicos](2026-09-05-legal-public-requirements-read-closure.md) registra
+métricas, límites de observación, versiones, hashes y revisión de ambos JAR. Contiene 21 invocaciones
+nuevas: concurrencia 5, capacidad 7 y tiempos límite 9; el puente HTTP existente conserva sus 27 casos.
+Se distinguió la causalidad de transacciones del orden de entrega HTTP y se midió por separado el
+GET y el poll de liberación del servidor. No aparecieron defectos de producción.
+
+Las 28 migraciones empaquetadas coinciden con las fuentes; V27/V28 mantienen sus hashes congelados.
+Sin clases exclusivas de tests, Mockito, Testcontainers, agente Byte Buddy ni configuración local
+adicional en web/CLI. El diff final tiene diez archivos nominales: cinco tests/helpers nuevos y
+cinco documentos. No se modifican fuentes productivas ni tests anteriores. Frontend `7545201`
+conserva sus dos rutas no versionadas. Stage explícito, `git diff --check` y revisión final aprobados.
+Commit atómico local: `test(legal): cierra requisitos publicos de registro`, sin push.
+El bloque 14 queda cerrado; flags, BACKEND-HANDOFF 1 y Tarea 3 continúan sin habilitar.
+
 ## Comandos y control de cada commit
 
 Desde backend, Java 21 explícito. Antes de ejecutar un focal se enumeran con `rg --files` los
@@ -659,4 +740,4 @@ Diseño y plan preparados a partir del baseline 13D, con revisión independiente
 privilegios y resultados transaccionales. No se ejecutó Maven ni se modificó código/configuración.
 El titular aprobó después el diseño y autorizó implementar 14A. Su evidencia se registra en el
 apartado correspondiente. Tras las autorizaciones siguientes se completaron 14B y 14C;
-14D también quedó completado y documentado arriba. 14E permanece pendiente.
+14D y 14E también quedaron completados y documentados arriba, con gate integral fresco de cierre.

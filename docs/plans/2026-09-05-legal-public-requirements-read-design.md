@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14D completados; 14E pendiente.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14E completados; gate integral aprobado.
 La aprobación permite implementar el diseño por cortes. No habilita el endpoint ni el enforcement.
 [Plan por cortes](2026-09-05-legal-public-requirements-read-implementation.md).
 
@@ -344,4 +344,14 @@ El flag continúa apagado y no se habilita el handoff. Pasaron 169 pruebas focal
 Por el impacto transversal en filtros se amplió el gate: `clean verify` fresco aprobó 5.471 pruebas
 (4.970 Surefire + 501 Failsafe), sin fallos ni omitidas, sobre PostgreSQL 16.14 y Java 21, en
 12 min 52 s. Finalizó el 2026-09-05 16:55:04 -03:00. V27/V28 y frontend permanecen intactos.
-El próximo corte es 14E: concurrencia/capacidad HTTP y su propio gate integral fresco.
+14E completó concurrencia, capacidad y tiempos límite HTTP sin cambios productivos. Acredita dos
+lectores frente a escritores editoriales, creadores convergentes, procedencia física, capacidad
+editorial válida de 256 requisitos totales y 16 MiB expandidos, historia extensa y recursos liberados.
+Distingue rollback, commit confirmado y resultado incierto; las inyecciones y límites de observación
+están documentados. El focal consolidado aprobó 81 Surefire y 48 PostgreSQL, tras las correcciones
+de preparación y el refuerzo de recursos descritos en el plan.
+Su `clean verify` fresco aprobó 5.492 pruebas (4.970 Surefire + 522 Failsafe),
+con cero fallos, errores u omitidas, en 14 min 44 s; final 2026-09-05T17:42:44-03:00.
+Los hashes y la revisión de ambos artefactos están en el
+[cierre](2026-09-05-legal-public-requirements-read-closure.md). V27/V28 y frontend siguen intactos.
+El bloque 14 queda cerrado; los flags permanecen apagados, sin habilitar el handoff ni hacer push.
