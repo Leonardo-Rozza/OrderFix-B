@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-05
 
-Estado: propuesta terminada para revisión del titular; implementación pendiente de aprobación.
-El pedido de continuar autoriza este corte documental. No habilita el endpoint ni el enforcement.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A completado, 14B–14E pendientes.
+La aprobación permite implementar el diseño por cortes. No habilita el endpoint ni el enforcement.
 [Plan por cortes](2026-09-05-legal-public-requirements-read-implementation.md).
 
 Baseline backend: `40a31a2`, rama `codex/lanzamiento-publico-backend`, árbol limpio.
@@ -306,11 +306,12 @@ Los cuatro estados combinados de flags documental/requisitos deben funcionar ind
 El bloque cierra sólo tras PostgreSQL 16 real, controles de privilegios, rollback nuevo/reutilizado,
 carreras entre materializadores, dos lectores shared y writer editorial, límites válidos y excesos,
 coherencia de wire/revisión/ETag, cancelación y un nuevo `clean verify` de ambos artefactos.
-Los resultados previos de 13D son baseline, no evidencia de la implementación aún pendiente.
+Los resultados previos de 13D son baseline; no sustituyen la evidencia por corte de este bloque.
 
-Este corte sólo documenta. Se revisaron contrato, calculadores, store/replay, esquema, ACLs, gate,
+El corte documental previo sólo documentó la propuesta. Se revisaron contrato, calculadores,
+store/replay, esquema, ACLs, gate,
 deadline y transporte existentes; tres revisiones independientes cubrieron contrato, persistencia
-y fallos transaccionales. No corresponde ejecutar Maven por cambios exclusivamente Markdown.
+y fallos transaccionales. En ese corte no se ejecutó Maven por cambios exclusivamente Markdown.
 La skill `writing-plans`, referida por brainstorming, no está instalada; se usa el formato de
 cortes/whitelists/gates del repositorio. No se crea código ni configuración como sustituto.
 
@@ -318,5 +319,6 @@ La whitelist documental se limita a este diseño y su plan. V27 SHA-256
 `52fd5f3eda14fde228e218f127b5e9362c8542dc7e26df7b502ba65061332b9b` y V28 SHA-256
 `1227c8261cfcca1263a0b2105bf0dc797c1f59f3b5bdc71225464fc4aa154a5e` deben permanecer iguales.
 
-Commit documental previsto: `docs(legal): diseña requisitos publicos de registro`.
-Primer commit de implementación, sujeto a aprobación: `feat(legal): acredita requisitos publicos`.
+Commit documental: `3351728 docs(legal): diseña requisitos publicos de registro`.
+El titular aprobó después comenzar 14A. Su implementación, decisiones y gate focalizado están
+registrados en el plan. Commit 14A: `feat(legal): acredita requisitos publicos`.

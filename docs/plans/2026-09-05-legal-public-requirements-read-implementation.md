@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-05
 
-Estado: plan propuesto; ningún corte de implementación iniciado.
-Depende de aprobar el [diseño](2026-09-05-legal-public-requirements-read-design.md).
+Estado: diseño aprobado por el titular el 2026-09-05; 14A completado, 14B–14E pendientes.
+[Diseño aprobado](2026-09-05-legal-public-requirements-read-design.md).
 Baseline backend `40a31a2`, rama `codex/lanzamiento-publico-backend`.
 
 ## Reglas y evidencia de partida
@@ -34,6 +34,9 @@ no autorizan editar todo un paquete. En todos los cortes se actualizan este plan
 exclusivamente para registrar decisiones, autorización, avance y evidencia reales.
 
 ## 14A — Proyección completa y acreditación pura
+
+Baseline 14A: `3351728`, árbol limpio. El titular aprobó el diseño y autorizó comenzar 14A
+el 2026-09-05. La whitelist nominal de este apartado queda confirmada antes de implementar.
 
 Resultado: representación inmutable de requisitos públicos de REGISTRO con revisión componente
 y agregada calculadas a partir de los mismos campos. Sin JDBC, HTTP, Spring, flags o configuración.
@@ -77,6 +80,62 @@ Pruebas focalizadas: `LegalPublicRequirementsValidatorTest`, `CanonicalTextValid
 `Rfc8785CanonicalizerTest`. Si el nombre de una regresión difiere se usa el existente verificado.
 
 Commit: `feat(legal): acredita requisitos publicos`.
+
+### Decisiones de implementación 14A
+
+- La API nueva es `LegalPublicRequirementsValidator.validate(LegalRequiredSetProjection)`.
+  Devuelve un `LegalPublicRegistrationRequirements` final e inmutable, con `projection()`,
+  `scopeRevision()` y `requiredSetRevision()`. No admite un token del caller ni ofrece constructor
+  público; el constructor interno calcula ambas revisiones desde la proyección validada.
+- Una entrada inválida falla con `IllegalArgumentException` y mensaje fijo sin contenido; una
+  proyección null falla con `NullPointerException`. No hay resultado parcial ni catálogo de errores
+  HTTP en este núcleo. La futura frontera 14C traducirá el fallo de acreditación a indisponibilidad.
+- Se reutiliza `requireCanonicalizationCapacity` antes de asignar bytes UTF-8 o calcular digests.
+  Cuenta todas las referencias para 1 MiB/documento y 16 MiB expandido, sin tocar sus límites.
+- Los metadatos y fechas usan las validaciones existentes de `LegalDocumentSummary`, además de
+  los límites de SCOPE_V1. Se preservan espacios y Unicode original de título/versión, sin NFC,
+  trim o reglas de visibilidad nuevas. La afirmación sí debe ser publicable; Markdown vacío se
+  rechaza explícitamente aunque tenga el digest del texto vacío.
+- Un documento compartido se valida una vez, con hasta 128 UUID distintos. Toda referencia de
+  la misma UUID debe conservar los campos canónicos; fechas se comparan por Instant, permitiendo
+  offsets distintos del mismo instante. Se mantienen las referencias y el orden original.
+- Los límites ya impuestos por los constructores congelados no se duplican como una segunda
+  implementación. Se prueba que la API acepta los extremos válidos y se mantienen sus regresiones.
+  La API pura no acredita slots VIGENTE, ordinales de base, actualidad ni límites de una publicación
+  completa fuera del scope; esas responsabilidades siguen asignadas a 14C.
+
+### Evidencia de 14A
+
+Única ejecución focalizada con Corretto 21.0.10 (Amazon), finalizada el 2026-09-05 a las
+14:29:27 -03: **153 pruebas, 0 fallos, 0 errores, 0 omitidas**, `BUILD SUCCESS` en 15.371 s.
+Los cinco reportes XML confirman 81 pruebas nuevas de `LegalPublicRequirementsValidatorTest` y
+72 regresiones: 14 de texto canónico, 8 de SCOPE_V1, 9 de AGGREGATE_V1 y 41 del canonicalizador.
+No se ejecutó PostgreSQL ni `clean verify`: sólo se agregan tipos puros y sus tests; no hubo
+fallos ni cambios transversales. El gate integral queda pendiente en 14E.
+
+Los cinco fixtures son sintéticos y se generaron con Python fuera de la implementación Java.
+El test los contrasta además contra `org.erdtman.jcs.JsonCanonicalizer` y SHA-256 independiente,
+y compara bytes/tokens de los calculadores productivos. Los JSON canónicos no incluyen LF final;
+el JSON legible y los archivos de digest sí lo incluyen. No se modifica ningún golden previo.
+
+| Proyección | Bytes canónicos | Revisión |
+| --- | --- | --- |
+| SCOPE_V1 completo REGISTRO | 3177 | `sha256:82deb156c352d00664d09daabc790244681e55f0d2fb8ab2454076c577ac2541` |
+| AGGREGATE_V1, ADMIN_TITULAR, un scope | 209 | `sha256:5ec6c40c9a87d7157a798cdc6f1bbba400c753a6cc7830dc3149c5d805f8b1e1` |
+
+Se acreditan opcionales inválidos, último miembro influyendo en ambas revisiones, preservación de
+orden/bytes originales, Unicode, controles, digests falsos, fechas UTC válidas y fuera de rango,
+UUID sin restricción v4, identidades independientes de requisito/documento e inmutabilidad.
+Las pruebas aceptan 256 requisitos, 16 referencias por requisito y 128 documentos distintos;
+rechazan el UUID 129, 1 MiB UTF-8 + 1 byte y 16 MiB expandido + 1 byte. El caso expandido usa un
+documento de 1 MiB compartido por 16 requisitos, probando el conteo por referencia. Las combinaciones
+extremas acreditan la proyección pura, no slots/documentos VIGENTE de una publicación PostgreSQL.
+
+Dos revisiones independientes cubrieron producción y tests. Se preservaron los calculadores,
+canonicalizadores, roles y migraciones existentes; hashes de V27/V28 coinciden con el diseño.
+El frontend conserva `7545201` y sus directorios no versionados. Whitelist final: dos clases,
+un archivo de tests, cinco fixtures, plan y diseño. Sin HTTP, configuración o push.
+Próximo corte: 14B, contexto restringido y recursos PostgreSQL acotados.
 
 ## 14B — Contexto, privilegios y recursos acotados
 
@@ -263,9 +322,9 @@ tests aprobados. El `clean verify` queda para 14E o el motivo de ampliación doc
 No versionar `target`, logs o secretos. Revisar el diff nominal y hacer stage sólo de los archivos
 autorizados del corte; confirmar rama, HEAD, frontend y hashes V27/V28 antes y después del commit.
 
-## Evidencia de este corte documental
+## Evidencia del corte documental previo
 
 Diseño y plan preparados a partir del baseline 13D, con revisión independiente de wire, V28,
 privilegios y resultados transaccionales. No se ejecutó Maven ni se modificó código/configuración.
-La próxima acción después de aprobación es 14A; la autorización de cada continuación se registra
-aquí cuando ocurra, sin dar por aprobados ni terminados los cortes futuros.
+El titular aprobó después el diseño y autorizó implementar 14A. Su evidencia se registra en el
+apartado correspondiente; 14B–14E permanecen pendientes.

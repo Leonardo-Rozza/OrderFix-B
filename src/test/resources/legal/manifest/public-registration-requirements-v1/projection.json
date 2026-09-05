@@ -1,0 +1,81 @@
+{
+  "contexto": "REGISTRO",
+  "locale": "es-AR",
+  "requisitos": [
+    {
+      "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "contexto": "REGISTRO",
+      "tipoActo": "ACEPTACION",
+      "afirmacion": "Acepto los términos \"OrdenFix\", privacidad y tratamiento de datos como titular 🙂.",
+      "afirmacionSha256": "d4d955639c117b5abb31bab53d9221bba88b748b8b1c54abd77e01d1c8328209",
+      "documentos": [
+        {
+          "id": "89abcdef-0123-4567-8abc-def012345678",
+          "tipo": "ACUERDO_TRATAMIENTO_DATOS",
+          "version": "2026.09.05",
+          "titulo": "Acuerdo de tratamiento — titular ADMIN",
+          "contenidoMarkdown": "# Acuerdo de tratamiento — titular ADMIN\n\nEl titular administra empleados y autoriza el uso de datos de reparación.\nCampos:\tfinalidad\tconservación\n",
+          "sha256": "d2ce34a6c0af271380d03003788d3783afb6b6cf54d9ca7c80331140392922fd",
+          "vigenteDesde": "2026-09-01T03:00:00.123456Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        },
+        {
+          "id": "f1234567-89ab-4cde-8fed-0123456789ab",
+          "tipo": "TERMINOS_SERVICIO",
+          "version": "2026.09.05",
+          "titulo": "Términos \"OrdenFix\" — reparación 🙂",
+          "contenidoMarkdown": "# Términos \"OrdenFix\" — reparación 🙂\n\nEl taller conserva el acuerdo económico con su cliente.\nEjemplo literal: carpeta\\evidencia / fotos.\n\tNota: OrdenFix no emite comprobantes fiscales.\n",
+          "sha256": "05da8b4bbbdc7bf262b5acc033abcdadb3f82d5a77184b481f327f4bfff8c1ac",
+          "vigenteDesde": "2026-09-01T03:00:00Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        },
+        {
+          "id": "01234567-89ab-4cde-afed-ffffffffffff",
+          "tipo": "POLITICA_PRIVACIDAD",
+          "version": "2026.09.05",
+          "titulo": "Privacidad: niño, café y 漢字",
+          "contenidoMarkdown": "# Privacidad: niño, café y 漢字\n\nDatos de reparación y evidencia; acceso, rectificación y baja.\nTexto original con \"comillas\", \\ y un separador Unicode: fin.\n",
+          "sha256": "0ac4f4034a8f6c8361414b3a4ae2381cc12d47fdd4f63586da2b5d3416e7a5c8",
+          "vigenteDesde": "2026-09-01T03:00:00.000001Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        }
+      ],
+      "requerido": true
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "contexto": "REGISTRO",
+      "tipoActo": "LECTURA",
+      "afirmacion": "Leí el aviso opcional: niño, café, 漢字 y la referencia carpeta\\evidencia.",
+      "afirmacionSha256": "cef9fb1f60189da96aa707c84fdebaf51b14a9c79f276f0cf79f99b8d25b0034",
+      "documentos": [
+        {
+          "id": "01234567-89ab-4cde-afed-ffffffffffff",
+          "tipo": "POLITICA_PRIVACIDAD",
+          "version": "2026.09.05",
+          "titulo": "Privacidad: niño, café y 漢字",
+          "contenidoMarkdown": "# Privacidad: niño, café y 漢字\n\nDatos de reparación y evidencia; acceso, rectificación y baja.\nTexto original con \"comillas\", \\ y un separador Unicode: fin.\n",
+          "sha256": "0ac4f4034a8f6c8361414b3a4ae2381cc12d47fdd4f63586da2b5d3416e7a5c8",
+          "vigenteDesde": "2026-09-01T03:00:00.000001Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        },
+        {
+          "id": "89abcdef-0123-4567-8abc-def012345678",
+          "tipo": "ACUERDO_TRATAMIENTO_DATOS",
+          "version": "2026.09.05",
+          "titulo": "Acuerdo de tratamiento — titular ADMIN",
+          "contenidoMarkdown": "# Acuerdo de tratamiento — titular ADMIN\n\nEl titular administra empleados y autoriza el uso de datos de reparación.\nCampos:\tfinalidad\tconservación\n",
+          "sha256": "d2ce34a6c0af271380d03003788d3783afb6b6cf54d9ca7c80331140392922fd",
+          "vigenteDesde": "2026-09-01T03:00:00.123456Z",
+          "estado": "VIGENTE",
+          "locale": "es-AR"
+        }
+      ],
+      "requerido": false
+    }
+  ]
+}
