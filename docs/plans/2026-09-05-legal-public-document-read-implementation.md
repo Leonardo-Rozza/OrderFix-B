@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: 13A completado y verificado; 13B–13D pendientes.
+Estado: 13A–13B completados y verificados; 13C–13D pendientes.
 
 Diseño aprobado: [lectura pública documental](2026-09-05-legal-public-document-read-design.md),
 commit `10bf5b5`. El titular autorizó comenzar 13A el 2026-09-05.
@@ -134,8 +134,33 @@ PostgreSQL con credencial restringida, preflight propio y gate read-only compart
 
 ## 13B — Lector PostgreSQL restringido
 
-Dependencia: 13A terminado. Antes de editar se fija la whitelist nominal de este corte dentro de
-este mismo plan; los nombres nuevos del lector todavía no representan interfaces comprometidas.
+Baseline 13B: `67a9580`, árbol limpio. El titular autorizó continuar el 2026-09-05.
+Dependencia 13A cumplida. El contexto se registra explícitamente y no se descubre por component scan;
+su habilitación interna no agrega mappings HTTP ni altera el flag público previsto para 13C.
+
+### Whitelist 13B antes de implementación
+
+Prefijo producción: `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/`.
+
+- `LegalPublicDocumentPrivilegeVerifier.java`, preflight aislado con allowlist propia.
+- `LegalPublicDocumentReader.java`, `LegalPublicDocumentCatalog.java`, `LegalPublicDocumentVersion.java`.
+- `LegalPublicDocumentReadService.java`, `LegalPublicDocumentReadException.java`.
+- `LegalPublicDocumentDeadline.java`, `LegalPublicDocumentDataSource.java`.
+- `LegalPublicDocumentReadDatabaseConfiguration.java`, composición explícita con propiedades propias.
+- `LegalManifestDatabaseGate.java`, variante read-only shared aditiva y acreditación del par lector.
+- `LegalDatabaseBoundaryMarker.java`, nueva frontera `PUBLIC_DOCUMENT_READ`.
+- Tests bajo el mismo paquete: `LegalRestrictedPublicDocumentRoleFixture.java`,
+  `LegalPublicDocumentPrivilegeVerifierIT.java`, `LegalPublicDocumentCatalogTest.java`,
+  `LegalPublicDocumentReadServiceIT.java`, `LegalPublicDocumentReadDatabaseConfigurationTest.java`,
+  `LegalPublicDocumentDeadlineTest.java`, `LegalPublicDocumentDataSourceTest.java`,
+  `LegalPublicDocumentReadConcurrencyIT.java`, `LegalPublicDocumentReadITSupport.java`,
+  `LegalManifestDatabaseGateTest.java` y `LegalDatabaseBoundaryMarkerTest.java`.
+- Este plan y la actualización de estado del diseño. No migraciones, frontend ni HTTP.
+
+Se mantienen los verificadores/roles existentes. El preflight nuevo replica la acreditación efectiva
+aislada del patrón V28 para evitar parametrizar o ampliar la allowlist del materializador.
+
+### Ejecución
 
 1. Agregar frontera aislada `PUBLIC_DOCUMENT_READ`, credencial dedicada y transacción efectiva
    `REQUIRES_NEW/READ_COMMITTED/read-only`, sin fallback web/owner ni migración automática.
@@ -154,6 +179,90 @@ este mismo plan; los nombres nuevos del lector todavía no representan interface
    aparte del presupuesto; ningún chequeo Java promete interrumpir un driver bloqueado.
 7. Gate focal PostgreSQL 16: datos visibles/históricos, contexto, orden real UUID, más de 128 filas,
    ausencia de DML, rol restringido, dos lectores shared, writer bloqueado y coherencia tras cambio.
+
+### Decisiones implementadas en 13B
+
+- Frontera `PUBLIC_DOCUMENT_READ`, registrada explícitamente mediante
+  `LegalPublicDocumentReadDatabaseConfiguration`, sin `@Configuration`/component scan ni
+  autoconfiguración web, JPA o Flyway. Su propiedad interna es
+  `ordenfix.legal.public-document-read-context.enabled=true`; ausente/false no crea beans.
+- `ordenfix.legal.public-document-read.jdbc-url`, `.username` y `.password` son obligatorias;
+  no hay fallback a `spring.datasource.*`. El esquema de esta lectura es `public`. La URL acepta
+  opciones TLS explícitas y `loggerLevel`; rechaza overrides de credencial, driver, search_path
+  y timeouts que pudieran anular los presupuestos del pool.
+- Pool dedicado de dos conexiones, minIdle 0, adquisición 1000 ms; driver con connect/login 1 s,
+  socket 5 s y cancelSignal 1 s. El contexto no conecta/migra al crearse. El preflight acredita
+  la credencial real, PostgreSQL 16 y el esquema V27/V28 antes de leer documentos.
+- Transacción `REQUIRES_NEW/READ_COMMITTED`, read-only declarado y efectivo, con enforceReadOnly
+  y par exacto esquema/privilegios sobre el mismo JdbcTemplate. El gate nuevo usa shared;
+  executeReadOnly y reconciliación histórica conservan exclusive y sus presupuestos anteriores.
+- El rol sólo recibe SELECT sobre líneas, versiones, contextos documentales y Flyway. Se comprueban
+  privilegios efectivos de relaciones/columnas, funciones y capacidades sistémicas; no basta con
+  que los grants directos parezcan restringidos. La fixture rechaza bases ajenas al prefijo
+  `ordenfix_legal_public_document_`; revoca PUBLIC sólo dentro de los clusters de prueba.
+  Ninguna ACL de una base compartida ni rol existente del producto se modifica en este corte.
+- Catálogo con cursor forward-only/read-only, fetch 128 y consulta sin Markdown. EXISTS filtra
+  contextos históricos sin multiplicar versiones. Revisión, total y página se resuelven en una
+  pasada después del shared lock. La página retiene hasta 100 elementos; no hay límite de 128
+  versiones históricas. Conteos/offsets y totalPages usan aritmética comprobada y números exactos
+  para JavaScript. Catálogo vacío falla; página posterior al final conserva revisión/conteos.
+- La versión exacta distingue ausencia pública de fallo. Obtiene resumen y bytes UTF-8 en una
+  proyección; CASE limita el contenido transferido a 1 MiB. `CanonicalTextValidator` acredita
+  digest y texto original antes de devolverlo. UUID oculto/desconocido produce Optional.empty
+  sólo después de finalizar correctamente la transacción; drift/corrupción no se convierten en ausencia.
+- El deadline monotónico de 15 s empieza antes del borrow y abarca preflights, lock, cursor,
+  canonicalización, commit y cleanup. Los scopes internos anidados conservan el mismo deadline.
+  Se ajustan timeout PostgreSQL/JDBC y socket al tiempo restante; el watchdog cancela la sentencia
+  activa y aborta el lease al vencer. El monitor de cierre impide abortar una conexión ya devuelta
+  al pool; los proxies de metadata/cursor tampoco exponen su delegado. Todo recurso se cierra
+  al fallar, conservando la causa primaria. El facade no devuelve un resultado vencido ni hace retry.
+- `LegalPublicDocumentReadException` separa indisponibilidad de ausencia con mensaje fijo y causa
+  interna. Los DTO wire/ApiError HTTP quedan en 13C. No se registra ningún controller ni endpoint.
+
+### Evidencia focal de 13B
+
+- 113 pruebas unitarias focalizadas aprobadas (gate/marker, resultados, configuración, deadline y
+  recursos), 0 fallos/errores/omitidas. Se corrigió una inferencia genérica ambigua de AssertJ durante
+  testCompile; no requirió modificar producción ni relajar una expectativa.
+- 28 IT de privilegios aprobados con PostgreSQL 16, incluidas ACL PUBLIC/columnas, ownership,
+  funciones, faltantes, memberships, search_path y denegación real de DML/DDL/lecturas ajenas.
+- 16 IT funcionales + 5 IT de concurrencia/cancelación aprobados. Import, PROMOTE, REPLACE y retiro
+  de fixtures usan los caminos/guards editoriales reales; sólo las pruebas explícitas de corrupción
+  alteran datos como owner dentro de la base efímera.
+- Historia de 143 versiones, orden SQL real, filtro histórico, revisión estable entre páginas,
+  página vacía, contenido exacto, corrupción con rollback y credencial/READ_COMMITTED/read-only reales.
+- Dos catálogos avanzan con shared; un REPLACE real preparado previamente espera a ambos. Tras su
+  commit el lector observa revisión, versiones y conteos nuevos juntos. Lock timeout se acredita
+  con SQLSTATE `55P03`; saturación del pool falla en su presupuesto de adquisición.
+- Con presupuesto de prueba 2 s, sentencia bloqueada finalizó en 2011 ms y cursor lento en 2023 ms,
+  tras consumir 128 filas en batches de 32. En ambos casos se verifican liberación de advisory lock
+  y cero conexiones activas en el pool afectado. Son observaciones de prueba: el exceso medido de
+  11/23 ms incluye detección/cancelación/teardown, no es una latencia de cancelación aislada ni SLA.
+  Los límites de conexión, sentencia y cancelSignal siguen siendo independientes del deadline;
+  un driver bloqueado no se interrumpe por el solo chequeo Java.
+- Revisión independiente de SQL/roles, frontera, composición, lifecycle y pruebas realizada.
+  Se cerró la ruta metadata→ResultSet→Statement→Connection y se agregó su prueba de regresión.
+- Regresión focal de callers históricos: 39 pruebas unitarias y 27 IT aprobados (readiness,
+  reconciliación y materialización V28), sin fallos/errores/omitidas. El último comando terminó
+  el 2026-09-05 a las 12:38:34 -03, `BUILD SUCCESS`, 30.075 s.
+- Total sin contar ejecuciones repetidas: **152 pruebas unitarias + 76 IT = 228**, todas aprobadas.
+  Se usó Corretto 21.0.10 y PostgreSQL 16.14 (`postgres:16-alpine`). El gate integral queda en 13D.
+- `git diff --check` sin incidencias; V27/V28 mantienen los SHA-256 registrados en 13A. El frontend
+  permanece en `7545201`, incluidos sus archivos no versionados; no se modificó ni hizo push.
+
+Comandos de validación desde backend, con Java 21:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalPublicDocumentDeadlineTest,LegalPublicDocumentDataSourceTest,LegalPublicDocumentReadDatabaseConfigurationTest,LegalPublicDocumentCatalogTest,LegalManifestDatabaseGateTest,LegalDatabaseBoundaryMarkerTest test
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dit.test=LegalPublicDocumentPrivilegeVerifierIT,LegalPublicDocumentReadServiceIT,LegalPublicDocumentReadConcurrencyIT test-compile failsafe:integration-test failsafe:verify
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -Dtest=LegalRequiredSetAggregateDatabaseConfigurationTest,LegalRequiredSetAggregateServiceTest,LegalEditorialApplyServiceReconciliationTest,LegalEditorialTransactionBoundaryTest,LegalImportTransactionBoundaryTest,LegalEditorialReadinessCoreTest -Dit.test=LegalRequiredSetAggregateServiceIT,LegalEditorialReadinessIT,LegalEditorialReconciliationIT test failsafe:integration-test failsafe:verify
+```
+
+El segundo comando permite reproducir juntos los tres IT nuevos, ejecutados inicialmente en dos
+grupos (28 y 21) para aislar el gate de privilegios del funcional. No se ejecutó `clean verify`.
+No hay cambios de migraciones ni seguridad HTTP; la regresión se concentra en los callers del gate.
+
+Commit previsto: `feat(legal): lee documentos con rol restringido`.
 
 ## 13C — Transporte público y políticas conjuntas
 

@@ -93,7 +93,14 @@ final class LegalManifestDatabaseGate {
     <T> T executeReadOnly(EditorialTransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireReadOnlyBoundary();
-        return executeAccreditedReadOnly(protectedCallback);
+        return executeAccreditedReadOnly(protectedCallback, AdvisoryLockMode.EXCLUSIVE);
+    }
+
+    /** Observes the public document graph alongside other accredited shared readers. */
+    <T> T executeReadOnlyShared(EditorialTransactionCallback<T> protectedCallback) {
+        Objects.requireNonNull(protectedCallback, "protectedCallback");
+        requireReadOnlyBoundary();
+        return executeAccreditedReadOnly(protectedCallback, AdvisoryLockMode.SHARED);
     }
 
     /** Executes one commit reconciliation after accrediting its stricter read-only boundary. */
@@ -101,15 +108,16 @@ final class LegalManifestDatabaseGate {
             EditorialTransactionCallback<T> protectedCallback) {
         Objects.requireNonNull(protectedCallback, "protectedCallback");
         requireReadOnlyBoundary();
-        return executeAccreditedReadOnly(protectedCallback);
+        return executeAccreditedReadOnly(protectedCallback, AdvisoryLockMode.EXCLUSIVE);
     }
 
     private <T> T executeAccreditedReadOnly(
-            EditorialTransactionCallback<T> protectedCallback) {
+            EditorialTransactionCallback<T> protectedCallback,
+            AdvisoryLockMode lockMode) {
         return transactionTemplate.execute(status -> {
             setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
             requireEffectiveReadOnlyTransaction();
-            enterProtectedGraphAfterStatementBudget();
+            enterProtectedGraphAfterStatementBudget(lockMode);
             return protectedCallback.doInTransaction(
                     status,
                     readEditorialTimeBoundary());
@@ -229,6 +237,24 @@ final class LegalManifestDatabaseGate {
         requireExactEditorialPreflights(candidate, schema, privileges);
     }
 
+    /** Accredits the isolated public document reader's read-only transaction and exact graph. */
+    void requireExactPublicDocumentReadBoundary(
+            JdbcTemplate candidate,
+            LegalDatabasePreflight schema,
+            LegalDatabasePreflight privileges) {
+        requireReadOnlyBoundary();
+        if (jdbc != candidate
+                || schema == privileges
+                || preflights.size() != 2
+                || preflights.get(0) != schema
+                || preflights.get(1) != privileges
+                || !schema.usesJdbc(candidate)
+                || !privileges.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "El lector documental público requiere schema y privilegios acreditados y ordenados");
+        }
+    }
+
     private void requireReadOnlyBoundary() {
         Object transactionManager = transactionTemplate.getTransactionManager();
         if (transactionManager == null
@@ -278,10 +304,6 @@ final class LegalManifestDatabaseGate {
 
     private void enterProtectedGraph() {
         setLocalTimeout("statement_timeout", budgets.statementTimeoutSeconds());
-        enterProtectedGraphAfterStatementBudget(AdvisoryLockMode.EXCLUSIVE);
-    }
-
-    private void enterProtectedGraphAfterStatementBudget() {
         enterProtectedGraphAfterStatementBudget(AdvisoryLockMode.EXCLUSIVE);
     }
 

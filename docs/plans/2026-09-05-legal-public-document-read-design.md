@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 13A completado y verificado, 13B–13D pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 13A–13B completados y verificados, 13C–13D pendientes.
 Ejecución y evidencia por corte: [plan de implementación](2026-09-05-legal-public-document-read-implementation.md).
 
 Baseline backend: `92a1fd1`, rama `codex/lanzamiento-publico-backend`.
