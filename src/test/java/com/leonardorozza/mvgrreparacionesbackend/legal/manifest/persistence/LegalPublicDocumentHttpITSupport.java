@@ -5,6 +5,7 @@ import com.leonardorozza.mvgrreparacionesbackend.config.SecurityConfig;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.JwtFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.RateLimitProperties;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.GlobalExceptionHandler;
@@ -76,7 +77,7 @@ final class LegalPublicDocumentHttpITSupport {
     @TestConfiguration(proxyBeanMethods = false)
     @EnableWebMvc
     @Import({SecurityConfig.class, CorsConfig.class, JwtFilter.class, PublicEndpointRateLimitFilter.class,
-            LegalPublicDocumentRequestMatcher.class, RateLimitProperties.class,
+            LegalPublicDocumentRequestMatcher.class, LegalPublicRequirementsRequestMatcher.class, RateLimitProperties.class,
             LegalPublicDocumentController.class, LegalPublicDocumentExceptionHandler.class,
             GlobalExceptionHandler.class})
     static class WebFixture {

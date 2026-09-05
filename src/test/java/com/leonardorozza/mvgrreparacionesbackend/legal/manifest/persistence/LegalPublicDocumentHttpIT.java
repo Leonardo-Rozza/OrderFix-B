@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.config.SecurityConfig;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.JwtFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.RateLimitProperties;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.GlobalExceptionHandler;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPublicDocumentController;
@@ -95,7 +96,7 @@ class LegalPublicDocumentHttpIT {
                 LegalPublicDocumentController.class, LegalPublicDocumentExceptionHandler.class,
                 GlobalExceptionHandler.class, SecurityConfig.class, CorsConfig.class,
                 JwtFilter.class, PublicEndpointRateLimitFilter.class,
-                LegalPublicDocumentRequestMatcher.class, RateLimitProperties.class);
+                LegalPublicDocumentRequestMatcher.class, LegalPublicRequirementsRequestMatcher.class, RateLimitProperties.class);
         context.refresh();
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
     }

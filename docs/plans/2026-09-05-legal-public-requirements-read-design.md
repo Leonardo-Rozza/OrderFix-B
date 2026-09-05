@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14C completados, 14D–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14D completados; 14E pendiente.
 La aprobación permite implementar el diseño por cortes. No habilita el endpoint ni el enforcement.
 [Plan por cortes](2026-09-05-legal-public-requirements-read-implementation.md).
 
@@ -334,5 +334,14 @@ hidratación completa, comparación de ambas revisiones y resultado tras commit/
 transacción del store. Se corrigió la entrega potencial tras un error de cierre absorbido por
 Spring, conservando el resultado transaccional real. El gate consolidado acredita 248 unitarios
 y 135 PostgreSQL aprobados; el plan detalla los dos problemas de preparación de tests y sus
-correcciones, conteos y límites de esa evidencia. No hay HTTP nuevo. El próximo corte es 14D;
-concurrencia/capacidad y `clean verify` permanecen reservados para 14E.
+correcciones, conteos y límites de esa evidencia. Ese corte no agregó HTTP.
+Commit 14C: `741a1b2 feat(legal): consulta requisitos con agregado v28`.
+
+14D se completó tras la autorización siguiente: GET público exacto de registro con DTO completo,
+ETag agregado y revalidación íntegra, puente independiente, matcher compartido y cuota propia.
+El flag continúa apagado y no se habilita el handoff. Pasaron 169 pruebas focalizadas Surefire y
+42 PostgreSQL; el fixture inicial corregido y las revisiones están documentados en el plan.
+Por el impacto transversal en filtros se amplió el gate: `clean verify` fresco aprobó 5.471 pruebas
+(4.970 Surefire + 501 Failsafe), sin fallos ni omitidas, sobre PostgreSQL 16.14 y Java 21, en
+12 min 52 s. Finalizó el 2026-09-05 16:55:04 -03:00. V27/V28 y frontend permanecen intactos.
+El próximo corte es 14E: concurrencia/capacidad HTTP y su propio gate integral fresco.

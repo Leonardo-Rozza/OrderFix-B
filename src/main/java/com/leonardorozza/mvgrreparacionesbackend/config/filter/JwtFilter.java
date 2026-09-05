@@ -4,6 +4,7 @@ import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.UserDetailsServiceImpl;
 import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
@@ -29,13 +30,22 @@ public class JwtFilter extends OncePerRequestFilter {
     private final JwtUtils jwtUtils;
     private final UserDetailsServiceImpl userDetailsService;
     private final LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher;
+    private final LegalPublicRequirementsRequestMatcher legalPublicRequirementsRequestMatcher;
 
     @Autowired
     public JwtFilter(JwtUtils jwtUtils, UserDetailsServiceImpl userDetailsService,
-                     LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher) {
+                     LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher,
+                     LegalPublicRequirementsRequestMatcher legalPublicRequirementsRequestMatcher) {
         this.jwtUtils = jwtUtils;
         this.userDetailsService = userDetailsService;
         this.legalPublicDocumentRequestMatcher = legalPublicDocumentRequestMatcher;
+        this.legalPublicRequirementsRequestMatcher = legalPublicRequirementsRequestMatcher;
+    }
+
+    public JwtFilter(JwtUtils jwtUtils, UserDetailsServiceImpl userDetailsService,
+                     LegalPublicDocumentRequestMatcher legalPublicDocumentRequestMatcher) {
+        this(jwtUtils, userDetailsService, legalPublicDocumentRequestMatcher,
+                new LegalPublicRequirementsRequestMatcher(false));
     }
 
     public JwtFilter(JwtUtils jwtUtils, UserDetailsServiceImpl userDetailsService) {
@@ -47,6 +57,7 @@ public class JwtFilter extends OncePerRequestFilter {
         String path = request.getServletPath();
         // No filtramos login, el webhook de MercadoPago ni el health (entran sin JWT).
         return legalPublicDocumentRequestMatcher.matches(request)
+                || legalPublicRequirementsRequestMatcher.matches(request)
                 || path.startsWith("/api/auth/")
                 || path.equals("/api/pagos/webhook")
                 || path.startsWith("/api/seguimiento/")

@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.RateLimitProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -164,6 +165,103 @@ class PublicEndpointRateLimitFilterTests {
         MockHttpServletResponse stillLimited = run(documents, documentRequest("GET", DOCUMENTS, "10.0.2.1"));
         assertThat(stillLimited.getStatus()).isEqualTo(429);
         assertThat(stillLimited.getHeader("Retry-After")).isEqualTo("75600");
+    }
+
+    @Test
+    void requirementsQuotaIsIndependentFromDocumentsAndLoginAndSharesContextPaths() throws Exception {
+        RateLimitProperties properties = new RateLimitProperties();
+        properties.setPublicLegalRequirements(new RateLimitProperties.Limit(2, Duration.ofMinutes(1)));
+        PublicEndpointRateLimitFilter target = requirementsFilter(properties, new MutableClock());
+        String base = LegalPublicRequirementsRequestMatcher.BASE_PATH;
+        assertThat(run(target, documentRequest("GET", base, "10.0.3.1"))
+                .getHeader("X-RateLimit-Remaining")).isEqualTo("1");
+        MockHttpServletRequest contextual = documentRequest("GET", "/ordenfix" + base, "10.0.3.1");
+        contextual.setContextPath("/ordenfix");
+        assertThat(run(target, contextual).getHeader("X-RateLimit-Remaining")).isEqualTo("0");
+        MockHttpServletResponse limited = run(target, documentRequest("GET", base, "10.0.3.1"));
+        assertThat(limited.getStatus()).isEqualTo(429);
+        assertThat(limited.getHeader("Cache-Control")).isEqualTo("no-store");
+        assertThat(limited.getHeader("ETag")).isNull();
+        assertThat(limited.getHeader("Retry-After")).isEqualTo("60");
+        assertThat(run(target, documentRequest("GET", DOCUMENTS, "10.0.3.1"))
+                .getHeader("X-RateLimit-Remaining")).isEqualTo("59");
+        assertThat(run(target, documentRequest("POST", "/api/auth/login", "10.0.3.1"))
+                .getHeader("X-RateLimit-Remaining")).isEqualTo("9");
+    }
+
+    @Test
+    void requirementsHonorsGlobalSwitchAndSkipsNonMatchingMethodsAndPaths() throws Exception {
+        RateLimitProperties properties = new RateLimitProperties();
+        properties.setPublicLegalRequirements(new RateLimitProperties.Limit(1, Duration.ofMinutes(1)));
+        PublicEndpointRateLimitFilter target = requirementsFilter(properties, new MutableClock());
+        String base = LegalPublicRequirementsRequestMatcher.BASE_PATH;
+        properties.setEnabled(false);
+        assertThat(run(target, documentRequest("GET", base, "10.0.3.2"))
+                .getHeader("X-RateLimit-Limit")).isNull();
+        properties.setEnabled(true);
+        for (String method : new String[]{"HEAD", "POST", "PUT", "DELETE", "OPTIONS"}) {
+            assertThat(run(target, documentRequest(method, base, "10.0.3.2"))
+                    .getHeader("X-RateLimit-Limit")).isNull();
+        }
+        for (String path : new String[]{base + "/", base + "/id", base + "-extra"}) {
+            assertThat(run(target, documentRequest("GET", path, "10.0.3.2"))
+                    .getHeader("X-RateLimit-Limit")).isNull();
+        }
+        assertThat(run(target, documentRequest("GET", base, "10.0.3.2"))
+                .getHeader("X-RateLimit-Remaining")).isEqualTo("0");
+    }
+
+    @Test
+    void requirementsPreservesExplicitProxyTrustAndDefaultsToRemoteAddress() throws Exception {
+        for (boolean trusted : new boolean[]{false, true}) {
+            RateLimitProperties properties = new RateLimitProperties();
+            properties.setTrustForwardedHeaders(trusted);
+            properties.setPublicLegalRequirements(new RateLimitProperties.Limit(1, Duration.ofMinutes(1)));
+            PublicEndpointRateLimitFilter target = requirementsFilter(properties, new MutableClock());
+            String base = LegalPublicRequirementsRequestMatcher.BASE_PATH;
+            for (int index = 0; index < 2; index++) {
+                MockHttpServletRequest request = documentRequest("GET", base, "10.0.3.3");
+                request.addHeader("X-Forwarded-For", "198.51.100." + index + ", 192.0.2.1");
+                assertThat(run(target, request).getStatus()).isEqualTo(index == 0 || trusted ? 200 : 429);
+            }
+        }
+    }
+
+    @Test
+    void requirementsWindowExpiresExactlyAndRoundsRetryUp() throws Exception {
+        RateLimitProperties properties = new RateLimitProperties();
+        properties.setPublicLegalRequirements(new RateLimitProperties.Limit(1, Duration.ofMinutes(1)));
+        MutableClock clock = new MutableClock();
+        PublicEndpointRateLimitFilter target = requirementsFilter(properties, clock);
+        String base = LegalPublicRequirementsRequestMatcher.BASE_PATH;
+        run(target, documentRequest("GET", base, "10.0.3.4"));
+        clock.advance(Duration.ofMillis(59_999));
+        assertThat(run(target, documentRequest("GET", base, "10.0.3.4"))
+                .getHeader("Retry-After")).isEqualTo("1");
+        clock.advance(Duration.ofMillis(1));
+        assertThat(run(target, documentRequest("GET", base, "10.0.3.4")).getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void cleanupRetainsTheRequirementsWindowWhenItOutlivesEveryOtherPolicy() throws Exception {
+        RateLimitProperties properties = new RateLimitProperties();
+        properties.setPublicLegalRequirements(new RateLimitProperties.Limit(1, Duration.ofDays(1)));
+        MutableClock clock = new MutableClock();
+        PublicEndpointRateLimitFilter target = requirementsFilter(properties, clock);
+        String base = LegalPublicRequirementsRequestMatcher.BASE_PATH;
+        run(target, documentRequest("GET", base, "10.0.3.5"));
+        clock.advance(Duration.ofHours(3));
+        for (int index = 0; index < 999; index++) {
+            run(target, documentRequest("GET", DOCUMENTS, "requirements-cleanup-" + index));
+        }
+        MockHttpServletResponse limited = run(target, documentRequest("GET", base, "10.0.3.5"));
+        assertThat(limited.getStatus()).isEqualTo(429);
+        assertThat(limited.getHeader("Retry-After")).isEqualTo("75600");
+    }
+
+    private static PublicEndpointRateLimitFilter requirementsFilter(RateLimitProperties properties, Clock clock) {
+        return new PublicEndpointRateLimitFilter(properties, clock, new LegalPublicDocumentRequestMatcher(true),
+                new LegalPublicRequirementsRequestMatcher(true));
     }
 
     private static PublicEndpointRateLimitFilter documentsFilter(

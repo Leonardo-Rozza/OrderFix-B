@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-05
 
-Estado: diseño aprobado por el titular el 2026-09-05; 14A–14C completados, 14D–14E pendientes.
+Estado: diseño aprobado por el titular el 2026-09-05; 14A–14D completados; 14E pendiente.
 [Diseño aprobado](2026-09-05-legal-public-requirements-read-design.md).
 Baseline backend `40a31a2`, rama `codex/lanzamiento-publico-backend`.
 
@@ -463,6 +463,18 @@ Commit local sin push. Próximo corte: 14D, transporte HTTP bajo su flag apagado
 
 ## 14D — HTTP público y políticas cerradas
 
+Baseline 14D: `741a1b2`, árbol limpio. El titular autorizó continuar el 2026-09-05.
+Se confirma la whitelist nominal. Tests nuevos concretos: `LegalPublicRequirementsControllerTest`,
+`LegalPublicRequirementsHttpConfigurationTest`, `LegalPublicRequirementsRequestMatcherTest`,
+`LegalPublicRequirementsRateLimitPropertiesTest`, `LegalPublicRequirementsSecurityTest` y
+`LegalPublicRequirementsHttpIT`. Se amplía `PublicEndpointRateLimitFilterTests` para la política
+independiente. Los fixtures `LegalPublicDocumentSecurityTest`, `LegalPublicDocumentHttpIT` y
+`LegalPublicDocumentHttpITSupport` sólo incorporan el matcher nuevo, apagado por defecto, como
+dependencia explícita de los filtros compartidos; no cambian sus assertions documentales.
+Por el impacto transversal de SecurityConfig/JwtFilter/rate limit, se ejecutará `clean verify`
+después del gate focal. Es la excepción prevista en la política; no sustituye el nuevo gate
+integral posterior a concurrencia/capacidad de 14E. Sin cambios de propiedades reales ni frontend.
+
 Resultado: únicamente el GET público previsto, bajo flag propio apagado por defecto.
 
 Pasos:
@@ -498,6 +510,89 @@ sesión existente, rate limit incluso en error/304, CORS y regresiones HTTP docu
 el impacto transversal real de los filtros para aplicar la política de ampliar checks.
 
 Commit: `feat(legal): publica requisitos de registro`.
+
+### Decisiones y evidencia focal de 14D
+
+- `LegalPublicRequirementsHttpConfiguration` es un puente web condicionado por el flag propio.
+  Su contexto sin padre elimina fuentes/perfiles ambientales, copia exactamente las tres
+  credenciales dedicadas y el flag interno, y expone sólo la fachada. El cierre es idempotente;
+  un fallo de refresh/obtención de fachada cierra el contexto parcial y conserva la causa.
+- Controller, DTO y advice propios conservan el wire aprobado. La validación explícita por
+  `getParameterValues` rechaza valores ausentes, inválidos y repetidos sin trim ni default,
+  siempre con locale primero. La construcción del DTO completo ocurre después del servicio y
+  antes de cache/precondiciones. Ningún resultado parcial recibe ETag de éxito.
+- El matcher compartido clasifica únicamente GET exacto y verifica contextPath una sola vez.
+  Las cuatro combinaciones de flags preservan las dos superficies independientemente. Los
+  constructores históricos de filtros conservan requisitos apagados al usarse fuera de Spring.
+- La cuota `public-legal-requirements` es independiente, configurable y cuenta 200/304/400/503.
+  Su ventana participa en cleanup para no perder una cuota más larga que las demás. Se mantienen
+  IP/proxy, CORS y autenticación persistida. HEAD y vecinos no reciben la excepción pública.
+- El fixture HTTP PostgreSQL usa los dos puentes reales con roles restringidos en dos contenedores
+  efímeros, conservando los prefijos de seguridad propios de cada fixture. La instrumentación
+  pasiva se coloca antes del primer GET sobre el pool real; no sustituye servicio, JDBC, store,
+  gate ni manager y acredita el cierre de contextos y pools. Los únicos mocks son JWT/usuarios.
+- El README y contrato de integración actualizan el estado implementado y configuración operativa.
+  Los flags permanecen apagados y el handoff global cerrado. No hay cambios frontend ni DDL/DCL
+  fuera de las bases efímeras de tests. V27/V28 permanecen byte a byte iguales.
+
+Comandos ejecutados desde backend con `JAVA_HOME` de Corretto 21.0.10:
+
+```bash
+./mvnw -Dtest=LegalPublicRequirementsControllerTest,LegalPublicRequirementsHttpConfigurationTest,LegalPublicRequirementsRequestMatcherTest,LegalPublicRequirementsRateLimitPropertiesTest,LegalPublicRequirementsSecurityTest,LegalPublicDocumentSecurityTest,PublicEndpointRateLimitFilterTests package
+./mvnw -Dit.test=LegalPublicRequirementsHttpIT,LegalPublicDocumentHttpIT,LegalPublicDocumentHttpConcurrencyIT,LegalPublicDocumentHttpCapacityIT failsafe:integration-test failsafe:verify
+```
+
+Surefire focal: **169** pruebas, sin fallos, errores ni omitidas; finalizó el
+2026-09-05 16:40:31 -03:00, Maven **16.495 s**, incluido empaquetado de ambos artefactos.
+Desglose: controller 64, puente 32, matcher 30, properties 4, seguridad nueva 16,
+seguridad documental 9 y filtro de rate limit 14.
+
+El primer intento compiló, pero sus 16 casos de seguridad nueva fallaron al crear un catálogo
+sintético vacío, que el contrato documental rechaza; provocó también stubbings incompletos en
+Mockito. Se corrigió sólo el fixture para construir un catálogo válido de un documento antes
+`thenReturn`, y se repitieron los 169 casos con éxito. No hubo defecto de producción asociado.
+El selector inicial también incluía `JwtFilter*`, sin clase coincidente; no se cuenta como prueba.
+La regresión JWT del focal está en los dos tests de seguridad y el gate integral no usa selector.
+
+Failsafe focal: **42** pruebas, sin fallos, errores ni omitidas; finalizó el
+2026-09-05 16:41:53 -03:00, Maven **1 min 02 s**. Desglose: HTTP nuevo 27,
+HTTP documental 7, concurrencia documental 4 y capacidad documental 4.
+PostgreSQL real acredita el wire completo, REUSED/304 con relectura y cero DML, rollback nuevo o
+reutilizado ante corrupción opcional, cambio semántico por REPLACE, denegación por drift de ACL,
+las cuatro combinaciones de flags y contextPath, rol owner rechazado y ausencia de fallback web.
+Los 12 casos de queries inválidas no ejecutan JDBC.
+
+### Gate integral ampliado de 14D
+
+`./mvnw clean verify` con el mismo Java 21 terminó en **BUILD SUCCESS** el
+2026-09-05 **16:55:04 -03:00**, Maven **12 min 52 s**, sobre PostgreSQL **16.14**
+(`postgres:16-alpine`). Ejecutó **5.471** pruebas: **4.970 Surefire en 150 suites** y
+**501 Failsafe en 54 suites**. Los 204 XML confirman cero fallos, errores y omitidas;
+`failsafe-summary.xml` informa 501 completadas, cero flakes, sin timeout ni failureMessage.
+El gate fresco no tuvo fallos ni requirió cambios posteriores de código.
+
+La ampliación acredita la regresión completa por filtros compartidos, incluyendo aislamiento
+tenant, autenticación, roles, procesos CLI, operación editorial y V27/V28. No sustituye la evidencia
+nueva de concurrencia/capacidad HTTP que corresponde a 14E. No se interpreta la duración de esta
+corrida como SLA ni se atribuyen las mediciones documentales a la superficie nueva.
+
+Artefactos frescos del `clean verify` (hash del archivo completo, no promesa de build reproducible):
+
+| Artefacto | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar` | 90571324 | `c2bf89c92f4435e05878ae4c66b464a7589ec1dbdc825a85a44f5d6255871317` |
+| `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar` | 90571320 | `2ed8d3e272bb4e71ed73eea4d5388d3498effef89e0066c02f7b5af1a7ade641` |
+
+Ambos usan `JarLauncher`; entrypoints respectivos `LegalManifestCli` y
+`MvgrReparacionesBackendApplication`. La inspección ZIP no encuentra Testcontainers, Mockito,
+agente Byte Buddy, clases HTTPIT ni configuración local; contiene las ocho clases HTTP nuevas
+(contando records) y conserva V27/V28 con los mismos SHA-256 que las fuentes congeladas.
+Versiones del artefacto: Spring Boot 4.0.6, Spring Core 7.0.7, JDBC PostgreSQL 42.7.10,
+Flyway 11.14.1. Maven 3.9.11, Corretto 21.0.10 y Surefire/Failsafe 3.5.5 en esta ejecución.
+Los hashes de ambos artefactos se comprobaron nuevamente al finalizar el gate; no se versionan
+los JAR ni los reportes. El diff nominal tiene 24 archivos: 10 de producción, 10 de tests/fixtures y
+4 documentos. `git diff --check` aprobado, V27/V28 intactas y frontend sin modificaciones.
+Commit atómico local sin push: `feat(legal): publica requisitos de registro`. Siguiente corte: 14E.
 
 ## 14E — Concurrencia, capacidad y gate integral
 
@@ -564,4 +659,4 @@ Diseño y plan preparados a partir del baseline 13D, con revisión independiente
 privilegios y resultados transaccionales. No se ejecutó Maven ni se modificó código/configuración.
 El titular aprobó después el diseño y autorizó implementar 14A. Su evidencia se registra en el
 apartado correspondiente. Tras las autorizaciones siguientes se completaron 14B y 14C;
-14D–14E permanecen pendientes.
+14D también quedó completado y documentado arriba. 14E permanece pendiente.

@@ -24,6 +24,7 @@ public class RateLimitProperties {
     private Limit accountRecovery = new Limit(5, Duration.ofMinutes(15));
     private Limit publicTrackingRead = new Limit(60, Duration.ofMinutes(1));
     private Limit publicTrackingAction = new Limit(10, Duration.ofMinutes(10));
+    private Limit publicLegalRequirements = new Limit(60, Duration.ofMinutes(1));
     private Limit publicLegalDocuments = new Limit(60, Duration.ofMinutes(1));
     private Limit mercadoPagoWebhook = new Limit(300, Duration.ofMinutes(1));
 
@@ -35,6 +36,7 @@ public class RateLimitProperties {
         validate("public-tracking-read", publicTrackingRead);
         validate("public-tracking-action", publicTrackingAction);
         validate("public-legal-documents", publicLegalDocuments);
+        validate("public-legal-requirements", publicLegalRequirements);
         validate("mercado-pago-webhook", mercadoPagoWebhook);
     }
 

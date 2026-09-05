@@ -62,7 +62,8 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     `requiredSetRevision` representa los conjuntos completos aplicables y permanece estable al
     filtrar pendientes, incluso con `requisitos: []`. El bloque 13 implementa catálogo documental,
     `documentSetRevision` y documento exacto con rol restringido, ETag, errores, seguridad y rate limit,
-    detrás de un flag apagado y con gate integral acreditado en 13D. Quedan requisitos HTTP, aceptación de aplicación,
+    detrás de un flag apagado y con gate integral acreditado en 13D. El corte 14D agrega requisitos
+    públicos `REGISTRO/es-AR` con su propio flag apagado y agregado V28. Quedan requisitos autenticados, aceptación de aplicación,
     idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
     staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
@@ -113,8 +114,9 @@ CORS habilitado para:
 ## 3. Autenticación (JWT)
 
 - Endpoints públicos: `/api/auth/**`, `/api/seguimiento/**`, `/api/pagos/webhook` y
-  `/actuator/health`. **El resto requiere token.** El webhook es exclusivo de Mercado Pago;
-  el frontend nunca debe invocarlo.
+  `/actuator/health`. Los GET legales de §4.1.a también son públicos cuando su flag correspondiente
+  está activo; los métodos y rutas vecinas conservan autenticación. **El resto requiere token.**
+  El webhook es exclusivo de Mercado Pago; el frontend nunca debe invocarlo.
 - Header en cada request autenticada:
   `Authorization: Bearer <token>`
 - El token es un JWT que contiene `iss`, `aud`, `sub` (email), `exp`, `iat`, `nbf`, `jti`, `role`,
@@ -214,7 +216,9 @@ Errores: `401` (email o contraseña incorrectos).
 > mantiene; representa conjuntos completos y no depende de la evidencia ni de la lista pendiente.
 > El bloque 13 implementa los dos GET documentales, revisión, ETag, errores y políticas HTTP con lector
 > restringido. Están apagados por defecto; encenderlos exige configuración documental explícita.
-> El gate integral 13D está acreditado. Quedan requisitos públicos/autenticados, aceptación de aplicación, historial
+> El gate integral 13D está acreditado. El corte 14D implementa el GET de requisitos públicos
+> `REGISTRO/es-AR`, detrás de su propio flag apagado. Concurrencia y capacidad HTTP se cierran en 14E.
+> Quedan requisitos autenticados, aceptación de aplicación, historial
 > propio, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido real,
 > staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
@@ -231,7 +235,7 @@ Errores: `401` (email o contraseña incorrectos).
 | GET | `/api/aceptaciones-legales?page=0&size=20` | ADMIN/USER | Evidencia propia; `contexto` es opcional |
 | POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
 
-Sólo las dos primeras filas están implementadas en 13C. El flag
+Las dos primeras filas están implementadas en 13C y la tercera en 14D. El flag
 `ordenfix.legal.public-documents.enabled` vale `false` por defecto: apagado no registra mappings
 documentales ni excepciones de autenticación. Sólo `true` (sin distinguir mayúsculas) activa las
 tres políticas y los mappings; aliases como `yes`, `on` o `1` no habilitan lectura pública.
@@ -250,7 +254,35 @@ OPTIONS preflight continúa bajo CORS. Un Authorization inválido no altera esto
 
 El [cierre documental 13D](docs/plans/2026-09-05-legal-public-document-read-closure.md) registra
 capacidad, concurrencia HTTP y el gate integral fresco. Esa evidencia no certifica los grants de
-un entorno compartido ni habilita contenido definitivo, requisitos/aceptaciones o el handoff.
+un entorno compartido ni acredita los requisitos públicos de 14D, las aceptaciones o el handoff.
+
+El GET de requisitos usa el flag independiente `ordenfix.legal.public-requirements.enabled`,
+`false` por defecto. Sólo `true` sin distinguir mayúsculas y sin espacios registra ruta, advice,
+puente y excepción pública. Requiere las tres credenciales dedicadas
+`ordenfix.legal.public-requirements.jdbc-url`, `.username` y `.password`; no usa las credenciales
+web ni documentales. El puente mantiene un contexto sin padre, con sólo estas tres propiedades y
+su flag interno, sin JPA ni Flyway, y cierra su pool con la aplicación. El rol restringido de 14B
+realiza preflight V28, gate compartido y una transacción propia `REQUIRES_NEW/READ_COMMITTED`.
+La consulta materializa/reutiliza el agregado y valida textos, digests y pertenencia dentro de la misma
+transacción, antes de confirmar y devolver el resultado. Un fallo revierte cualquier inserción nueva;
+una repetición estable es `REUSED` sin DML. El wire expone únicamente `requiredSetRevision`.
+
+`locale=es-AR` y `contexto=REGISTRO` son obligatorios, sensibles a mayúsculas y sin trim/default.
+Se valida primero `locale`. Un parámetro repetido, incluso con valores iguales, devuelve 400;
+el detalle conserva los valores originales unidos por coma, en orden, o `null` si falta.
+La respuesta incluye obligatorios y opcionales, en el orden original, con sus documentos completos.
+El éxito devuelve `Cache-Control: public, max-age=0, must-revalidate` y
+`ETag: W/"<requiredSetRevision>"`. Antes de evaluar cualquier `If-None-Match`, incluso `*`, se lee
+y acredita el conjunto completo: 304 no omite la validación ni incluye cuerpo. Un fallo interno
+con un ETag previo válido devuelve 503 con `CONTRATO_LEGAL_NO_DISPONIBLE`, `no-store` y sin ETag.
+
+La cuota independiente `security.rate-limit.public-legal-requirements` empieza en `requests=60`,
+`window=1m` por IP y cuenta 200, 304, 400 y 503. El 429 incluye `Retry-After`, `X-RateLimit-Limit`,
+`X-RateLimit-Remaining`, `no-store` y ningún ETag. Comparte el switch global y la política de IP/proxy
+existente, pero no el consumo de documentos ni autenticación. Sólo el GET exacto es público:
+HEAD, métodos distintos, slash final y subrutas conservan autenticación. Los cuatro estados de ambos
+flags mantienen sus permisos y cuotas independientes. CORS conserva orígenes y headers existentes;
+ETag no se agrega a los headers expuestos. No se activaron flags ni se provisionaron roles compartidos.
 
 `locale` es obligatorio en los dos GET públicos de colección y v1 sólo admite `es-AR`; el GET por
 UUID no recibe locale. `contexto` es obligatorio en requisitos públicos; inicialmente sólo se

@@ -14,7 +14,9 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > - **`docs/plans/2026-08-23-legal-api-contract-v1-design.md`** — contrato y rollout legal v1
 >   congelados; V27, importación/sello, los siete comandos editoriales y el núcleo interno V28
 >   están implementados. El bloque 13 agrega los dos GET documentales, `documentSetRevision`, ETag,
->   errores y políticas HTTP con lector restringido y flag apagado. Quedan requisitos HTTP,
+>   errores y políticas HTTP con lector restringido y flag apagado. El corte 14D agrega el GET de
+>   requisitos públicos para `REGISTRO/es-AR`, con agregado V28 y flag independiente apagado.
+>   Quedan requisitos autenticados,
 >   aceptación/registro de aplicación, idempotencia HTTP, enforcement, contenido definitivo,
 >   staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
 > - **`docs/plans/2026-09-01-legal-required-set-aggregate-v28-closure.md`** — cierre de V28:
@@ -25,6 +27,10 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > - **`docs/plans/2026-09-05-legal-public-document-read-closure.md`** — cierre de lectura documental:
 >   catálogo y versión exacta, frontera PostgreSQL aislada, seguridad/caché, capacidad y gate integral.
 >   El flag `ordenfix.legal.public-documents.enabled` sigue apagado; este cierre no habilita producción.
+> - **`docs/plans/2026-09-05-legal-public-requirements-read-implementation.md`** — requisitos públicos:
+>   DTO completo, ETag agregado y revalidación íntegra sobre PostgreSQL restringido.
+>   `ordenfix.legal.public-requirements.enabled` sigue apagado. Concurrencia y capacidad HTTP
+>   permanecen en 14E; el handoff global continúa cerrado.
 > - **`docs/plans/2026-08-25-legal-manifest-import-closure.md`** — cierre reproducible de la Fase
 >   2.3B y fronteras pendientes.
 > - **`docs/runbooks/legal-manifest-import-postgresql.md`** — operación PostgreSQL restringida del
