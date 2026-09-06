@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A y 15B cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los demás cortes no están iniciados. Sigue 15F antes de 15C.
+Estado: 15A, 15B y 15F cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los demás cortes no están iniciados. Sigue 15C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -219,6 +219,38 @@ aceptaciones concurrentes según estrategia de 15A. Commit: `feat(legal): consul
 
 ## 15F — V29 y compatibilidad de consumidores
 
+Baseline de ejecución: `e0c7860`, backend limpio, rama confirmada; frontend `7545201`
+preservado. La migración y su admisión estricta constituyen un único corte: no se habilita
+V29 sin acreditar el delta en los consumidores existentes. Lista nominal confirmada antes
+de editar código (prefijos anteriores; tests bajo sus paquetes equivalentes):
+
+- SQL V29, `db/LegalV29AcceptanceInventory.java`, `db/LegalV29AcceptanceSchemaVerifier.java`.
+- Compatibilidad en `db/LegalV27ImportSchemaVerifier.java`,
+  `db/LegalEditorialSchemaVerifier.java`, `db/LegalV28AggregateSchemaVerifier.java`;
+  métodos internos de superficie histórica evitan recursión entre verificadores.
+- Los cuatro IT V29 enumerados abajo y fixture nuevo `LegalV29AcceptanceITSupport.java`.
+- Tests históricos `LegalV28UpgradeIT.java`, `LegalV28AggregatePersistenceIT.java`,
+  `LegalV28AggregatePreFreezeSmokeIT.java`: fijar target 28 explícito conforme a su propósito.
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/PostgresMigrationIT.java`
+  (latest 29 separado del upgrade histórico 27→28) y `LegalPersistenceIT.java`
+  (locks de tupla previos al DML del ledger en las transacciones de prueba).
+- `LegalEditorialRetireIT.java`, `cli/LegalEditorialProcessFixture.java` y
+  `cli/LegalEditorialProcessIT.java`: mismo protocolo previo y nuevas tablas en snapshots.
+- Ampliación nominal tras el primer gate, antes de editar: `LegalEditorialCapacityIT.java`.
+  La prueba histórica target 27 ahora observa dos consultas fijas adicionales por preflight
+  (historia cerrada y ausencia de delta V29); se inventarían y acotan explícitamente, conservando
+  sentinelas, cardinalidades del grafo, límites temporales y cero DML de lectura.
+- Este plan, diseño compañero y decisión V29: registrar decisiones y evidencia de ejecución.
+
+Se mantienen los tipos concretos de preflight, sus familias de errores y los inventarios
+históricos. No se amplían allowlists de consumidores existentes ni se alteran sus gates/configs.
+Los grants nominales nuevos se acreditan en PostgreSQL efímero; los verificadores específicos
+por consumidor corresponden a C/I/L/O, sin introducir ahora un contexto productivo sin servicio.
+El advisory de actor continúa siendo protocolo de servicio; SQL V29 exige el lock de tupla
+previo y las guardas editoriales/relacionales, sin prometer autenticación HTTP por credencial JDBC.
+La validación de agregado actual sólo corresponde a cabeceras nuevas; la purga histórica
+comprueba estructura y referencias aunque el catálogo editorial haya cambiado.
+
 Resultado: persistencia tipada de éxitos idempotentes sin actos nuevos, y solución nominal de
 permisos/locks aprobada en la [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md).
 Se ejecuta después de B y antes de C. Es un corte de esquema, no un POST parcial.
@@ -245,6 +277,86 @@ Gate transversal: clean verify con instalaciones limpias y upgrades con evidenci
 ambos JAR. Si el delta de compatibilidad y el nuevo esquema dejan de ser un cambio atómico revisable,
 dividir F en subcortes documentados antes de editar, cada uno con baseline compatible.
 Commit: `feat(legal): persiste resultados idempotentes sin actos nuevos`.
+
+### Implementación y acreditación 15F
+
+V29 agrega dos tablas (24 columnas, 15 constraints, siete índices incluidos PK/UNIQUE), diez
+funciones INVOKER y once triggers; no agrega secuencias ni backfill. Su SHA-256 es
+`976a66c0a7f234e79c1ba84be4721ecb2407a1d6e076f2444630ccb9afc949e9`, checksum Flyway
+`2141641921`. V27/V28 conservan exactamente sus archivos y huellas anteriores.
+El catálogo V29 acredita doce relaciones, 119 columnas, 96 constraints, 43 índices,
+38 triggers y cinco secuencias de esas relaciones, más 32 funciones y las superficies base V27.
+Las huellas se obtuvieron del recurso final migrado en PostgreSQL 16.14 limpio; una captura
+inicial diagnóstica falló deliberadamente contra constantes provisionales, que se reemplazaron
+antes de acreditar consumidores. No se admite un inventario provisional en runtime.
+
+El despacho conserva import/editorial históricos sobre 27/28 con su superficie original,
+historia exacta y ausencia del delta V29. En 29 todos los preflight afectados acreditan la
+superficie completa actual. Se rechazan migraciones desconocidas, filas requeridas faltantes,
+orden/checksum/script/success alterados, delta parcial, drift de tablas/constraints/índices,
+guardas deshabilitadas, funciones alteradas, overloads y search_path inseguro. La base alternativa
+normaliza sólo su propio schema, sin cambiar los inventarios históricos.
+
+La revisión incorporó dos cierres de subtransacciones: un evento INSERT de cabecera revalida
+el agregado actual aunque xmin sea un subxid de SAVEPOINT; una referencia DEDUP comprueba también
+el xmin de su lote, además del acto, para rechazar evidencia aún no confirmada. La purga histórica
+no exige que la observación siga vigente. La exclusión entre ledgers se prueba en ambos sentidos
+con espera observada en pg_locks, lectura nueva tras COMMIT del ganador y rollback del perdedor.
+Esto acredita el protocolo SQL; el coordinador de claves/keyring y sus presupuestos sigue en 15G.
+
+Los roles de prueba separan aceptación, registro y mantenimiento de resultados. No tienen
+SELECT de password/ciphertext, UPDATE de negocio, secuencias USAGE, sesión advisory, LOB ni DDL.
+UPDATE(id) sólo permite bloquear filas donde las guardas prohíben mutación; referencias prohíben
+UPDATE también con cero filas. Mantenimiento no hereda INSERT. Son credenciales efímeras:
+los verificadores por consumidor, autenticación, metadata worker y servicios finales siguen
+correspondiendo a C/I/L/O. El alta JDBC de prueba usa datos sintéticos y acredita el COMMIT/rollback
+del grafo, sin afirmar paridad de callbacks, sesión o email con el registro HTTP futuro.
+
+Primera regresión focal: `./mvnw -Dit.test=LegalV29AcceptanceSchemaVerifierIT,LegalV28AggregateSchemaVerifierIT,LegalV27ImportSchemaVerifierIT,LegalEditorialSchemaVerifierIT,PostgresMigrationIT,LegalPersistenceIT failsafe:integration-test failsafe:verify`
+(después de test-compile con Java 21). Terminó el 2026-09-06 18:58:25 -03:00, 1:01 min:
+87 pruebas, cero fallos, errores u omitidas, incluyendo 28 V29 de esquema.
+Segunda focal: `./mvnw -Dit.test=LegalV29AcceptancePersistenceIT,LegalV29AcceptanceUpgradeIT,LegalV29AcceptancePrivilegeVerifierIT failsafe:integration-test failsafe:verify`, después de test-compile.
+Terminó el 2026-09-06 19:05:29 -03:00, 41.424 s: 29 pruebas nuevas (20 persistencia,
+ocho privilegios, un upgrade), cero fallos, errores u omitidas. Total de ambas focales: 116,
+57 nuevas V29. El primer clean verify detectó dos adaptaciones de pruebas pendientes: el fixture
+CLI debe sembrar también padre/referencias V29, y el inventario de capacidad histórico debe medir
+el despacho de versión añadido. Se corrigen sin reducir la protección ni omitir las pruebas.
+El envejecimiento de resultados y la invalidación de punteros son fault injection
+explícita en bases efímeras; las historias del upgrade se crean con triggers activos y calculadores,
+sin backfill ni timestamps falsificados.
+
+El primer clean verify terminó el 2026-09-06 19:23:04 -03:00, 17:00 min: 5681 pruebas,
+con sólo los dos fallos de adaptación descritos, cero errores u omitidas. La corrección conserva
+la exigencia de filas reales protegidas: el fixture CLI confirma evidencia y luego un DEDUP en
+una segunda transacción REQUIRES_NEW/READ_COMMITTED. La capacidad target 27 inventaría las dos
+consultas fijas, con límites de round trips 54/98/186 para readiness/plan/apply; se comprueba
+una ejecución y una fila por cada consulta, sin ampliar límites semánticos ni de DML o tiempo.
+Además, el historial del preflight queda acotado con LIMIT 4: máximo tres versiones admitidas y
+una fila de rechazo. Un test con dieciséis versiones adicionales acredita esa cota y el fallo.
+
+Corrección focal: `./mvnw -Dit.test=LegalEditorialProcessIT,LegalEditorialCapacityIT,LegalV29AcceptanceSchemaVerifierIT failsafe:integration-test failsafe:verify`, después de package con tests omitidos sólo
+para refrescar ambos JAR. Terminó el 2026-09-06 19:26:52 -03:00, 2:16 min: 37 pruebas aprobadas
+(siete CLI, una capacidad y 29 esquema), cero fallos, errores u omitidas. Son 58 pruebas nuevas
+V29 en total. Fuente final fijada antes de repetir clean verify: 23 archivos nominales,
+20 de código/pruebas/SQL y tres documentos.
+
+Gate integral final: `./mvnw clean verify`, con JAVA_HOME Corretto 21.0.10. Terminó el
+2026-09-06 19:43:47 -03:00, 16:10 min, BUILD SUCCESS. XML frescos: 5095 pruebas Surefire
+(153 suites) y 587 Failsafe (62 suites), total 5682 en 215 XML, cero fallos, errores u omitidas.
+Los veinte archivos de código/pruebas/SQL permanecieron idénticos durante esta ejecución.
+La inspección independiente de ambos JAR comparó las 24 clases de los cinco verificadores/
+inventarios afectados con target/classes y las tres migraciones con sus fuentes. Las cinco
+clases de pruebas/fixture V29 no están empaquetadas y el gate de propiedades secretas aprobó.
+SHA-256 de los artefactos de esta ejecución:
+
+| Artefacto | SHA-256 |
+| --- | --- |
+| Aplicación | `20c1314451ad01f0aaa77bffd9253bcedf06f1ebe08afea2e255303b038dcc8e` |
+| CLI legal | `70957d76a9cbee03b3954217e4a14e9b4cb1a3f4d45922773aeafaf2de5bc75f` |
+
+Cierre: 15F aprobado; V27/V28 intactas, sin endpoints nuevos, configuración de servicios nuevos
+ni grants compartidos. Frontend preservado en 7545201 con sus dos rutas no versionadas.
+Un único commit del corte, sin push. Sigue 15C: lector privado PostgreSQL y frontera de actor.
 
 ## 15G — Comando canónico y protocolo idempotente
 

@@ -13,142 +13,279 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Fail-closed PostgreSQL 16 catalog accreditation for the exact V27 import graph. */
-final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
+/**
+ * Fail-closed PostgreSQL 16 accreditation for the complete V29 acceptance boundary.
+ *
+ * <p>The catalog includes the eight V28 relations, both supplementary ledger tables and the
+ * users/talleres dependencies. Frozen V27 base surfaces are checked without recursive dispatch.
+ * The compatibility entry points preserve historical V27 consumers and exact V28 consumers,
+ * while requiring complete V29 accreditation whenever its migration is selected.</p>
+ */
+final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
 
     static final String ISSUE_LOCATION = "database/schema";
 
     private static final Pattern SAFE_SCHEMA = Pattern.compile("[a-z_][a-z0-9_]{0,62}");
-    private static final String TABLE_NAMES = sqlStrings(LegalV27ImportInventory.IMPORT_TABLES);
+    private static final String TABLE_NAMES = sqlStrings(
+            LegalV29AcceptanceInventory.CATALOG_TABLES);
+    private static final String LEGAL_GRAPH_TABLE_NAMES = sqlStrings(
+            LegalV29AcceptanceInventory.LEGAL_GRAPH_TABLES);
     private static final String SEQUENCE_NAMES = sqlStrings(
-            LegalV27ImportInventory.IDENTITY_SEQUENCES.keySet());
-    private static final Set<String> VOID_FUNCTIONS = Set.of(
-            "legal_exigir_read_committed()",
-            "legal_bloquear_publicacion_abierta(uuid)",
-            "legal_bloquear_publicacion_sellada(uuid)",
-            "legal_bloquear_dependencias_publicacion(uuid)",
-            "legal_validar_publicacion_sellada(uuid)");
+            LegalV29AcceptanceInventory.IDENTITY_SEQUENCES.keySet());
 
     private final JdbcTemplate jdbc;
     private final String expectedSchema;
+    private final LegalV27ImportSchemaVerifier importVerifier;
+    private final LegalEditorialSchemaVerifier editorialVerifier;
 
-    LegalV27ImportSchemaVerifier(JdbcTemplate jdbc, String expectedSchema) {
+    LegalV29AcceptanceSchemaVerifier(JdbcTemplate jdbc, String expectedSchema) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.expectedSchema = requireSafeSchema(expectedSchema);
+        this.importVerifier = new LegalV27ImportSchemaVerifier(jdbc, this.expectedSchema);
+        this.editorialVerifier = new LegalEditorialSchemaVerifier(jdbc, this.expectedSchema);
     }
 
     @Override
     public void verify() {
-        verifyBase();
-        try {
-            LegalV29AcceptanceSchemaVerifier.verifyAfterImportBase(jdbc, expectedSchema);
-        } catch (LegalEditorialOperationalException extensionFailure) {
-            if (extensionFailure.issue().code() != LegalManifestIssueCode.SCHEMA_DRIFT) {
-                throw extensionFailure;
-            }
-            throw new LegalImportOperationalException(
-                    LegalManifestIssueCode.IMPORT_DB_SCHEMA_INCOMPATIBLE,
-                    ISSUE_LOCATION,
-                    extensionFailure);
+        verifyImportSurface();
+        editorialVerifier.verifyBase();
+        if (compatibleVersion() != RuntimeVersion.V29) {
+            incompatible();
+        }
+        verifyV29Surface();
+    }
+
+    /** Import already accredited its own base; V29 additionally requires the editorial base. */
+    static void verifyAfterImportBase(JdbcTemplate jdbc, String schema) {
+        LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
+        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+            verifier.editorialVerifier.verifyBase();
+            verifier.verifyV29Surface();
         }
     }
 
-    /** Frozen V27 surface, deliberately without compatibility dispatch. */
-    void verifyBase() {
-        verifySessionSchema();
-        verifyFlywayHistory();
-        if (!catalogFingerprint().equals(LegalV27ImportInventory.EXPECTED_CATALOG)) {
+    /** Editorial already accredited its own base; V29 additionally requires the import base. */
+    static void verifyAfterEditorialBase(JdbcTemplate jdbc, String schema) {
+        LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
+        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+            verifier.verifyImportSurface();
+            verifier.verifyV29Surface();
+        }
+    }
+
+    /** True only after full V29 delta verification; false keeps the caller's exact V28 checks. */
+    static boolean verifyAfterAggregateBases(JdbcTemplate jdbc, String schema) {
+        LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
+        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+            verifier.verifyV29Surface();
+            return true;
+        }
+        return false;
+    }
+
+    private void verifyV29Surface() {
+        verifyRelationTopology();
+        if (!catalogFingerprint().equals(LegalV29AcceptanceInventory.EXPECTED_CATALOG)) {
             incompatible();
         }
-        verifyImportFunctions();
+        verifySchemaFunctions();
     }
 
     @Override
     public boolean usesJdbc(JdbcTemplate candidate) {
-        return jdbc == candidate;
+        return jdbc == candidate
+                && importVerifier.usesJdbc(candidate)
+                && editorialVerifier.usesJdbc(candidate);
     }
 
     String expectedSchema() {
         return expectedSchema;
     }
 
+    /** Package-private diagnostic used only to freeze clean PostgreSQL 16 constants. */
     CatalogSnapshot snapshot() {
-        return new CatalogSnapshot(catalogFingerprint(), functionStates());
+        return new CatalogSnapshot(catalogFingerprint(), functionStates(), flywayStates());
     }
 
-    private void verifySessionSchema() {
-        SessionSchema session = jdbc.queryForObject("""
-                SELECT pg_catalog.current_schema() AS current_schema,
-                       pg_catalog.current_schemas(false)::text AS search_path,
-                       pg_catalog.current_setting('search_path') AS configured_search_path,
-                       pg_catalog.current_setting('server_version_num')::integer
-                           AS server_version_num,
-                       pg_catalog.pg_my_temp_schema() AS temp_schema
-                """, (resultSet, rowNumber) -> new SessionSchema(
-                resultSet.getString("current_schema"),
-                resultSet.getString("search_path"),
-                resultSet.getString("configured_search_path"),
-                resultSet.getInt("server_version_num"),
-                resultSet.getLong("temp_schema")));
-        if (session == null
-                || session.tempSchema() != 0L
-                || session.serverVersionNum() / 10_000 != 16
-                || !allowedSearchPath(session)) {
+    /** Exact ordered history since V27; the fourth row is a bounded incompatibility sentinel. */
+    private RuntimeVersion compatibleVersion() {
+        List<FlywayState> actual = flywayStates();
+        for (RuntimeVersion version : RuntimeVersion.values()) {
+            if (actual.equals(expectedFlywayStates(version))) {
+                if (version != RuntimeVersion.V29) {
+                    verifyV29ExtensionAbsent();
+                }
+                return version;
+            }
+        }
+        incompatible();
+        throw new IllegalStateException("La incompatibilidad de esquema debe interrumpir la ejecución");
+    }
+
+    private void verifyV29ExtensionAbsent() {
+        Boolean present = jdbc.queryForObject("""
+                SELECT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_class rel
+                             JOIN pg_catalog.pg_namespace ns
+                               ON ns.oid = rel.relnamespace
+                            WHERE ns.nspname = ?
+                              AND rel.relname IN (%s)
+                       ) OR EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_proc fn
+                             JOIN pg_catalog.pg_namespace ns
+                               ON ns.oid = fn.pronamespace
+                            WHERE ns.nspname = ?
+                              AND fn.proname IN (%s)
+                       ) OR EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_trigger trg
+                             JOIN pg_catalog.pg_class rel ON rel.oid = trg.tgrelid
+                             JOIN pg_catalog.pg_namespace ns
+                               ON ns.oid = rel.relnamespace
+                            WHERE ns.nspname = ?
+                              AND trg.tgname IN (%s)
+                       )
+                """.formatted(
+                        sqlStrings(LegalV29AcceptanceInventory.V29_TABLES),
+                        sqlStrings(functionNames(LegalV29AcceptanceInventory.V29_FUNCTIONS.keySet())),
+                        sqlStrings(LegalV29AcceptanceInventory.V29_TRIGGER_NAMES)),
+                Boolean.class, expectedSchema, expectedSchema, expectedSchema);
+        if (!Boolean.FALSE.equals(present)) {
             incompatible();
         }
     }
 
-    private boolean allowedSearchPath(SessionSchema session) {
-        String quotedSchema = "\"" + expectedSchema + "\"";
-        boolean legacySingleSchema = ("{" + expectedSchema + "}")
-                        .equals(session.searchPath())
-                && expectedSchema.equals(session.currentSchema())
-                && (expectedSchema.equals(session.configuredSearchPath())
-                    || quotedSchema.equals(session.configuredSearchPath())
-                    || (LegalV27ImportInventory.DEFAULT_SCHEMA.equals(expectedSchema)
-                        && "\"$user\", public".equals(
-                                session.configuredSearchPath())));
-        boolean restrictedImport = ("{pg_catalog," + expectedSchema + "}")
-                        .equals(session.searchPath())
-                && "pg_catalog".equals(session.currentSchema())
-                && (("pg_catalog, " + expectedSchema + ", pg_temp")
-                            .equals(session.configuredSearchPath())
-                    || ("pg_catalog, " + quotedSchema + ", pg_temp")
-                            .equals(session.configuredSearchPath()));
-        return legacySingleSchema || restrictedImport;
+    private void verifyRelationTopology() {
+        if (!relationTopologyStates().equals(expectedRelationTopologyStates())) {
+            incompatible();
+        }
     }
 
-    private void verifyFlywayHistory() {
+    private List<RelationTopologyState> relationTopologyStates() {
+        return jdbc.query("""
+                        SELECT c.relname,
+                               EXISTS (
+                                   SELECT 1
+                                     FROM pg_catalog.pg_inherits inheritance
+                                    WHERE inheritance.inhparent = c.oid
+                               ) AS has_descendants,
+                               EXISTS (
+                                   SELECT 1
+                                     FROM pg_catalog.pg_inherits inheritance
+                                    WHERE inheritance.inhrelid = c.oid
+                               ) AS has_ancestors,
+                               EXISTS (
+                                   SELECT 1
+                                     FROM pg_catalog.pg_rewrite rewrite
+                                    WHERE rewrite.ev_class = c.oid
+                               ) AS has_rules
+                          FROM pg_catalog.pg_class c
+                          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                         WHERE n.nspname = ?
+                           AND c.relname IN (%s)
+                         ORDER BY c.relname
+                        """.formatted(LEGAL_GRAPH_TABLE_NAMES),
+                (resultSet, rowNumber) -> new RelationTopologyState(
+                        resultSet.getString("relname"),
+                        resultSet.getBoolean("has_descendants"),
+                        resultSet.getBoolean("has_ancestors"),
+                        resultSet.getBoolean("has_rules")),
+                expectedSchema);
+    }
+
+    private static List<RelationTopologyState> expectedRelationTopologyStates() {
+        return LegalV29AcceptanceInventory.LEGAL_GRAPH_TABLES.stream()
+                .sorted()
+                .map(name -> new RelationTopologyState(name, false, false, false))
+                .toList();
+    }
+
+    private void verifyImportSurface() {
+        try {
+            importVerifier.verifyBase();
+        } catch (LegalImportOperationalException importFailure) {
+            if (importFailure.issue().code()
+                    != LegalManifestIssueCode.IMPORT_DB_SCHEMA_INCOMPATIBLE) {
+                throw importFailure;
+            }
+            throw new LegalEditorialOperationalException(
+                    LegalManifestIssueCode.SCHEMA_DRIFT,
+                    ISSUE_LOCATION,
+                    importFailure);
+        }
+    }
+
+    private List<FlywayState> flywayStates() {
         String history = quoteIdentifier(expectedSchema)
                 + "."
-                + quoteIdentifier(LegalV27ImportInventory.FLYWAY_HISTORY_TABLE);
-        List<FlywayState> rows = jdbc.query("""
-                        SELECT version, type, script, checksum, success
-                          FROM %s
-                         WHERE version = ?
-                        """.formatted(history),
+                + quoteIdentifier(LegalV29AcceptanceInventory.FLYWAY_HISTORY_TABLE);
+        return jdbc.query("""
+                        SELECT history.version, history.type, history.script,
+                               history.checksum, history.success,
+                               history.installed_rank = (
+                                   SELECT pg_catalog.max(candidate.installed_rank)
+                                     FROM %s candidate
+                               ) AS latest
+                          FROM %s history
+                         WHERE history.version IN (?, ?, ?)
+                            OR history.installed_rank >= (
+                                SELECT pg_catalog.min(first_v27.installed_rank)
+                                  FROM %s first_v27
+                                 WHERE first_v27.version = ?
+                            )
+                         ORDER BY history.installed_rank
+                         LIMIT 4
+                        """.formatted(history, history, history),
                 (resultSet, rowNumber) -> new FlywayState(
                         resultSet.getString("version"),
                         resultSet.getString("type"),
                         resultSet.getString("script"),
                         (Integer) resultSet.getObject("checksum"),
-                        resultSet.getBoolean("success")),
-                LegalV27ImportInventory.FLYWAY_VERSION);
-        FlywayState expected = new FlywayState(
-                LegalV27ImportInventory.FLYWAY_VERSION,
-                LegalV27ImportInventory.FLYWAY_TYPE,
-                LegalV27ImportInventory.FLYWAY_SCRIPT,
-                LegalV27ImportInventory.FLYWAY_CHECKSUM,
-                true);
-        if (!rows.equals(List.of(expected))) {
-            incompatible();
-        }
+                        resultSet.getBoolean("success"),
+                        resultSet.getBoolean("latest")),
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V27,
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V28,
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V29,
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V27);
     }
 
-    private LegalV27ImportInventory.CatalogFingerprint catalogFingerprint() {
+    private static List<FlywayState> expectedFlywayStates(RuntimeVersion version) {
+        List<FlywayState> states = new ArrayList<>();
+        states.add(new FlywayState(
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V27,
+                LegalV29AcceptanceInventory.FLYWAY_TYPE,
+                LegalV29AcceptanceInventory.FLYWAY_SCRIPT_V27,
+                LegalV29AcceptanceInventory.FLYWAY_CHECKSUM_V27,
+                true,
+                version == RuntimeVersion.V27));
+        if (version == RuntimeVersion.V27) {
+            return List.copyOf(states);
+        }
+        states.add(new FlywayState(
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V28,
+                LegalV29AcceptanceInventory.FLYWAY_TYPE,
+                LegalV29AcceptanceInventory.FLYWAY_SCRIPT_V28,
+                LegalV29AcceptanceInventory.FLYWAY_CHECKSUM_V28,
+                true,
+                version == RuntimeVersion.V28));
+        if (version == RuntimeVersion.V28) {
+            return List.copyOf(states);
+        }
+        states.add(new FlywayState(
+                LegalV29AcceptanceInventory.FLYWAY_VERSION_V29,
+                LegalV29AcceptanceInventory.FLYWAY_TYPE,
+                LegalV29AcceptanceInventory.FLYWAY_SCRIPT_V29,
+                LegalV29AcceptanceInventory.FLYWAY_CHECKSUM_V29,
+                true,
+                true));
+        return List.copyOf(states);
+    }
+
+    private LegalV29AcceptanceInventory.CatalogFingerprint catalogFingerprint() {
         List<String> tables = canonicalRows("""
                 SELECT pg_catalog.jsonb_build_array(
                            c.relname, c.relkind, c.relpersistence,
@@ -168,8 +305,10 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
                            pg_catalog.format_type(a.atttypid, a.atttypmod),
                            a.attnotnull, a.attidentity, a.attgenerated,
                            a.attisdropped,
-                           COALESCE(pg_catalog.pg_get_expr(
-                               d.adbin, d.adrelid, false), ''))::text
+                           pg_catalog.replace(
+                               COALESCE(pg_catalog.pg_get_expr(
+                                   d.adbin, d.adrelid, false), ''),
+                               pg_catalog.format('%%I.', ?), '<schema>.'))::text
                   FROM pg_catalog.pg_class c
                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                   JOIN pg_catalog.pg_attribute a
@@ -179,13 +318,15 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
                  WHERE n.nspname = ?
                    AND c.relname IN (%s)
                  ORDER BY c.relname, a.attnum
-                """.formatted(TABLE_NAMES), expectedSchema);
+                """.formatted(TABLE_NAMES), expectedSchema, expectedSchema);
         List<String> constraints = canonicalRows("""
                 SELECT pg_catalog.jsonb_build_array(
                            r.relname, c.conname, c.contype, c.convalidated,
                            c.condeferrable, c.condeferred, c.conislocal,
                            c.coninhcount, c.connoinherit,
-                           pg_catalog.pg_get_constraintdef(c.oid, false),
+                           pg_catalog.replace(
+                               pg_catalog.pg_get_constraintdef(c.oid, false),
+                               pg_catalog.format('%%I.', ?), '<schema>.'),
                            COALESCE((
                                SELECT pg_catalog.jsonb_agg(
                                           pg_catalog.jsonb_build_array(
@@ -242,7 +383,35 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
                    AND c.contype <> 't'
                  ORDER BY r.relname, c.conname
                 """.formatted(TABLE_NAMES),
-                expectedSchema, expectedSchema, expectedSchema, expectedSchema);
+                expectedSchema, expectedSchema, expectedSchema, expectedSchema, expectedSchema);
+        List<String> indexes = canonicalRows("""
+                SELECT pg_catalog.jsonb_build_array(
+                           r.relname, idx.relname, idx.relkind, idx.relpersistence,
+                           am.amname, COALESCE(idx.reloptions, '{}'::text[]),
+                           i.indisunique, i.indnullsnotdistinct, i.indisprimary,
+                           i.indisexclusion, i.indimmediate, i.indisclustered,
+                           i.indisvalid, i.indcheckxmin, i.indisready,
+                           i.indislive, i.indisreplident,
+                           i.indnatts, i.indnkeyatts,
+                           i.indkey::text, i.indcollation::text,
+                           i.indclass::text, i.indoption::text,
+                           COALESCE(pg_catalog.pg_get_expr(
+                               i.indexprs, i.indrelid, false), ''),
+                           COALESCE(pg_catalog.pg_get_expr(
+                               i.indpred, i.indrelid, false), ''),
+                           pg_catalog.replace(
+                               pg_catalog.pg_get_indexdef(i.indexrelid, 0, false),
+                         pg_catalog.format('%%I.', ?),
+                               '<schema>.'))::text
+                  FROM pg_catalog.pg_index i
+                  JOIN pg_catalog.pg_class r ON r.oid = i.indrelid
+                  JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+                  JOIN pg_catalog.pg_class idx ON idx.oid = i.indexrelid
+                  JOIN pg_catalog.pg_am am ON am.oid = idx.relam
+                 WHERE n.nspname = ?
+                   AND r.relname IN (%s)
+                 ORDER BY r.relname, idx.relname
+                """.formatted(TABLE_NAMES), expectedSchema, expectedSchema);
         List<String> triggers = canonicalRows("""
                 SELECT pg_catalog.jsonb_build_array(
                            r.relname, t.tgname, (pn.nspname = ?), p.proname,
@@ -290,15 +459,16 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
                    AND seq.relname IN (%s)
                  ORDER BY seq.relname
                 """.formatted(SEQUENCE_NAMES), expectedSchema, expectedSchema);
-        return new LegalV27ImportInventory.CatalogFingerprint(
+        return new LegalV29AcceptanceInventory.CatalogFingerprint(
                 tables.size(), digest(tables),
                 columns.size(), digest(columns),
                 constraints.size(), digest(constraints),
+                indexes.size(), digest(indexes),
                 triggers.size(), digest(triggers),
                 sequences.size(), digest(sequences));
     }
 
-    private void verifyImportFunctions() {
+    private void verifySchemaFunctions() {
         if (!functionStates().equals(expectedFunctionStates())) {
             incompatible();
         }
@@ -321,7 +491,7 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
                  WHERE n.nspname = ?
                    AND p.proname IN (%s)
                  ORDER BY signature
-                """.formatted(sqlStrings(importFunctionNames())),
+                """.formatted(sqlStrings(schemaFunctionNames())),
                 (resultSet, rowNumber) -> new FunctionState(
                         resultSet.getString("signature"),
                         resultSet.getString("result"),
@@ -346,25 +516,42 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
         return Map.copyOf(states);
     }
 
-    private Map<String, FunctionState> expectedFunctionStates() {
+    private static Map<String, FunctionState> expectedFunctionStates() {
         Map<String, FunctionState> expected = new LinkedHashMap<>();
-        LegalV27ImportInventory.IMPORT_FUNCTIONS.forEach((signature, spec) ->
+        LegalV29AcceptanceInventory.SCHEMA_FUNCTIONS.forEach((signature, spec) ->
                 expected.put(signature, new FunctionState(
                         signature,
-                        VOID_FUNCTIONS.contains(signature) ? "void" : "trigger",
-                        "plpgsql", "f", "v", "u",
+                        functionResult(signature),
+                        LegalV29AcceptanceInventory.SQL_FUNCTIONS.contains(signature)
+                                ? "sql"
+                                : "plpgsql",
+                        "f", "v", "u",
                         false, false, false, false, true,
                         spec.sourceSha256())));
         return Map.copyOf(expected);
+    }
+
+    private static String functionResult(String signature) {
+        if (LegalV29AcceptanceInventory.SQL_FUNCTIONS.contains(signature)) {
+            return "boolean";
+        }
+        if (LegalV29AcceptanceInventory.VOID_FUNCTIONS.contains(signature)) {
+            return "void";
+        }
+        return "trigger";
     }
 
     private List<String> canonicalRows(String sql, Object... arguments) {
         return jdbc.queryForList(sql, String.class, arguments);
     }
 
-    private static List<String> importFunctionNames() {
+    private static List<String> schemaFunctionNames() {
+        return functionNames(LegalV29AcceptanceInventory.SCHEMA_FUNCTIONS.keySet());
+    }
+
+    private static List<String> functionNames(Iterable<String> signatures) {
         List<String> names = new ArrayList<>();
-        for (String signature : LegalV27ImportInventory.IMPORT_FUNCTIONS.keySet()) {
+        for (String signature : signatures) {
             names.add(signature.substring(0, signature.indexOf('(')));
         }
         return names.stream().distinct().sorted().toList();
@@ -402,7 +589,7 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
     private static String requireSafeSchema(String candidate) {
         String schema = Objects.requireNonNull(candidate, "expectedSchema");
         if (!SAFE_SCHEMA.matcher(schema).matches()) {
-            throw new IllegalArgumentException("Schema PostgreSQL de importación inválido");
+            throw new IllegalArgumentException("Schema PostgreSQL de aceptación inválido");
         }
         return schema;
     }
@@ -418,14 +605,15 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
     }
 
     private static void incompatible() {
-        throw new LegalImportOperationalException(
-                LegalManifestIssueCode.IMPORT_DB_SCHEMA_INCOMPATIBLE,
+        throw new LegalEditorialOperationalException(
+                LegalManifestIssueCode.SCHEMA_DRIFT,
                 ISSUE_LOCATION);
     }
 
     record CatalogSnapshot(
-            LegalV27ImportInventory.CatalogFingerprint catalog,
-            Map<String, FunctionState> functions) { }
+            LegalV29AcceptanceInventory.CatalogFingerprint catalog,
+            Map<String, FunctionState> functions,
+            List<FlywayState> flyway) { }
 
     record FunctionState(
             String signature,
@@ -441,17 +629,19 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
             boolean safeSearchPath,
             String sourceSha256) { }
 
-    private record SessionSchema(
-            String currentSchema,
-            String searchPath,
-            String configuredSearchPath,
-            int serverVersionNum,
-            long tempSchema) { }
-
-    private record FlywayState(
+    record FlywayState(
             String version,
             String type,
             String script,
             Integer checksum,
-            boolean success) { }
+            boolean success,
+            boolean latest) { }
+
+    private enum RuntimeVersion { V27, V28, V29 }
+
+    private record RelationTopologyState(
+            String relation,
+            boolean hasDescendants,
+            boolean hasAncestors,
+            boolean hasRules) { }
 }

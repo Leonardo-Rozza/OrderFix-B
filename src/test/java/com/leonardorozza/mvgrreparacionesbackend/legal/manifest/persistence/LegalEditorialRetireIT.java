@@ -1122,6 +1122,11 @@ class LegalEditorialRetireIT {
                          longitud_original)
                     VALUES (?, 'IP', 1, ?, ?, ?, 9)
                     """, lotId, bytes(12, 11), bytes(9, 31), bytes(16, 51))).isOne();
+            jdbc.queryForObject("""
+                    SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array(
+                        'ordenfix:legal-idempotencia:tupla:v29', 'ACEPTACION_LEGAL',
+                        '/api/legal/retire-it', ?::text, ?::text)::text, 0))
+                    """, Object.class, "a".repeat(64), "b".repeat(64));
             assertThat(jdbc.update("""
                     INSERT INTO legal_idempotencia_resultados
                         (operacion, route_template, scope_hmac,

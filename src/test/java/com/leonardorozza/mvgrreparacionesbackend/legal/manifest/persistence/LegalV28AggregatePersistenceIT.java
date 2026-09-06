@@ -68,6 +68,7 @@ class LegalV28AggregatePersistenceIT {
                         POSTGRES.getUsername(),
                         POSTGRES.getPassword())
                 .locations("classpath:db/migration")
+                .target("28")
                 .load()
                 .migrate();
 

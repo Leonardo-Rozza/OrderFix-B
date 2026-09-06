@@ -61,7 +61,9 @@ class LegalEditorialProcessIT {
             "legal_aceptacion_documentos",
             "legal_aceptacion_metadatos",
             "legal_aceptacion_metadatos_cifrados",
-            "legal_idempotencia_resultados");
+            "legal_idempotencia_resultados",
+            "legal_idempotencia_sin_actos",
+            "legal_idempotencia_sin_actos_referencias");
     private static final Set<String> PROTECTED_HTTP_SEQUENCES = Set.of(
             "legal_aceptacion_documentos_id_seq",
             "legal_aceptacion_metadatos_cifrados_id_seq",
@@ -93,7 +95,9 @@ class LegalEditorialProcessIT {
             "legal_aceptacion_documentos",
             "legal_aceptacion_metadatos",
             "legal_aceptacion_metadatos_cifrados",
-            "legal_idempotencia_resultados");
+            "legal_idempotencia_resultados",
+            "legal_idempotencia_sin_actos",
+            "legal_idempotencia_sin_actos_referencias");
     private static final Set<String> EXPECTED_LEGAL_SEQUENCES = Set.of(
             "legal_documento_contextos_id_seq",
             "legal_publicacion_documentos_id_seq",

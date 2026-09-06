@@ -29,6 +29,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.Locale
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PerfilAgregadoLegal;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
@@ -522,7 +523,7 @@ final class LegalEditorialProcessFixture {
         return validatePlan(plan, operationId);
     }
 
-    /** Seeds one complete HTTP-owned row per protected table in one owner transaction. */
+    /** Seeds committed evidence, then its separate DEDUP result, across all protected tables. */
     void seedProtectedHttpState(ReleaseArtifact current) {
         ReleaseArtifact requiredCurrent = Objects.requireNonNull(current, "current");
         String publicationExternalId = externalId(requiredCurrent);
@@ -534,6 +535,8 @@ final class LegalEditorialProcessFixture {
                 new DataSourceTransactionManager(Objects.requireNonNull(
                         owner.getDataSource(),
                         "owner.dataSource")));
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
 
         transaction.executeWithoutResult(status -> {
             owner.queryForList("""
@@ -637,6 +640,11 @@ final class LegalEditorialProcessFixture {
                     bytes(9, 31),
                     bytes(16, 51)),
                     "legal_aceptacion_metadatos_cifrados");
+            owner.queryForObject("""
+                    SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array(
+                        'ordenfix:legal-idempotencia:tupla:v29', 'ACEPTACION_LEGAL',
+                        '/api/legal/process-10e', ?::text, ?::text)::text, 0))
+                    """, Object.class, "a".repeat(64), seedHex.repeat(2));
             requireSingleInsert(owner.update("""
                     INSERT INTO legal_idempotencia_resultados
                         (operacion, route_template, scope_hmac,
@@ -654,6 +662,48 @@ final class LegalEditorialProcessFixture {
                     workshopId,
                     lotId),
                     "legal_idempotencia_resultados");
+            owner.execute("SET CONSTRAINTS ALL IMMEDIATE");
+        });
+
+        // DEDUP references evidence from a previous committed transaction. Reusing the preceding
+        // transaction would manufacture a result that the V29 historical-reference guard rejects.
+        UUID dedupId = stableUuid("protected-http-dedup:" + seed);
+        transaction.executeWithoutResult(status -> {
+            owner.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+                        pg_catalog.jsonb_build_array(
+                            'ordenfix:legal-idempotencia:tupla:v29', 'ACEPTACION_LEGAL',
+                            '/api/aceptaciones-legales', ?::text, ?::text)::text, 0))
+                    """, "a".repeat(64), seedHex.repeat(2));
+            owner.queryForList("""
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(?, 0))
+                    """, EDITORIAL_LOCK_NAME);
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_idempotencia_sin_actos
+                        (id, operacion, route_template, scope_hmac, idempotency_key_hmac,
+                         fingerprint_hmac, hmac_key_version, user_id, taller_id, rol_wire,
+                         audiencia, resultado, submitted_revision, agregado_observado_id,
+                         perfil, revision_scheme, observed_revision, referencia_count,
+                         completed_at, expires_at)
+                    SELECT ?, 'ACEPTACION_LEGAL', '/api/aceptaciones-legales', ?, ?, ?,
+                           1, lote.user_id, lote.taller_id, lote.rol_wire, lote.audiencia,
+                           'DEDUP', lote.required_set_revision, agregado.id, agregado.perfil,
+                           agregado.revision_scheme, agregado.required_set_revision, 1,
+                           statement_timestamp(), statement_timestamp() + INTERVAL '30 days'
+                      FROM legal_aceptacion_lotes lote
+                      JOIN legal_requisito_agregados agregado ON agregado.id = lote.agregado_id
+                     WHERE lote.id = ?
+                    """, dedupId, "a".repeat(64), seedHex.repeat(2), "d".repeat(64), lotId),
+                    "legal_idempotencia_sin_actos");
+            requireSingleInsert(owner.update("""
+                    INSERT INTO legal_idempotencia_sin_actos_referencias
+                        (resultado_id, aceptacion_id, user_id, taller_id)
+                    SELECT ?, id, user_id, taller_id
+                      FROM legal_aceptaciones
+                     WHERE id = ? AND lote_id = ?
+                    """, dedupId, acceptanceId, lotId),
+                    "legal_idempotencia_sin_actos_referencias");
             owner.execute("SET CONSTRAINTS ALL IMMEDIATE");
         });
     }

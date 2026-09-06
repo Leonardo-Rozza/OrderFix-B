@@ -79,13 +79,23 @@ class LegalEditorialCapacityIT {
     private static final LegalEditorialPlanResult.DeltaCounts EXPECTED_DELTA =
             new LegalEditorialPlanResult.DeltaCounts(
                     7, 8, 18, 83, 83, 5, 5, 16, 16, 3);
+    /*
+     * This capacity fixture remains target V27. V29 compatibility adds exactly two fixed SELECTs
+     * and two returned rows per schema preflight: closed migration history and absence of the V29
+     * delta. Each successful readiness/plan/apply operation enters one gate. Graph, DML, sentinel,
+     * per-SQL repetition and time budgets are unchanged; explicit assertions below prohibit N+1.
+     */
     private static final MetricCaps READINESS_METRICS = new MetricCaps(
-            52, 1, 0, 0, 3, 48, 0, 11_636, 2);
+            54, 1, 0, 0, 3, 50, 0, 11_638, 2);
     private static final MetricCaps PLAN_METRICS = new MetricCaps(
-            96, 1, 0, 0, 3, 92, 0, 36_042, 4);
+            98, 1, 0, 0, 3, 94, 0, 36_044, 4);
     private static final MetricCaps APPLY_METRICS = new MetricCaps(
-            184, 1, 17, 5, 4, 157, 0, 68_648, 6);
-    private static final long MAXIMUM_SENTINEL_ROWS_READ = 11_684;
+            186, 1, 17, 5, 4, 159, 0, 68_650, 6);
+    private static final long MAXIMUM_SENTINEL_ROWS_READ = 11_686;
+    private static final String COMPATIBILITY_HISTORY_SQL =
+            "SELECT history.version, history.type, history.script, history.checksum, history.success";
+    private static final String COMPATIBILITY_ABSENCE_SQL =
+            "SELECT EXISTS ( SELECT 1 FROM pg_catalog.pg_class rel JOIN pg_catalog.pg_namespace ns";
 
     /*
      * Legal graph reads use exact valid/sentinel cardinalities. PostgreSQL catalog reads are a
@@ -241,6 +251,14 @@ class LegalEditorialCapacityIT {
             readCap("flyway-history-version", 1,
                     "SELECT version, type, script, checksum, success",
                     "\"flyway_schema_history\" WHERE version = ?"),
+            readCap("compatibility-flyway-history", 1,
+                    COMPATIBILITY_HISTORY_SQL,
+                    "history.version IN (?, ?, ?)",
+                    "WHERE first_v27.version = ?"),
+            readCap("compatibility-v29-absence", 1,
+                    COMPATIBILITY_ABSENCE_SQL,
+                    "rel.relname IN ('legal_idempotencia_sin_actos', 'legal_idempotencia_sin_actos_referencias')",
+                    "FROM pg_catalog.pg_trigger trg"),
             readCap("catalog-databases", 3, "FROM pg_catalog.pg_database d"),
             readCap("catalog-columns", 388, "pg_catalog.has_column_privilege"),
             readCap("catalog-sequences", 27, "pg_catalog.has_sequence_privilege"),
@@ -321,7 +339,8 @@ class LegalEditorialCapacityIT {
             Map.entry("batch-transition-history", 8_193L));
     private static final Map<String, String> SQL_LITERAL_LIMITS = Map.of(
             "publication-by-external-id", " LIMIT 2",
-            "publication-by-id", " LIMIT 2");
+            "publication-by-id", " LIMIT 2",
+            "compatibility-flyway-history", " LIMIT 4");
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
@@ -718,6 +737,7 @@ class LegalEditorialCapacityIT {
             Measurement<?> measurement,
             MetricCaps expected) {
         Snapshot metrics = measurement.metrics();
+        assertConstantCompatibilityPreflight(metrics);
         assertThat(measurement.elapsed())
                 .as("%s metrics=%s", operation, concise(metrics))
                 .isLessThan(MAX_OPERATION)
@@ -959,6 +979,7 @@ class LegalEditorialCapacityIT {
             Measurement<?> sentinel,
             Set<String> relaxedFamilies) {
         Snapshot metrics = sentinel.metrics();
+        assertConstantCompatibilityPreflight(metrics);
         assertThat(sentinel.elapsed())
                 .as("%s metrics=%s", operation, concise(metrics))
                 .isLessThan(MAX_OPERATION)
@@ -989,6 +1010,15 @@ class LegalEditorialCapacityIT {
         assertSqlReadInventory(relaxedFamilies, metrics);
         System.out.println("LEGAL_EDITORIAL_CAPACITY " + operation
                 + " elapsed=" + sentinel.elapsed() + " " + concise(metrics));
+    }
+
+    private static void assertConstantCompatibilityPreflight(Snapshot metrics) {
+        for (String sql : List.of(COMPATIBILITY_HISTORY_SQL, COMPATIBILITY_ABSENCE_SQL)) {
+            assertThat(metrics.matching(sql)).as("one fixed compatibility query: %s", sql).hasSize(1);
+            assertThat(metrics.executionsContaining(sql)).isEqualTo(1L);
+            assertThat(metrics.rowsReadContaining(sql)).isEqualTo(1L);
+            assertThat(metrics.maximumRowsReadContaining(sql)).isEqualTo(1L);
+        }
     }
 
     private static void assertSqlReadInventory(
@@ -1105,7 +1135,9 @@ class LegalEditorialCapacityIT {
                     "document-transition-history",
                     "requirement-transition-history",
                     "catalog-columns",
-                    "schema-constraints");
+                    "schema-constraints",
+                    "compatibility-flyway-history",
+                    "compatibility-v29-absence");
         }
     }
 

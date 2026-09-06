@@ -36,6 +36,12 @@ final class LegalEditorialSchemaVerifier implements LegalDatabasePreflight {
 
     @Override
     public void verify() {
+        verifyBase();
+        LegalV29AcceptanceSchemaVerifier.verifyAfterEditorialBase(jdbc, expectedSchema);
+    }
+
+    /** Frozen V27 surface, deliberately without compatibility dispatch. */
+    void verifyBase() {
         verifySessionSchema();
         verifyFlywayHistory();
         if (!catalogFingerprint().equals(LegalV27EditorialInventory.EXPECTED_CATALOG)) {

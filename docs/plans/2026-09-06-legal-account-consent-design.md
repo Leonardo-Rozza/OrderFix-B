@@ -2,10 +2,11 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A y 15B cerrados el 2026-09-06, con ejecución autorizada por el titular. La
+Estado: 15A, 15B y 15F cerrados el 2026-09-06, con ejecución autorizada por el titular. La
 [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) fija el protocolo ratificado en
-FRONTEND_INTEGRATION. 15B agrega únicamente el núcleo puro y pruebas; las capacidades de
-aplicación, endpoints y V29 siguen pendientes. No cambian campos/códigos HTTP.
+FRONTEND_INTEGRATION. 15B agrega el núcleo puro; 15F implementa V29 y compatibilidad estricta,
+acreditadas con un gate integral fresco de 5682 pruebas aprobadas. Las capacidades de aplicación y endpoints de este bloque
+siguen pendientes. No cambian campos/códigos HTTP.
 
 ## Objetivo y resultado esperado
 
@@ -143,7 +144,7 @@ repetición total anterior. Nunca se anexan actos a un lote ya confirmado ni se 
 Toda clave nueva que termine en éxito debe quedar protegida durante al menos 24 horas, también
 cuando no produce actos. «Sin DML de evidencia» no equivale a «sin DML idempotente».
 
-### 4. Extensión V29 prevista
+### 4. Extensión V29
 
 La inspección del SQL confirma una incompatibilidad específica: legal_validar_lote_aceptacion()
 rechaza lotes vacíos; legal_idempotencia_insert_guard() exige que el lote referenciado tenga xmin
@@ -157,10 +158,12 @@ replay extendido mientras la fila exista y purga coordinada. No se fabrica lote,
 Los resultados técnicos usan TTL inicial PT25H (mínimo PT24H); la retención personal no tiene default.
 El retiro de keys exige cero filas en ambos ledgers y drenar operaciones de la write-version anterior.
 
-V29 preservará bytes, filas, fechas y relaciones históricas; no debilitará guards para poder
-crear lotes vacíos. Los inventarios actuales exigen V28 como última migración: su compatibilidad
-con V29 debe ser explícita, con preflight versionado y regresiones 12–14/CLI. Nunca aceptar cualquier
-versión >=28 ni sustituir fingerprints por un chequeo superficial de existencia.
+15F incorpora V29 sin modificar bytes, filas, fechas ni relaciones históricas, ni permitir
+lotes vacíos. El preflight agregado admite exactamente V28 histórico o V29 acreditado; import,
+dry-run y editorial también acreditan el delta completo cuando la historia selecciona V29.
+Los inventarios V27/V28 permanecen intactos. Un esquema desconocido o parcialmente migrado falla
+cerrado; no se acepta cualquier versión >=28 ni se sustituyen fingerprints por existencia.
+Las regresiones 12–14/CLI y el gate integral se registran en el plan compañero.
 
 La protección elegida es un trigger global BEFORE UPDATE OF id FOR EACH STATEMENT en users y
 talleres, SECURITY INVOKER, que rechaza cambios reales/no-op/cero filas, incluso del owner. Sólo
@@ -337,10 +340,12 @@ inspección de XML, ambos JAR y migraciones forma parte del gate; tests viejos n
 
 Planificación inicial cerrada en b51cb5a y 15A en 5054826. El núcleo puro 15B quedó implementado
 y acreditado con 117 pruebas nuevas y 24 regresiones focales (141, cero fallos/errores/omitidas).
-El plan compañero registra comandos, fechas y límites de la evidencia. No se implementan aquí
-endpoints, migraciones ni servicios de aplicación. La skill brainstorming se aplicó; el formato
+15F agrega la migración suplementaria y los preflight de compatibilidad, con 58 pruebas nuevas
+PostgreSQL aprobadas (29 de esquema y 29 de protocolo), además de regresiones históricas focales.
+El gate integral aprobó 5682 pruebas en 215 XML y la inspección de ambos JAR. El plan compañero registra comandos, fechas y límites de
+la evidencia. No se implementan endpoints ni servicios de aplicación de este bloque. La skill brainstorming se aplicó; el formato
 por cortes conserva rutas nominales, decisiones, pruebas, dependencias y commit atómico sin push.
 
-Siguiente corte: 15F, persistencia V29 y compatibilidad estricta, antes de 15C por la protección
-de PK requerida por los locks del lector privado. El resto del bloque sigue
+Siguiente corte: 15C, lector privado PostgreSQL y frontera de actor,
+con la protección de PK requerida por sus locks. El resto del bloque sigue
 pendiente; su cierre técnico tampoco habilita lanzamiento, frontend ni enforcement productivo.

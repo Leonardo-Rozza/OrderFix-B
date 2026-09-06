@@ -16,12 +16,11 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
- * Fail-closed PostgreSQL 16 accreditation for the V28 aggregate delta.
+ * Fail-closed PostgreSQL 16 accreditation for aggregate consumers on exact V28 or exact V29.
  *
- * <p>The closed V27 import and editorial verifiers remain authoritative for their own surfaces;
- * this verifier composes both, rejects inheritance and rewrite rules across the twenty-nine
- * runtime and migration-evidence relations, then accredits the V28 Flyway row, eight affected
- * relations, every index on those relations and their complete V28 plus legacy function graph.</p>
+ * <p>V28 keeps its frozen catalog. V29 dispatches to its complete, separately frozen inventory;
+ * no later or partially applied version is accepted. The V27 delegates expose only their frozen
+ * bases here so compatibility checks cannot recurse through one another.</p>
  */
 final class LegalV28AggregateSchemaVerifier implements LegalDatabasePreflight {
 
@@ -51,7 +50,10 @@ final class LegalV28AggregateSchemaVerifier implements LegalDatabasePreflight {
     public void verify() {
         // Both delegates independently accredit PostgreSQL 16, the exact session and V27.
         verifyImportSurface();
-        editorialVerifier.verify();
+        editorialVerifier.verifyBase();
+        if (LegalV29AcceptanceSchemaVerifier.verifyAfterAggregateBases(jdbc, expectedSchema)) {
+            return;
+        }
         verifyRelationTopology();
         verifyFlywayHistory();
         if (!catalogFingerprint().equals(LegalV28AggregateInventory.EXPECTED_CATALOG)) {
@@ -129,7 +131,7 @@ final class LegalV28AggregateSchemaVerifier implements LegalDatabasePreflight {
 
     private void verifyImportSurface() {
         try {
-            importVerifier.verify();
+            importVerifier.verifyBase();
         } catch (LegalImportOperationalException importFailure) {
             if (importFailure.issue().code()
                     != LegalManifestIssueCode.IMPORT_DB_SCHEMA_INCOMPATIBLE) {

@@ -76,7 +76,7 @@ class LegalV28UpgradeIT {
                         .startsWith("ACT|")
                         .endsWith("|ATESTACION_FOTOS"));
 
-        migrate(dataSource, null);
+        migrate(dataSource, "28");
 
         LegalV27AcceptanceHistoryFixture.HistorySnapshot afterUpgrade =
                 fixture.capture(seeded);

@@ -56,10 +56,15 @@ class PostgresMigrationIT {
             "legal_aceptacion_metadatos_cifrados",
             "legal_idempotencia_resultados");
 
-    private static final Set<String> TABLAS_LEGALES_LATEST = Set.copyOf(
+    private static final Set<String> TABLAS_LEGALES_V28 = Set.copyOf(
             Stream.concat(
                             TABLAS_LEGALES_V27.stream(),
                             Stream.of("legal_requisito_agregados", "legal_requisito_agregado_scopes"))
+                    .toList());
+
+    private static final Set<String> TABLAS_LEGALES_LATEST = Set.copyOf(
+            Stream.concat(TABLAS_LEGALES_V28.stream(), Stream.of(
+                    "legal_idempotencia_sin_actos", "legal_idempotencia_sin_actos_referencias"))
                     .toList());
 
     @Container
@@ -96,9 +101,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("28");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("29");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -301,7 +306,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV28CreaLaEstructuraLegalComprobableSinDatosSemilla() {
+    void latestV29CreaLaEstructuraLegalComprobableSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -584,7 +589,7 @@ class PostgresMigrationIT {
         assertThat(tablasLegales).containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_V27);
         assertTablasLegalesVacias(schemaJdbc, schema, TABLAS_LEGALES_V27);
 
-        Flyway flywayV28 = flywayDeSchema(dataSource, schema, null);
+        Flyway flywayV28 = flywayDeSchema(dataSource, schema, "28");
         flywayV28.migrate();
 
         assertThat(flywayV28.info().current().getVersion().toString()).isEqualTo("28");
@@ -615,8 +620,8 @@ class PostgresMigrationIT {
                   AND table_name LIKE 'legal_%'
                 """, String.class, schema);
         assertThat(tablasLegalesV28)
-                .containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_LATEST);
-        assertTablasLegalesVacias(schemaJdbc, schema, TABLAS_LEGALES_LATEST);
+                .containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_V28);
+        assertTablasLegalesVacias(schemaJdbc, schema, TABLAS_LEGALES_V28);
     }
 
     @Test

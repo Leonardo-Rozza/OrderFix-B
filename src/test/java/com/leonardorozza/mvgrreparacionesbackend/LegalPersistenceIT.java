@@ -481,17 +481,24 @@ class LegalPersistenceIT {
                         UPDATE legal_idempotencia_resultados SET fingerprint_hmac = ? WHERE id = ?
                         """, hex('4'), currentResultId),
                 "inmutable");
-        assertRejected(() -> jdbc.update(
-                        "DELETE FROM legal_idempotencia_resultados WHERE id = ?", currentResultId),
+        assertRejected(() -> inTransaction(() -> {
+                    acquireIdempotencyTransactionLock(currentData);
+                    jdbc.update("DELETE FROM legal_idempotencia_resultados WHERE id = ?", currentResultId);
+                }),
                 "antes de expires_at");
-        assertRejected(() -> jdbc.update("""
+        assertRejected(() -> inTransaction(() -> {
+                    acquireIdempotencyTransactionLock(new IdempotencyData(
+                            "ACEPTACION_LEGAL", "/api/legal/late", hex('5'), hex('6'), hex('7'),
+                            1, completedAt, expiresAt));
+                    jdbc.update("""
                         INSERT INTO legal_idempotencia_resultados
                             (operacion, route_template, scope_hmac, idempotency_key_hmac,
                              fingerprint_hmac, hmac_key_version, user_id, taller_id, lote_id,
                              completed_at, expires_at)
                         VALUES ('ACEPTACION_LEGAL', '/api/legal/late', ?, ?, ?, 1, ?, ?, ?, ?, ?)
                         """, hex('5'), hex('6'), hex('7'), currentActor.userId(),
-                        currentActor.tallerId(), current.lotId(), completedAt, expiresAt),
+                        currentActor.tallerId(), current.lotId(), completedAt, expiresAt);
+                }),
                 "confirmarse con el resultado de negocio");
 
         Actor duplicateActor = createActor("ADMIN");
@@ -527,9 +534,11 @@ class LegalPersistenceIT {
                 expiredData.routeTemplate(), expiredData.keyVersion(),
                 expiredData.scopeHmac(), expiredData.keyHmac(), Instant.now())).isEmpty();
 
-        assertThat(jdbc.update(
-                "DELETE FROM legal_idempotencia_resultados WHERE id = ?", expiredResultId))
-                .isEqualTo(1);
+        inTransaction(() -> {
+            acquireIdempotencyTransactionLock(expiredData);
+            assertThat(jdbc.update(
+                    "DELETE FROM legal_idempotencia_resultados WHERE id = ?", expiredResultId)).isOne();
+        });
         assertThat(intValue("SELECT count(*) FROM legal_idempotencia_resultados WHERE id = ?",
                 expiredResultId)).isZero();
     }
@@ -917,6 +926,9 @@ class LegalPersistenceIT {
         UUID lotId = UUID.randomUUID();
         UUID acceptanceId = UUID.randomUUID();
         inTransaction(() -> {
+            if (idempotency != null) {
+                acquireIdempotencyTransactionLock(idempotency);
+            }
             acquireEditorialTransactionLock();
             RegistrationAggregate aggregate = materializeRegistrationAggregate(fixture);
             insertAcceptanceRows(
@@ -1114,7 +1126,16 @@ class LegalPersistenceIT {
         return new RegistrationAggregate(aggregateId, requiredSetRevision);
     }
 
+    private void acquireIdempotencyTransactionLock(IdempotencyData data) {
+        jdbc.queryForObject("""
+                SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array(
+                    'ordenfix:legal-idempotencia:tupla:v29', ?::text, ?::text,
+                    ?::text, ?::text)::text, 0))
+                """, Object.class, data.operation(), data.routeTemplate(), data.scopeHmac(), data.keyHmac());
+    }
+
     private void insertIdempotency(IdempotencyData data, Actor actor, UUID lotId) {
+        acquireIdempotencyTransactionLock(data);
         jdbc.update("""
                 INSERT INTO legal_idempotencia_resultados
                     (operacion, route_template, scope_hmac, idempotency_key_hmac,
@@ -1129,6 +1150,7 @@ class LegalPersistenceIT {
     private void insertHistoricalExpiredIdempotency(
             IdempotencyData data, Actor actor, UUID lotId) {
         inTransaction(() -> {
+            acquireIdempotencyTransactionLock(data);
             acquireEditorialTransactionLock();
             // Fixture histórico: V27 no posee filas legales previas y un resultado nuevo nunca
             // puede nacer vencido. Se omite sólo el trigger de INSERT para probar la purga de una

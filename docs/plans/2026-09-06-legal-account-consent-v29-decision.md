@@ -3,7 +3,9 @@
 Fecha: 2026-09-06
 
 Estado: Corte 15A cerrado el 2026-09-06 con 15 pruebas focales aprobadas. V29 y las capacidades
-de aplicación aún no están implementadas ni habilitadas; este documento fija su diseño.
+de aplicación no estaban implementadas ni habilitadas al cerrar 15A; este documento fija su diseño.
+La implementación y evidencia posterior de V29 se registran en el corte 15F del plan compañero,
+cerrado con 5682 pruebas aprobadas y V27/V28 intactas. Los servicios y HTTP de cuenta siguen pendientes.
 
 ## Alcance y evidencia de partida
 
