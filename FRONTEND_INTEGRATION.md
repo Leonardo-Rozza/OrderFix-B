@@ -660,12 +660,28 @@ Request:
 Éxito: `204 No Content`, sin body. Un replay con la misma clave y el mismo fingerprint también
 devuelve `204` y no crea otra evidencia.
 
-La lista debe incluir todos los requisitos `requerido=true` del snapshot y puede incluir cualquier
-subconjunto de opcionales conocidos y confirmados. `REQUISITO_FALTANTE` sólo aplica a obligatorios.
+La lista debe incluir todos los requisitos `requerido=true` todavía pendientes del actor, evaluados
+en la misma transacción, y puede incluir cualquier subconjunto de opcionales conocidos y confirmados.
+En registro, sin evidencia previa, se exigen todos los obligatorios vigentes de `REGISTRO`.
+`REQUISITO_FALTANTE` sólo aplica a obligatorios. Filtrar evidencia no cambia la revisión del agregado.
 Para cada requisito enviado, sus documentos deben coincidir exactamente: no admite documentos
 omitidos, extra o duplicados. Tampoco admite requisitos desconocidos o duplicados. `tipoActo`,
 digests y `confirmado` son pruebas de qué presentó el front, no una fuente confiable: el backend
 persiste sus propios textos, tipos y digests canónicos con hora del servidor.
+
+Precisiones ratificadas en 15A para el POST aún pendiente de implementación:
+
+| Caso con clave nueva | Resultado después de acreditar disponibilidad |
+| --- | --- |
+| Lista no vacía, sin duplicados y totalmente confirmada con evidencia canónica exacta | `204` antes de comparar revisión; el refetch puede mostrar nuevos pendientes |
+| Lista vacía | Comparar revisión: vieja → `409`; actual con obligatorios pendientes → `400` / `REQUISITO_FALTANTE`; actual sin obligatorios pendientes → `204` |
+| Mezcla de actos confirmados y nuevos | Exigir revisión actual, pertenencia actual de todo lo enviado y cobertura de obligatorios pendientes; insertar sólo actos nuevos |
+| Requisitos o documentos duplicados, aunque exista evidencia | No aplicar el atajo de deduplicación: revisión primero; si coincide, error de duplicado correspondiente |
+
+Un éxito sin actos nuevos conserva resultado idempotente durable; no fabrica lotes, metadata ni
+aceptaciones, ni modifica fechas históricas. La herencia sólo satisface lecturas y no crea evidencia.
+El diseño SQL y las fronteras de implementación están en la
+[decisión 15A](docs/plans/2026-09-06-legal-account-consent-v29-decision.md).
 
 Después del `204`, invalidá requisitos y aceptaciones y volvé a consultar. No mantengas una bandera
 local como autorización.
@@ -769,7 +785,9 @@ de los tres, el bloque completo es obligatorio y el backend lo valida y persiste
 el enforcement siga apagado; nunca descarta evidencia enviada por el cliente nuevo. Un bloque parcial
 responde `400` y no crea la cuenta: si falta el header usa `IDEMPOTENCY_KEY_REQUERIDA`; si el header
 existe pero falta un campo legal usa `ACEPTACION_LEGAL_INVALIDA` con
-`PAYLOAD_LEGAL_INCOMPLETO`.
+`PAYLOAD_LEGAL_INCOMPLETO`. Una propiedad presente con `null`, string vacío o lista vacía no cuenta
+como ausente; legacy exige ausencia real de los tres elementos. Un bloque completo válido en forma con la capacidad
+de consentimiento apagada falla cerrado con `503`, sin crear cuenta ni descartar el bloque enviado.
 
 Con `enforcement=true`, omitir los tres elementos devuelve `428 ACEPTACION_LEGAL_REQUERIDA` con el
 set público actual. Un bloque parcial continúa siendo `400`; uno completo siempre se valida. La
@@ -794,8 +812,11 @@ en staging.
 - Mientras la misma clave/fingerprint está en curso, el segundo request espera como máximo cinco
   segundos. Si el primero termina, reproduce su resultado; si no, devuelve `409
   IDEMPOTENCY_EN_PROGRESO` con `Retry-After: 1`.
-- La garantía por clave dura al menos 24 horas; actor + versión de requisito también tiene unicidad
-  permanente para evitar duplicados entre pestañas.
+- La garantía por clave dura al menos 24 horas y se extiende mientras exista el resultado durable,
+  aunque su vencimiento haya pasado; sólo la purga posterior termina esa garantía. También cubre
+  éxitos sin nuevos actos. Actor + versión de requisito tiene unicidad permanente para evitar
+  duplicados entre pestañas. La rotación conserva las claves necesarias hasta purgar sus resultados
+  y drenar operaciones que aún pudieran confirmar con la versión anterior.
 - La reserva transitoria de una operación en curso no consume definitivamente la clave. Sólo el
   commit exitoso guarda resultado/fingerprint y consume la clave.
 - Errores de validación, revisión vieja y fallos no confirmados no se guardan como éxitos. Si la
@@ -893,9 +914,10 @@ cada diferencia en un `400`.
 Prioridad de evaluación: sesión/actor cuando corresponda; formato de un `Idempotency-Key` presente;
 parseo JSON y DTO normalizado; clasificación legacy/parcial/completa del registro y header requerido;
 fingerprint/replay; disponibilidad del contrato; deduplicación de una evidencia ya confirmada;
-revisión del set; coincidencia semántica de requisitos/documentos. Si todos los requisitos enviados
-ya existen con la misma evidencia canónica, devuelve `204` antes de evaluar freshness y luego el
-frontend refetchea cualquier requisito nuevo. La excepción es registro con enforcement activo y los tres elementos legales
+revisión del set; coincidencia semántica de requisitos/documentos. Sólo una lista no vacía, sin
+duplicados y totalmente confirmada con la misma evidencia canónica devuelve `204` antes de evaluar
+freshness; luego el frontend refetchea cualquier requisito nuevo. Una lista vacía siempre pasa por
+revisión y cobertura de obligatorios pendientes. La excepción es registro con enforcement activo y los tres elementos legales
 ausentes, que devuelve `428` en lugar de un error de header. En rollout, las combinaciones parciales
 siguen las reglas de la sección de registro anterior.
 

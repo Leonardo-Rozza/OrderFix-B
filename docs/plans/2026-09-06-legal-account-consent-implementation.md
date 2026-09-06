@@ -2,8 +2,9 @@
 
 Fecha: 2026-09-06
 
-Estado: plan propuesto; ninguno de los cortes de implementación está iniciado.
-[Diseño y decisiones propuestas](2026-09-06-legal-account-consent-design.md).
+Estado: 15A cerrado el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los cortes restantes no están iniciados.
+[Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
 
@@ -25,7 +26,8 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
   para modificar todo un paquete ni archivos ajenos.
 - Cada corte termina compilable y con sus pruebas focales aprobadas, decisión documentada y commit.
   Un bloque interno puede quedar sin ruta HTTP. No exponer una escritura parcialmente implementada.
-- Sin tests nuevos para este corte exclusivamente documental. La evidencia de 14E es baseline.
+- La planificación inicial fue sólo documental; 15A agrega las pruebas focales nominales indicadas
+  abajo. La evidencia de 14E es baseline y no sustituye pruebas de este bloque.
 
 ## Secuencia y dependencias
 
@@ -33,10 +35,10 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | --- | --- | --- |
 | 15A | Contrato preciso y viabilidad de SQL, permisos y transacciones | Diseño revisado |
 | 15B | Satisfacción exacta y herencia puras | A |
-| 15C | Lector privado PostgreSQL y actor servidor | A, B |
+| 15C | Lector privado PostgreSQL y actor servidor | A, B, F |
 | 15D | GET de requisitos del usuario | C |
 | 15E | Historial propio paginado | C |
-| 15F | V29 y compatibilidad estricta del esquema | A; regresión C–E |
+| 15F | V29 y compatibilidad estricta del esquema | A; regresión 12–14 y 15A |
 | 15G | Comando canónico, HMAC y coordinación idempotente | A, F |
 | 15H | IP confiable, metadata cifrada y retención declarada | A, F |
 | 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
@@ -49,7 +51,10 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15P | Concurrencia, capacidad y fallos del flujo completo | A–O |
 | 15Q | Gate integral fresco y cierre documental | P |
 
-Orden sugerido: A→Q. K y algunos componentes puros pueden prepararse de forma independiente,
+Orden ratificado en 15A: A → B → F → C → D → E → G → H → I → J → K → L → M → N → O → P → Q.
+F se adelanta porque C necesita la protección de PK para adquirir locks de actor con credencial
+restringida; no se concede UPDATE(id) temporalmente sin esa guarda. Se conservan las etiquetas.
+K y algunos componentes puros pueden prepararse de forma independiente,
 pero nunca se comparten working trees con ediciones solapadas ni se mezclan commits de cortes.
 No paralelizar ejecuciones Maven que compartan target. Los gates transversales se indican abajo.
 
@@ -69,6 +74,16 @@ cada corte sólo para registrar decisiones/evidencia. Los helpers adicionales de
 de editarlos; no modificar fixtures de 12–14 por comodidad.
 
 ## 15A — Contrato preciso y prueba de viabilidad
+
+Baseline de ejecución: `b51cb5a`, backend limpio. Whitelist nominal confirmada antes de editar:
+FRONTEND_INTEGRATION.md, este plan, el diseño y la nueva decisión V29; tests nuevos
+`LegalAcceptanceProtocolFeasibilityIT.java`, `LegalAcceptanceProtocolFeasibilityITSupport.java`
+y `LegalAcceptanceAdvisorOrderFeasibilityTest.java`, todos bajo
+`src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/`.
+El helper propio evita modificar fixtures históricos. El test AOP adicional acredita el punto del advisor frente a @PreAuthorize con Spring
+real; es una prueba de viabilidad, no la implementación del gate 15N. Los triggers de protección
+usados para caracterizar permisos existen sólo dentro de la base efímera, con nombres de fixture:
+no se alteran los archivos ni las funciones congeladas V27/V28.
 
 Resultado: decisiones implementables sobre pendientes, POST vacío, mezcla/dedup, transacción,
 V29, locks/permisos y configuración. Todavía sin endpoints ni servicios productivos nuevos.
@@ -127,7 +142,8 @@ inválidos, cadena intermedia y cero DML por construcción. Commit:
 ## 15C — Lector privado y frontera de actor
 
 Resultado: servicio interno que hidrata composición completa, evidencia y linajes bajo credencial
-propia; entrega pendientes sólo al terminar la operación acreditada.
+propia; entrega pendientes sólo al terminar la operación acreditada. Se ejecuta después de 15F,
+con sus guardas de PK y preflight V29 estricto; aplica locks y presupuestos de la decisión 15A.
 
 - Contexto independiente y preflight exacto; actor principal contrastado con user/taller/rol/estado.
 - Store/replay V28 y reader en la misma conexión/gate compartido READ_COMMITTED. No invocar las
@@ -181,16 +197,16 @@ aceptaciones concurrentes según estrategia de 15A. Commit: `feat(legal): consul
 ## 15F — V29 y compatibilidad de consumidores
 
 Resultado: persistencia tipada de éxitos idempotentes sin actos nuevos, y solución nominal de
-permisos/locks aprobada en 15A. Es un corte de esquema, no un POST parcial.
+permisos/locks aprobada en la [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md).
+Se ejecuta después de B y antes de C. Es un corte de esquema, no un POST parcial.
 
 - Implementar la decisión SQL de 15A; preservar V27/V28 e historia, unicidad permanente de evidencia
   y duración mínima de replay. No fabricar lotes, actos ni timestamps históricos.
-- Inventario/guards/roles/verifier nuevos. Si hay función privilegiada, probar inputs hostiles,
-  search_path, ownership y grants efectivos; no ampliar columnas/acciones fuera del contrato del
-  helper. Acreditar aislamiento principal→servicio→consulta: un userId recibido por el rol no es
-  autorización. Si se exige identidad dentro de PostgreSQL, especificar vínculo no falsificable
-  por ese rol, no una variable de sesión que él mismo pueda alterar.
-  La prueba atraviesa el INSERT de lote y todos sus guards con el rol final, no sólo el helper.
+- Inventario/guards/roles/verifier nuevos: ledger suplementario y referencias inmutables,
+  admission cruzada con locks previos, protección global BEFORE UPDATE OF id en users/talleres
+  y grants nominales de bloqueo protegidos. Sin SECURITY DEFINER. Probar search_path, ownership,
+  permisos transitivos y el grafo completo de aceptación/registro hasta COMMIT. La autorización
+  principal→servicio→consulta no se atribuye a recibir un userId por el rol JDBC compartido.
 - Compatibilidad explícita latest V29 para web/CLI y consumidores 12–15; migración desconocida,
   faltante, checksum/topología/función alterados siguen rechazados. Fixtures históricas target V27/V28
   permanecen históricas; las suites latest se actualizan de forma nominal y justificada.
@@ -417,7 +433,7 @@ Gates integrales previstos en F (migración/compatibilidad), K (sesión), M (reg
 (cierre fresco). Fuera de ellos, ampliar por un cambio transversal o fallo que lo justifique.
 No repetir suites aprobadas sin cambios o una incertidumbre concreta que resolver.
 
-## Corte documental actual
+## Planificación inicial — cerrada en b51cb5a
 
 Whitelist: sólo este plan y el diseño compañero. Se consultaron contrato, SQL V27/V28, actor,
 registro/sesión, inventarios y planes de cierre. Tres revisiones independientes contrastaron
@@ -425,7 +441,22 @@ contrato, persistencia y auth. La revisión final precisó dedup sin duplicados,
 cadena de guards, límite de identidad del rol compartido, autorización @PreAuthorize previa al 428,
 transacción nueva del token de email y replay por identidad durable aunque cambie el email.
 No se ejecutó Maven ni se modificó producción/configuración/frontend.
-Commit previsto: `docs(legal): planifica aceptaciones y requisitos de cuenta`, local y sin push.
+Commit: `b51cb5a docs(legal): planifica aceptaciones y requisitos de cuenta`, local y sin push.
+La fecha de estos archivos identifica la planificación; cada corte registra su ejecución real.
 
-Primer paso de ejecución: revisar las decisiones propuestas y comenzar 15A. La fecha de estos
-archivos identifica la planificación; los cortes futuros registrarán su fecha real de ejecución.
+## Ejecución 15A — 2026-09-06
+
+Decisiones en la [ADR 15A](2026-09-06-legal-account-consent-v29-decision.md): contrato de pendientes,
+casos vacío/dedup/mixto, V29 suplementaria, locks/grants, expiración/rotación, paridad de alta,
+precedencia de autorización, flags y presupuestos. F se adelanta antes de C por los locks de actor.
+
+Cierre: 15 pruebas focales aprobadas, 8 Surefire + 7 Failsafe, dos XML con cero fallos/errores/omitidas.
+Java 21/PostgreSQL 16.14; package final 17:42:07 -03:00 y Failsafe final 17:43:24 -03:00. Registro
+SQL con rollback en diez etapas, guards de PK y aceptación completos, IDENTITY sin permisos de
+secuencia y orden AOP [200,401]. La ADR detalla comandos, corrección de la aserción inicial AOP,
+repetición PostgreSQL al reducir grants y límites de lo acreditado. No se ejecutó clean verify.
+Ambos JAR excluyen estos tests y mantienen V27/V28 idénticas. No se modificó runtime/config/frontend.
+
+Commit atómico: `docs(legal): precisa protocolo de aceptacion de cuenta`, local y sin push.
+Siguiente corte: 15B, núcleo puro de satisfacción y herencia. No se inicia otro corte dentro de
+este commit. V29 se implementará después, en 15F antes de 15C.

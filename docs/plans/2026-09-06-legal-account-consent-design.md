@@ -2,9 +2,10 @@
 
 Fecha: 2026-09-06
 
-Estado: propuesta de diseño y plan por cortes solicitada por el titular. Sólo documentación;
-implementación no iniciada. Las precisiones nuevas de este documento se revisan antes de 15A y
-no sustituyen silenciosamente el contrato congelado.
+Estado: diseño y ejecución de 15A autorizados por el titular el 2026-09-06. Las precisiones se
+ratifican en la [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) y se reflejan en
+FRONTEND_INTEGRATION sin cambiar campos/códigos HTTP. Este corte sólo agrega pruebas de
+viabilidad y documentación; las capacidades de aplicación y V29 siguen pendientes.
 
 ## Objetivo y resultado esperado
 
@@ -51,11 +52,11 @@ Fuentes contractuales y técnicas:
 | Compartir el datasource/JPA web para todo | Reutiliza repositorios y alta actual | Amplía privilegios web y exige acreditar mezcla JPA/JDBC, flush y manager común |
 | Encadenar servicios actuales con commits independientes | Cambios locales más pequeños | No cumple atomicidad de cuenta, agregado, evidencia e idempotencia; descartado |
 
-Se recomienda el primer enfoque. No se crea un motor genérico de workflows ni una transacción
+Se adopta el primer enfoque. No se crea un motor genérico de workflows ni una transacción
 distribuida. Se conservan las fachadas públicas y sus roles; los nuevos servicios componen las
 primitivas internas en su propia frontera, sin llamar a una fachada que haga otro commit.
 
-## Decisiones propuestas para cerrar las ambigüedades
+## Decisiones ratificadas en 15A
 
 ### 1. Composición y requisitos exigibles
 
@@ -77,7 +78,7 @@ El agregado representa todos los requisitos de los scopes aplicables. Después s
 satisfechos por evidencia exacta o herencia. Para el POST autenticado, «todos los obligatorios del
 snapshot» se precisa como todos los obligatorios aún pendientes, evaluados en la misma transacción.
 Puede incluir cualquier subconjunto de opcionales. En registro, sin evidencia previa, debe incluir
-siempre todos los obligatorios vigentes de REGISTRO. La precisión se documentará en el contrato en
+siempre todos los obligatorios vigentes de REGISTRO. La precisión queda documentada en el contrato en
 15A, sin cambiar el token ni los campos HTTP.
 
 ### 2. Evidencia exacta y herencia
@@ -96,7 +97,7 @@ no tenga pendientes devuelve requisitos vacíos conservando la revisión de sus 
 
 ### 3. Vacío, duplicados y resultados sin nuevos actos
 
-| Caso | Resolución propuesta |
+| Caso | Resolución ratificada |
 | --- | --- |
 | Replay de una clave exitosa | Reconstruir resultado durable antes de disponibilidad/freshness; no repetir negocio |
 | Lista no vacía íntegramente confirmada de forma canónica | Tras acreditar disponibilidad, 204 antes de freshness; puede haber nuevos pendientes que el refetch mostrará |
@@ -121,29 +122,28 @@ rechaza lotes vacíos; legal_idempotencia_insert_guard() exige que el lote refer
 de la transacción actual. Una nueva clave no puede apuntar a un lote histórico. V28 no cambia
 esa guarda. Por tanto, el ledger actual no puede representar los éxitos sin actos de la tabla anterior.
 
-Se prevé V29 para agregar un resultado de operación tipado que pueda acreditar actos existentes
-o un no-op validado. Debe conservar actor/tenant, revisión/fingerprint protegidos, hora autoritativa,
-expiración y referencias verificables, sin fabricar un lote ni evidencia. Los éxitos con nuevos
-actos conservan el vínculo atómico con su lote. La forma SQL exacta, índices y estrategia de
-coexistencia con el ledger V27 se cierran en 15A mediante prueba PostgreSQL y ADR; no se improvisan
-al llegar al POST. No se añade un segundo ledger sin resolver unicidad, lookup, replay, rotación,
-expiración y carreras entre ambos. Si se propone un ledger unificado para nuevas operaciones,
-debe leer y preservar la historia V27 y acreditar todos los vínculos de negocio, no sólo guardar 204.
+Se elige V29 suplementaria: legal_idempotencia_sin_actos y sus referencias a aceptaciones ya
+confirmadas para DEDUP/EMPTY. El ledger histórico sigue recibiendo registro y aceptación con nuevos
+actos. La decisión 15A fija DDL, FKs, índices, guards transitivos, unicidad cruzada bajo advisory locks,
+replay extendido mientras la fila exista y purga coordinada. No se fabrica lote, metadata ni evidencia.
+Los resultados técnicos usan TTL inicial PT25H (mínimo PT24H); la retención personal no tiene default.
+El retiro de keys exige cero filas en ambos ledgers y drenar operaciones de la write-version anterior.
 
 V29 preservará bytes, filas, fechas y relaciones históricas; no debilitará guards para poder
 crear lotes vacíos. Los inventarios actuales exigen V28 como última migración: su compatibilidad
 con V29 debe ser explícita, con preflight versionado y regresiones 12–14/CLI. Nunca aceptar cualquier
 versión >=28 ni sustituir fingerprints por un chequeo superficial de existencia.
 
-También se cerrará el permiso de bloqueo sobre users: FOR SHARE requiere permiso UPDATE sobre una
-columna y users no tiene la guarda inmutable de los punteros legales. No se declarará un rol de
-«sólo lectura de actor» mientras pueda modificar usuarios. Cualquier helper privilegiado o protección
-aditiva elegida debe tener alcance nominal, búsqueda segura, EXECUTE restringido y pruebas adversas.
-Esta decisión es requisito previo de los escritores, no autorización para dar UPDATE general.
-Un helper que sólo bloquee users no resuelve el segundo FOR SHARE ejecutado por el guard
-SECURITY INVOKER del lote. La ADR debe acreditar el grafo completo INSERT lote→guards con el rol
-final: proteger el grant nominal o encapsular la escritura completa con privilegios nominales,
-sin debilitar los guards. Probar únicamente el helper sería evidencia insuficiente.
+La protección elegida es un trigger global BEFORE UPDATE OF id FOR EACH STATEMENT en users y
+talleres, SECURITY INVOKER, que rechaza cambios reales/no-op/cero filas, incluso del owner. Sólo
+entonces se concede UPDATE(id) nominal para FOR SHARE; no UPDATE de estado, rol, password o taller.
+Las guardas históricas protegen los otros grants nominales de bloqueo en agregado, punteros, lotes,
+actos y cabecera de metadata. La prueba 15A atraviesa lote→todos los guards→documentos→metadata→ledger
+con rol restringido; un helper aislado no sería suficiente. No se añade SECURITY DEFINER.
+
+Esta protección también es requisito del lector privado. El orden se ajusta a A → B → F → C,
+seguido de D → E → G…Q, manteniendo las etiquetas y regresiones 12–14 en F. Ningún consumidor
+privado obtiene temporalmente permisos de mutación de PK sin su guarda.
 
 ## Arquitectura y flujo de datos
 
@@ -153,12 +153,12 @@ Tres contextos consumidores independientes: lectura privada, aceptación autenti
 Cada uno con datasource, pool, credenciales, presupuesto y verifier propios, sin parent ni fallback
 al datasource web, editorial, documental o público. El lector puede materializar agregados y sólo
 leer evidencia; el escritor autenticado no puede crear talleres/usuarios/suscripciones; registro
-puede insertar exclusivamente las columnas de negocio y usar las secuencias necesarias. Un cuarto
+puede insertar exclusivamente las columnas de negocio; IDENTITY no requiere grants de secuencia. Un cuarto
 rol de mantenimiento sólo puede purgar lo vencido según guardas. Ninguno recibe ownership/DDL.
 Un rol JDBC compartido no conoce al principal HTTP por recibir un userId. El aislamiento se
 acredita en principal→servicio→consulta y en las FKs de pertenencia; no se atribuye al helper SQL
-una autorización por actor que no posee. Si 15A elige imponer identidad dentro de PostgreSQL,
-deberá especificar un vínculo no falsificable por ese rol, no una variable de sesión modificable.
+una autorización por actor que no posee. No se elige imponer identidad del principal dentro de
+PostgreSQL mediante una variable de sesión modificable; el rol JDBC no demuestra quién llamó al endpoint.
 
 El AuthenticatedUserPrincipal actual ya se reconstruye desde BD por request. Los servicios reciben
 una identidad interna tipada, vuelven a contrastar user/taller/rol/estado y tokenVersion en la frontera
@@ -204,16 +204,17 @@ rotación con distribución previa a todas las réplicas y una versión activa d
 Una réplica sin el keyring acreditado no recibe tráfico. El límite total de espera idempotente es
 5 s, no 5 s por clave; timeout devuelve 409 IDEMPOTENCY_EN_PROGRESO y Retry-After: 1.
 
-El orden candidato de locks es idempotencia → gate editorial shared → actor → punteros/actos
-ordenados. 15A debe verificar compatibilidad con los locks que ya toma store/guards y fijar un
-único orden ejecutable. Dos claves distintas del mismo actor serializan o resuelven ON CONFLICT
-con relectura segura; no se captura una violación y continúa una transacción PostgreSQL abortada.
+El orden ratificado es idempotencia → gate editorial shared → advisory de actor → fila taller →
+fila usuario → punteros/actos ordenados. Lectores toman advisory de actor compartido y escritores
+exclusivo; actor/taller usan FOR SHARE. La rama de replay no toma después gate editorial, evitando
+inversión. La decisión 15A fija derivación, permisos y fronteras de observación. Dos claves distintas
+del mismo actor serializan o resuelven ON CONFLICT con relectura segura; no se captura una violación y continúa una transacción PostgreSQL abortada.
 Una colisión ajena, fingerprint diferente o incoherencia nunca se convierte en replay exitoso.
 
 La purga maneja expiración explícitamente: una fila vencida todavía puede ocupar UNIQUE. El rol de
-request no gana DELETE para resolverlo. La estrategia de generación/reutilización de claves
-vencidas y el worker deben quedar coherentes con keyring/locks antes de cerrar el store idempotente;
-ningún conflicto SQL se interpreta automáticamente como éxito.
+request no gana DELETE para resolverlo. Se conserva replay mientras exista el resultado, incluso
+vencido; lookup consulta ambos ledgers sin filtrar expiración. Purga y rotación respetan el protocolo de la decisión 15A. Ningún conflicto
+SQL se interpreta automáticamente como éxito.
 
 ### Metadata y retención
 
@@ -256,8 +257,8 @@ no se promete entrega garantizada, pero nunca se envía bienvenida por un alta r
 Flags nuevos independientes de lectura pública, apagados por defecto, sin credenciales ambientales.
 No registrar endpoints/componentes nuevos cuando su capacidad esté apagada. Para register, nunca
 silenciar un bloque legal enviado porque una capacidad esté apagada: fallo cerrado explícito,
-conservando validación de header/shape y sin crear cuenta. Los nombres exactos y matriz de flags
-quedan fijados en 15A; no se editan properties de entornos reales.
+conservando validación de header/shape y sin crear cuenta. Los nombres exactos, configuración de
+keyrings y matriz de flags quedan fijados en la decisión 15A; no se editan properties de entornos reales.
 
 Enforcement registro apagado: legacy sólo si faltan los tres elementos (header, revisión y lista).
 Bloque parcial → 400; completo → validación y persistencia atómicas. Enforcement encendido y ausencia
@@ -266,8 +267,9 @@ total → 428 con requisitos públicos actuales, salvo indisponibilidad que sigu
 Gate autenticado: sólo obligatorios pendientes pueden producir 428. Ausencia/corrupción editorial
 produce 503; opcionales no bloquean. Respuestas y errores privados no se cachean. Es un control
 transversal sobre rutas de negocio después de autenticación y autorización suficientes para no
-filtrar contratos a actores rechazados. El punto propuesto es un adaptador por método con orden
-posterior a la autorización efectiva y anterior al negocio; 15A acreditará ese orden. En el runtime
+filtrar contratos a actores rechazados. El punto elegido es un advisor de método ROLE_INFRASTRUCTURE
+con orden 401, posterior al @PreAuthorize efectivo de orden 200 y anterior al negocio; la prueba AOP 15A acredita esa cadena
+con Spring real. El matcher HTTP y el gate productivo siguen pendientes de 15N. En el runtime
 actual, un Filter tras AuthorizationFilter o un HandlerInterceptor aún puede preceder al
 @PreAuthorize de ADMIN: la ubicación en la cadena HTTP por sí sola no prueba la precedencia. Un
 USER con pendientes debe recibir 403 en una ruta ADMIN sin consultar requisitos, incluso si el
@@ -281,7 +283,7 @@ wildcard de cuenta/pagos/exportación ni se promete protección adicional de la 
 Perfil/suscripción no se agregan automáticamente a excepciones; su necesidad se decide con el flujo
 real. No se inventan URLs de logout, baja, cierre o supresión que todavía no existen.
 
-El cierre técnico puede acreditar el filtro apagado y su matriz en tests. La activación general
+El cierre técnico puede acreditar el advisor apagado y su matriz en tests. La activación general
 queda pendiente de vías funcionales de baja/salida/datos por rol, frontend compatible, publicación
 revisada, staging y telemetría. Nunca autoaceptar cuentas antiguas ni activar un bloqueo insoluble.
 
@@ -295,8 +297,8 @@ cadena inconsistente falla cerrado, no devuelve un prefijo como conjunto complet
 
 Heredar el esquema de presupuesto monotónico y cancelación JDBC sin reiniciar el reloj por fase.
 El presupuesto de registro contempla hashing de contraseña y no promete preempción de CPU. Los
-valores concretos se congelan con evidencia en 15A; las pruebas distinguen duración del GET/POST,
-liberación observada del servidor y resultado COMMITTED/ROLLED_BACK/UNKNOWN. No inferir SLA o heap.
+valores concretos se eligen en la decisión 15A y se medirán al implementar cada consumidor; las
+pruebas distinguen duración del GET/POST, liberación observada del servidor y resultado COMMITTED/ROLLED_BACK/UNKNOWN. No inferir SLA o heap.
 
 Pruebas puras por semántica; PostgreSQL 16 real con roles restringidos por persistencia; HTTP por
 actor, caché, error y rollout; concurrencia por clave/actor/editorial/estado de cuenta. clean verify
@@ -305,12 +307,11 @@ inspección de XML, ambos JAR y migraciones forma parte del gate; tests viejos n
 
 ## Estado de aprobación y siguiente paso
 
-Este corte sólo propone diseño y secuencia. No se ejecutó Maven ni se crearon clases, flags,
-migraciones o endpoints. Se revisaron contrato, guards SQL, roles, actor/registro y ciclo de vida
-con tres revisiones independientes. La skill brainstorming se aplicó; writing-plans referida por
-ella no está instalada tras buscar en skills/plugins, por lo que se utiliza el formato existente
-del repositorio: resultado por corte, rutas nominales, pruebas, dependencias y commit.
+Planificación inicial cerrada en b51cb5a; ejecución 15A autorizada. La decisión compañera registra
+el contrato preciso, el diseño SQL/grants/locks y los resultados focales. No se implementan aquí
+endpoints, migraciones ni servicios de aplicación. La skill brainstorming se aplicó; el formato
+por cortes conserva rutas nominales, decisiones, pruebas, dependencias y commit atómico sin push.
 
-El primer corte de ejecución es 15A: resolver y documentar las precisiones, acreditar las dos
-brechas de persistencia/permisos y fijar el diseño SQL/locks/flags antes de cualquier escritor.
-No se inicia automáticamente dentro de esta planificación.
+Siguiente corte: 15B, satisfacción exacta y herencia puras. Después se ejecuta 15F antes de 15C,
+por la protección de PK requerida por los locks del lector privado. El resto del bloque sigue
+pendiente; su cierre técnico tampoco habilita lanzamiento, frontend ni enforcement productivo.
