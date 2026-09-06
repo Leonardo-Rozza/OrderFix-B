@@ -16,7 +16,8 @@ record LegalDatabaseBoundaryMarker(Kind kind) {
         EDITORIAL,
         AGGREGATE,
         PUBLIC_DOCUMENT_READ,
-        PUBLIC_REQUIREMENTS
+        PUBLIC_REQUIREMENTS,
+        PRIVATE_REQUIREMENTS
     }
 
     static final class Guard {

@@ -274,6 +274,24 @@ final class LegalManifestDatabaseGate {
         }
     }
 
+    /** Exact V29 identity-protected private reader; historical consumers retain their own boundary. */
+    void requireExactPrivateRequirementsBoundary(
+            JdbcTemplate candidate,
+            LegalV29AcceptanceSchemaVerifier schema,
+            LegalPrivateRequirementsPrivilegeVerifier privileges) {
+        requireCommitOutcomeSafe();
+        if (jdbc != candidate
+                || jdbc.getDataSource() == null
+                || preflights.size() != 2
+                || preflights.get(0) != schema
+                || preflights.get(1) != privileges
+                || !schema.usesJdbc(candidate)
+                || !privileges.usesJdbc(candidate)) {
+            throw new IllegalArgumentException(
+                    "Los requisitos privados requieren schema y privilegios propios acreditados y ordenados");
+        }
+    }
+
     private void requireReadOnlyBoundary() {
         Object transactionManager = transactionTemplate.getTransactionManager();
         if (transactionManager == null

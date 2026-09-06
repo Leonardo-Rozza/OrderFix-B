@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B y 15F cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los demás cortes no están iniciados. Sigue 15C.
+Estado: 15A, 15B, 15F y 15C cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los cortes posteriores no están iniciados. Sigue 15D.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -163,6 +163,49 @@ inválidos, cadena intermedia y cero DML por construcción. Commit:
 `feat(legal): calcula pendientes y herencia de cuenta`.
 
 ## 15C — Lector privado y frontera de actor
+
+Baseline de ejecución: `c2fa300`, backend limpio, rama confirmada. Frontend `7545201`
+preservado con sus dos rutas no versionadas. Lista nominal confirmada antes de editar producción:
+
+- Nueve clases nuevas: `LegalPrivateRequirementsDatabaseConfiguration`,
+  `LegalPrivateRequirementsPrivilegeVerifier`, `LegalPrivateRequirementsReader`,
+  `LegalPrivateRequirementsReadService`, `LegalActorSnapshotReader`, `LegalActorSnapshotException`,
+  `LegalPrivateRequirementsDataSource`, `LegalPrivateRequirementsDeadline` y
+  `LegalPrivateRequirementsReadException`, todas en `db`.
+- Ampliaciones aditivas de `LegalManifestDatabaseGate` y `LegalDatabaseBoundaryMarker`: nueva
+  frontera privada exacta, sin cambiar la ejecución ni las allowlists de consumidores anteriores.
+- Nueve archivos propios de pruebas: `LegalPrivateRequirementsReadServiceIT`,
+  `LegalPrivateRequirementsDatabaseContextIT`, `LegalPrivateRequirementsPrivilegeVerifierIT`,
+  `LegalPrivateRequirementsReaderTest`, `LegalActorSnapshotReaderTest`,
+  `LegalPrivateRequirementsITSupport`, `LegalPrivateRequirementsDatabaseConfigurationTest`,
+  `LegalPrivateRequirementsDataSourceTest` y `LegalPrivateRequirementsDeadlineTest`.
+- Este plan y el diseño compañero; no se modifica SQL, auth, HTTP, frontend ni configuración runtime.
+
+El wrapper/deadline específico conserva el protocolo probado del consumidor público, con tipos
+privados propios para evitar acoplar credenciales y ampliar el alcance de una refactorización común.
+La configuración es explícita y no escaneable; `account-read.enabled` ausente/false no crea recursos,
+true exige sus tres propiedades y cualquier otro literal falla. No se importa todavía desde HTTP.
+El servicio recibe `AuthenticatedUserPrincipal` construido en servidor; no ofrece selección pública
+por ID, audiencia o tenant. Una discordancia de actor conserva error interno distinguible de
+indisponibilidad para el adaptador futuro. La autorización HTTP sigue fuera de este corte.
+Observación coherente: gate editorial shared → advisory shared de actor → taller/user FOR SHARE →
+store/replay V28 → composición completa y evidencia/linajes → evaluador15B → commit/cierre/deadline.
+Los escritores futuros deben respetar el advisory de actor; no se atribuye ese protocolo a un INSERT
+SQL arbitrario. Los límites, sentinelas, filtros y digests se acreditan antes de entregar pendientes.
+Se añade un techo defensivo de 128 MiB de fuentes históricas UTF-8 por observación, sumando una vez
+cada versión distinta de afirmación/documento que hidrata el catálogo histórico; se acredita el
+presupuesto por cabeceras antes de leer sus bytes. Conserva además 65536 filas de versiones/enlaces/
+evidencia, 4096 versiones por intervalo (base,objetivo] y batches/fetch 32. Las transiciones son
+como máximo tres por versión y se consultan en batches nominales con sentinela.
+
+El instante de observación se refresca en PostgreSQL después de estabilizar actor y filas, porque
+una aceptación puede confirmar mientras el lector espera ese advisory. El mismo boundary alimenta
+store y reader. Las fechas de lote/fuentes no pueden superar esa observación; la fecha histórica
+V27 de aceptación es transaction_timestamp(), por lo que no se exige que sea posterior a publicación
+ni se convierte en prueba de orden físico de COMMIT. Se acredita la cadena de transiciones de cada
+versión y la pertenencia del acto al conjunto/agregado histórico de su propio lote; no se reconstruye
+el agregado actual para validar historia. La revisión agregó esta pertenencia durante implementación.
+
 
 Resultado: servicio interno que hidrata composición completa, evidencia y linajes bajo credencial
 propia; entrega pendientes sólo al terminar la operación acreditada. Se ejecuta después de 15F,
@@ -356,7 +399,7 @@ SHA-256 de los artefactos de esta ejecución:
 
 Cierre: 15F aprobado; V27/V28 intactas, sin endpoints nuevos, configuración de servicios nuevos
 ni grants compartidos. Frontend preservado en 7545201 con sus dos rutas no versionadas.
-Un único commit del corte, sin push. Sigue 15C: lector privado PostgreSQL y frontera de actor.
+Un único commit del corte, sin push. Al cerrar 15F siguió 15C, cuya ejecución se registra aquí.
 
 ## 15G — Comando canónico y protocolo idempotente
 
@@ -643,3 +686,101 @@ la integración, transacciones, intervalos SQL completos y sus presupuestos se a
 Commit atómico: `feat(legal): calcula pendientes y herencia de cuenta`, local y sin push.
 Siguiente: 15F, V29 y compatibilidad estricta, respetando la reordenación aprobada en 15A. Antes de
 editar F se inventariarán sus archivos y el alcance del gate transversal; este commit no lo inicia.
+
+## Ejecución 15C — 2026-09-06
+
+Corte cerrado desde `c2fa300`: nueve clases productivas nuevas, dos ampliaciones aditivas de la
+frontera compartida, nueve archivos propios de pruebas/fixture y los dos documentos del bloque.
+Son 22 rutas nominales. V27/V28/V29 y los inventarios/allowlists históricos permanecen intactos.
+El servicio es interno, explícito, sin controller, endpoint ni importación en el contexto web.
+No se cambian credenciales/configuración de entornos compartidos ni frontend.
+
+La revisión independiente cubrió actor, permisos, origen histórico, coherencia y recursos. Los
+casos acreditan ADMIN/USER, mismo taller/otro taller, cambio legítimo de rol, principal desactualizado,
+active/taller.activo/tokenVersion, fallos de locks/preflight, REQUIRES_NEW/READ_COMMITTED, rollback y
+cierre. Reutilizar la observación no hace DML de agregado ni de evidencia. Se conserva la revisión
+completa cuando la lista de pendientes es vacía; herencia y aceptación exacta no fabrican actos.
+
+La herencia se probó con REPLACE reales false→true→false y 130 versiones persistidas de una línea:
+la lectura observó 131 filas de versiones de requisitos incluyendo la segunda línea vigente.
+El true temprano no se perdió tras varios batches y bytes/fechas/xmin de la evidencia original
+permanecieron iguales. No se usó replica para producir esa historia ni se fingieron timestamps.
+Una aceptación confirma bajo advisory exclusivo mientras el lector espera el shared; tras adquirirlo,
+el lector acredita el resultado completo con la hora refrescada y sin DML de agregado.
+
+Una base efímera separada creó evidencia SCOPE_V1 genuina en V27, con la transacción empezada antes de
+publicar el catálogo, y la migró a V29 con guardas y constraints activos. La lectura la reconoce
+EXACT y preserva sus columnas históricas/xmin. Las inyecciones de corrupción sí son explícitas y
+están limitadas a fixtures desechables: digest/documentos incompletos, snapshot de lote ajeno y
+vigencia documental histórica imposible fallan cerrados. La activación de cada documento respeta
+su propio vigente_desde conforme a V27; no se impone orden temporal entre el lote y la publicación.
+
+La operación usa 15 s monotónicos exteriores, pool máximo 2, borrow/connect/login/validation/cancel
+1 s, statement/socket 5 s, locks 1 s y fetch/batch 32. Se verificaron sentinelas, presupuestos de
+65536 filas y 128 MiB de fuentes históricas, transiciones y cierre/cancelación. No se afirma SLA,
+heap ni capacidad integral de 15P: el plazo impide entregar observaciones vencidas y la limpieza
+puede finalizar después. La coherencia presupone que los futuros escritores respeten el advisory
+de actor; no se atribuye esa propiedad a un INSERT arbitrario con otra credencial.
+
+### Evidencia focal y correcciones
+
+Se ejecutó Java 21.0.10, Maven 3.9.11 y PostgreSQL 16.14 en contenedores efímeros. No se ejecutó
+clean verify: las únicas ampliaciones comunes son un nuevo marcador y un método de acreditación;
+se probaron sus suites y las regresiones públicas. El gate integral fresco sigue reservado a los
+cortes transversales previstos y 15Q. Reportes XML inspeccionados por clase, sin sumar repeticiones.
+
+- Compilación inicial: un test usaba un setter de password inexistente; se corrigió con el builder
+  de fixture, sin modificar User ni auth.
+- Primera tanda: 220 casos, una aserción de configuración fallida. Hikari crea su MXBean al
+  inicializar el pool aunque no abra conexiones; se verifican cero conexiones, no MXBean nulo.
+- Primera integración: 96 casos, 60 errores del fixture ACL; servicio/contexto aprobaron sus 33 casos.
+  REVOKE SELECT de tabla también revoca grants de columnas del mismo rol: el test ahora restaura
+  sólo las columnas nominales de users/talleres. No se relajó el verificador de producción.
+- Siguiente focal: 102 unitarios y 82 PostgreSQL aprobados; incluye 63 casos de permisos y 19 del
+  servicio con el linaje de 130 versiones. Terminó 20:44:54 -03:00 en 3:24 min.
+- Compatibilidad: 36 unitarios y 79 PostgreSQL aprobados; 22 privados y 57 regresiones públicas,
+  incluida la historia V27 y la observación concurrente. Terminó 20:52:50 -03:00 en 4:02 min.
+- Focal final tras el control de vigencia documental: 36 unitarios y 23 PostgreSQL aprobados,
+  más el gate `verify-no-secret-properties-in-jar` para ambos artefactos. Terminó 2026-09-06T20:56:38-03:00 en  02:38 min.
+
+| Suite focal nueva | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalActorSnapshotReaderTest | 39 | 0 / 0 / 0 |
+| LegalPrivateRequirementsReaderTest | 36 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDatabaseConfigurationTest | 45 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDataSourceTest | 21 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDeadlineTest | 9 | 0 / 0 / 0 |
+| LegalPrivateRequirementsReadServiceIT | 23 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDatabaseContextIT | 16 | 0 / 0 / 0 |
+| LegalPrivateRequirementsPrivilegeVerifierIT | 63 | 0 / 0 / 0 |
+
+Total único de este corte: **430 pruebas aprobadas**, 252 nuevas y 178 regresiones; 15 XML,
+271 Surefire y 159 Failsafe, cero fallos/errores/omitidas en sus ejecuciones finales. Regresiones:
+LegalManifestDatabaseGateTest (41), LegalDatabaseBoundaryMarkerTest (3),
+LegalPublicRequirementsDatabaseConfigurationTest (58), LegalRequiredSetAggregateServiceTest (19),
+LegalPublicRequirementsReadServiceIT (34), LegalPublicRequirementsDatabaseContextIT (7) y
+LegalPublicDocumentReadServiceIT (16).
+
+Los comandos se ejecutaron secuencialmente, sin Maven concurrente sobre target. La última ejecución:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -Dtest=LegalPrivateRequirementsReaderTest \
+  -Dit.test=LegalPrivateRequirementsReadServiceIT package \
+  failsafe:integration-test failsafe:verify antrun:run@verify-no-secret-properties-in-jar
+```
+
+La auditoría independiente comparó 42 clases de las once fuentes productivas nominales
+con target/classes en ambos JAR; los 20 archivos de código/pruebas no cambiaron durante el gate final.
+Los nueve tipos de pruebas/fixture no están empaquetados, Start-Class web/CLI es correcto y no hay
+application-secret.properties. V27/V28/V29 coinciden byte a byte con sus fuentes congeladas;
+V29 mantiene SHA-256 `976a66c0a7f234e79c1ba84be4721ecb2407a1d6e076f2444630ccb9afc949e9`.
+
+| Artefacto final | SHA-256 |
+| --- | --- |
+| CLI legal | `0f10b8cd0d7abb940681f6faa930132661e7d9f37d3187f99c93e2cf8539361c` |
+| Aplicación | `1dd32ab56237422ced1905618ba9ff642099b8d5365014e4b8b5fef828c28605` |
+
+Cierre: commit atómico `feat(legal): consulta pendientes privados`, local y sin push. Backend en la
+rama prevista; frontend preservado en 7545201 con sus dos rutas no versionadas. Sigue **15D — GET
+autenticado de requisitos**, usando este servicio y conservando la frontera privada.

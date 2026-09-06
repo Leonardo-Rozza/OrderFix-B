@@ -2,11 +2,12 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B y 15F cerrados el 2026-09-06, con ejecución autorizada por el titular. La
+Estado: 15A, 15B, 15F y 15C cerrados el 2026-09-06, con ejecución autorizada por el titular. La
 [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) fija el protocolo ratificado en
 FRONTEND_INTEGRATION. 15B agrega el núcleo puro; 15F implementa V29 y compatibilidad estricta,
-acreditadas con un gate integral fresco de 5682 pruebas aprobadas. Las capacidades de aplicación y endpoints de este bloque
-siguen pendientes. No cambian campos/códigos HTTP.
+acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el lector privado interno,
+acreditado con 430 pruebas focales y regresiones. Los endpoints y escritores de cuenta siguen pendientes.
+No cambian campos/códigos HTTP; sigue 15D.
 
 ## Objetivo y resultado esperado
 
@@ -96,7 +97,7 @@ Una aceptación explícita posterior puede ser la nueva base. Un key/documento n
 La herencia es sólo una decisión de lectura: no inserta actos ni mueve aceptadoEn. Un GET que ya
 no tenga pendientes devuelve requisitos vacíos conservando la revisión de sus scopes completos.
 
-15B implementa esta regla en un núcleo puro, todavía sin consumidor de aplicación:
+Al cerrar 15B, esta regla quedó en un núcleo puro; 15C lo integra en su lector interno:
 LegalActorSnapshot conserva identidad/rol/estado observados; LegalAuthenticatedRequirements.Snapshot
 valida todos los scopes/contenido canónico y calcula sus revisiones completas; LegalRequirementLineage
 indexa las líneas, versiones y referencias acreditadas; LegalRequirementSatisfactionEvaluator produce
@@ -349,3 +350,35 @@ por cortes conserva rutas nominales, decisiones, pruebas, dependencias y commit 
 Siguiente corte: 15C, lector privado PostgreSQL y frontera de actor,
 con la protección de PK requerida por sus locks. El resto del bloque sigue
 pendiente; su cierre técnico tampoco habilita lanzamiento, frontend ni enforcement productivo.
+
+## Implementación 15C — frontera interna de lectura cerrada
+
+El lector privado nace sobre V29 exacta y dispone de credencial propia bajo account-read, sin
+registro automático ni importación HTTP en este corte. Recibe el principal servidor existente y
+contrasta rol, estado, tenant y tokenVersion en una transacción nueva READ_COMMITTED. Mantiene gate
+editorial compartido, advisory compartido del actor y locks de filas taller→usuario hasta confirmar.
+Store/replay, composición completa, fuentes, evidencia y evaluador comparten una sola conexión.
+
+La ACL admite SELECT nominal de 22 tablas del grafo/evidencia y siete columnas de actor, INSERT de
+agregados/scopes, cuatro UPDATE de columnas protegidas exclusivamente para locks y siete funciones.
+No amplía las allowlists previas ni otorga acceso a contraseña, metadata o ledgers idempotentes.
+El servicio entrega el resultado únicamente tras commit, liberación y deadline final de 15 s; un
+fallo de cierre tampoco permite entregar una respuesta, aunque COMMIT haya sido confirmado.
+
+La hidratación conserva todos los scopes antes de filtrar evidencia. Su lectura de intervalos
+completos y batches 32 conserva la exigencia de reaceptación de versiones intermedias; incluye
+versiones publicadas nunca activadas y evita usar una versión borrador/futura como bloqueo anticipado.
+Acredita pertenencia SCOPE_V1/AGGREGATE_V1 del acto a su snapshot histórico y digests de los textos
+canónicos reales. Añade un techo defensivo de 128 MiB de fuentes históricas distintas, manteniendo
+los límites estructurales previos y sentinelas antes de devolver una observación.
+
+Se refresca la hora de observación después de adquirir los locks de actor. La fecha de aceptación
+histórica V27 procede del comienzo de la transacción: no se exige orden relativo contra publicación,
+activación o retiro para inferir causalidad física. Se comprueban fechas no posteriores a la
+observación y la cadena legal de transiciones, además de pertenencia e inmutabilidad del snapshot.
+
+Cierre acreditado: 430 pruebas únicas aprobadas, 252 nuevas y 178 regresiones, sin fallos, errores
+ni omitidas. Se probaron roles, locks reales, replay sin DML, rollback/cierre, SCOPE_V1 anterior a V28,
+herencia con 130 versiones reales, origen de lote y coherencia bajo aceptación concurrente. Ambos
+JAR finales contienen las clases verificadas y V27/V28/V29 intactas; la evidencia detallada y las
+correcciones de fixtures constan en el plan. Commit atómico local, sin push. Sigue 15D.
