@@ -2,10 +2,10 @@
 
 Fecha: 2026-09-06
 
-Estado: diseño y ejecución de 15A autorizados por el titular el 2026-09-06. Las precisiones se
-ratifican en la [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) y se reflejan en
-FRONTEND_INTEGRATION sin cambiar campos/códigos HTTP. Este corte sólo agrega pruebas de
-viabilidad y documentación; las capacidades de aplicación y V29 siguen pendientes.
+Estado: 15A y 15B cerrados el 2026-09-06, con ejecución autorizada por el titular. La
+[decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) fija el protocolo ratificado en
+FRONTEND_INTEGRATION. 15B agrega únicamente el núcleo puro y pruebas; las capacidades de
+aplicación, endpoints y V29 siguen pendientes. No cambian campos/códigos HTTP.
 
 ## Objetivo y resultado esperado
 
@@ -94,6 +94,34 @@ Una aceptación explícita posterior puede ser la nueva base. Un key/documento n
 
 La herencia es sólo una decisión de lectura: no inserta actos ni mueve aceptadoEn. Un GET que ya
 no tenga pendientes devuelve requisitos vacíos conservando la revisión de sus scopes completos.
+
+15B implementa esta regla en un núcleo puro, todavía sin consumidor de aplicación:
+LegalActorSnapshot conserva identidad/rol/estado observados; LegalAuthenticatedRequirements.Snapshot
+valida todos los scopes/contenido canónico y calcula sus revisiones completas; LegalRequirementLineage
+indexa las líneas, versiones y referencias acreditadas; LegalRequirementSatisfactionEvaluator produce
+EXACT/INHERITED/PENDING y una lista pendiente inmutable con el token original. Sólo un obligatorio
+pendiente señala bloqueo. La proyección resultante no es un DTO ni un permiso de acceso.
+
+Antes de decidir se comprueban todos los requisitos actuales y toda la evidencia entregada, incluso
+si aparece una coincidencia exacta. Cada acto pertenece al mismo user/taller, conserva su rol/fecha
+históricos y coincide con los digests/referencias de su versión canónica. Requisito/documento nuevo
+no se satisface por coincidencia de digest ni por unir documentos de varias bases. Si varias bases
+individuales sirven, todas se evalúan; el UUID menor en representación canónica sólo desempata el
+identificador de evidencia explicativo, sin preferencia cronológica ni cambio de satisfacción.
+
+Los ordinales admiten saltos y no se ordenan reparando inputs. La completitud del intervalo y la
+historia de publicación requieren acreditación SQL independiente en 15C; no se deducen de ausencia
+de números ni de un booleano aportado al constructor. El núcleo incluye PUBLICADA y estados
+terminales del intervalo (base,objetivo], excluye BORRADOR y versiones posteriores al objetivo, y
+recorre documentos por línea global. Usa índices de prefijos y búsqueda binaria para consultar
+flags sin volver a escanear toda la línea por cada base. Cuenta hasta 4096 filas por intervalo,
+incluidos borradores suministrados, y 65536 filas totales de versiones/enlaces/evidencia; exceso no
+se trunca. El reader deberá acreditar además conteos/bytes/tiempos antes de hidratar sus inputs.
+
+El núcleo recalcula digests de los textos actuales que recibe. El catálogo histórico sólo contiene
+metadatos/digests: su coincidencia con el texto histórico y transiciones se acredita en 15C, no se
+atribuye al evaluador una verificación de Markdown que no recibió. Keys conservan el schema
+editorial congelado (ASCII canónico, máximo 100); no se amplían al VARCHAR(120) físico.
 
 ### 3. Vacío, duplicados y resultados sin nuevos actos
 
@@ -307,11 +335,12 @@ inspección de XML, ambos JAR y migraciones forma parte del gate; tests viejos n
 
 ## Estado de aprobación y siguiente paso
 
-Planificación inicial cerrada en b51cb5a; ejecución 15A autorizada. La decisión compañera registra
-el contrato preciso, el diseño SQL/grants/locks y los resultados focales. No se implementan aquí
+Planificación inicial cerrada en b51cb5a y 15A en 5054826. El núcleo puro 15B quedó implementado
+y acreditado con 117 pruebas nuevas y 24 regresiones focales (141, cero fallos/errores/omitidas).
+El plan compañero registra comandos, fechas y límites de la evidencia. No se implementan aquí
 endpoints, migraciones ni servicios de aplicación. La skill brainstorming se aplicó; el formato
 por cortes conserva rutas nominales, decisiones, pruebas, dependencias y commit atómico sin push.
 
-Siguiente corte: 15B, satisfacción exacta y herencia puras. Después se ejecuta 15F antes de 15C,
-por la protección de PK requerida por los locks del lector privado. El resto del bloque sigue
+Siguiente corte: 15F, persistencia V29 y compatibilidad estricta, antes de 15C por la protección
+de PK requerida por los locks del lector privado. El resto del bloque sigue
 pendiente; su cierre técnico tampoco habilita lanzamiento, frontend ni enforcement productivo.

@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A cerrado el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los cortes restantes no están iniciados.
+Estado: 15A y 15B cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los demás cortes no están iniciados. Sigue 15F antes de 15C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -120,6 +120,29 @@ con v1, documentarla para revisión antes de cambiar el contrato; no reducir rep
 Commit: `docs(legal): precisa protocolo de aceptacion de cuenta`.
 
 ## 15B — Núcleo puro de pendientes y herencia
+
+Baseline de ejecución: `5054826`, backend limpio, rama confirmada. Frontend `7545201` preservado
+con sus dos rutas no versionadas. Whitelist de 15B, confirmada antes de integrar código:
+cuatro clases core y dos tests nombrados abajo, este plan y el diseño compañero. Son ocho archivos;
+no se modifican tipos/validadores públicos, migraciones, configuración, HTTP ni frontend.
+
+Implementación acordada: actor servidor inmutable; snapshot completo de scopes con sus ordinales,
+contenido y revisión antes de filtrar; catálogo de líneas/versiones y evidencia propia sin metadata
+personal; evaluador exacto y después herencia por cada base íntegra. El resultado conserva scopes,
+revisión y orden, distingue EXACT/INHERITED/PENDING y sólo señala bloqueo por obligatorios pendientes.
+Las clases no son prueba de autenticación ni de completitud SQL. Se validan todos los inputs antes
+de usar un éxito, y una inconsistencia no se convierte en pendiente ni en satisfacción.
+
+Precisión confirmada contra V27: lineage_ordinal es positivo y estrictamente ordenado, puede tener
+saltos válidos y no se interpreta como versión humana. El reader 15C acreditará todos los miembros
+del intervalo; una lista/booleano no demuestra que no omitió una versión publicada. Se consideran
+PUBLICADA/VIGENTE/REEMPLAZADA/RETIRADA en (base,objetivo], también intermedios nunca activados;
+BORRADOR y ordinales posteriores no anticipan bloqueo. Las líneas documentales no tienen filtro de
+contexto. La herencia evalúa bases individuales y nunca une documentos de actos distintos.
+Keys siguen el schema editorial congelado (regex canónica, máximo 100), no el máximo físico SQL120.
+Capacidad: 4096 filas por intervalo observado y 65536 filas de versiones/enlaces/evidencia;
+exceso falla cerrado. El reader conserva además sus budgets SQL/bytes y prueba conteos completos.
+
 
 Resultado: decisión inmutable de satisfacción/pendientes y obligatoriedad a partir de snapshots
 acreditados. Sin JDBC, Spring, HTTP, flags ni nueva evidencia.
@@ -458,5 +481,53 @@ repetición PostgreSQL al reducir grants y límites de lo acreditado. No se ejec
 Ambos JAR excluyen estos tests y mantienen V27/V28 idénticas. No se modificó runtime/config/frontend.
 
 Commit atómico: `docs(legal): precisa protocolo de aceptacion de cuenta`, local y sin push.
-Siguiente corte: 15B, núcleo puro de satisfacción y herencia. No se inicia otro corte dentro de
-este commit. V29 se implementará después, en 15F antes de 15C.
+Al cerrar 15A siguió 15B, núcleo puro de satisfacción y herencia, registrado a continuación.
+V29 se implementará en 15F antes de 15C.
+
+
+## Ejecución 15B — 2026-09-06
+
+Corte cerrado: cuatro tipos core nuevos y dos suites propias, con plan/diseño actualizados. No se
+modifican validadores públicos, política mínima, cálculos congelados, migraciones ni frontend.
+El snapshot valida la composición y los textos completos antes de calcular revisiones; el evaluador
+contrasta toda la evidencia propia con metadatos canónicos antes de decidir. La evidencia exacta
+prevalece; la herencia considera cada base íntegra, todos los flags publicados del intervalo y
+cada key documental actual. Opcionales pendientes se conservan y no señalan bloqueo.
+
+La revisión independiente contrastó semántica contractual, SQL de linajes y código puro. Se preservan
+huecos válidos de ordinal, flags de versiones intermedias PUBLICADA/REEMPLAZADA/RETIRADA, bases
+individuales sin unión ficticia, rol histórico, orden de manifiesto y token completo. Referencias,
+digests, identidad o extremos incompatibles se rechazan, aun detrás de una primera evidencia exacta.
+No se afirma que una lista pruebe completitud de PostgreSQL ni SHA de textos históricos ausentes.
+
+Comandos focales ejecutados secuencialmente con Java 21.0.10 y Maven 3.9.11:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -Dtest=LegalAuthenticatedRequirementsTest,LegalApplicableScopeResolverTest,LegalRequiredSetRevisionCalculatorTest,LegalRequiredSetAggregateRevisionCalculatorTest package
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -Dtest=LegalRequirementSatisfactionEvaluatorTest test
+```
+
+| Suite | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalAuthenticatedRequirementsTest | 46 | 0 / 0 / 0 |
+| LegalRequirementSatisfactionEvaluatorTest | 71 | 0 / 0 / 0 |
+| LegalApplicableScopeResolverTest | 7 | 0 / 0 / 0 |
+| LegalRequiredSetRevisionCalculatorTest | 8 | 0 / 0 / 0 |
+| LegalRequiredSetAggregateRevisionCalculatorTest | 9 | 0 / 0 / 0 |
+
+Total focal: 141 (117 nuevos + 24 regresiones), cinco XML inspeccionados sin sumar reportes antiguos.
+package terminó 18:21:33 -03:00 en 18.848 s; evaluator terminó 18:22:23 -03:00 en 12.633 s. Ambas
+corridas aprobaron sin fallos iniciales. Fronteras verificadas: 8 scopes, 256 requisitos por scope,
+keys de 100, 4096/4097 filas en intervalos de requisito/documento y presupuesto conjunto de 65536
+contando versiones, referencias y evidencia. Son vectores puros; no mediciones de servicio o SLA.
+
+Ambos JAR contienen las cuatro clases core idénticas a target/classes, excluyen sus tests y conservan
+V27/V28 byte a byte con sus SHA-256 congelados. Sin dependencias de Spring/JDBC/HTTP ni DML en las
+clases nuevas. No se ejecutó PostgreSQL ni clean verify: no hay cambio de persistencia/transversal;
+la integración, transacciones, intervalos SQL completos y sus presupuestos se acreditarán en C/F/P.
+
+Commit atómico: `feat(legal): calcula pendientes y herencia de cuenta`, local y sin push.
+Siguiente: 15F, V29 y compatibilidad estricta, respetando la reordenación aprobada en 15A. Antes de
+editar F se inventariarán sus archivos y el alcance del gate transversal; este commit no lo inicia.
