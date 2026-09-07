@@ -4,7 +4,8 @@ Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
-15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I1 cerrado con 304 pruebas; siguen I2/I3.
+15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I1 cerrado con 304 pruebas,
+15I2 con 307; sigue I3 para completar la aceptación interna y atómica.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -872,6 +873,21 @@ entradas duplicadas, tests ni application-secret. Hashes SHA-256 de artefactos:
 Cierre con los ocho archivos nominales y commit `feat(legal): selecciona aceptaciones y acredita evidencia`,
 sin push. I1 implementa selección/lectura internas; la operación completa sigue en I2/I3.
 
+### Ejecución 15I2 — infraestructura aislada
+
+Baseline `94b4d65`, backend limpio y rama confirmada antes de integrar los diez Java nominales.
+Se mantiene la lista ya ratificada: nueve archivos nuevos, marker común y ambos documentos.
+Gate focal: configuración/frontera nuevas, marker, configuración privada, keyring y codec/política
+de metadata; PostgreSQL para privilegios/aislamiento nuevos y regresiones de privilegios privados
+y V29. El marker compartido obliga además al clean verify final en I3.
+
+Primera corrida I2: Surefire ejecutó 205 casos y encontró 3 fallos + 11 errores exclusivamente en
+ConfigurationTest; Failsafe no llegó a ejecutarse. La condición se evalúa ya en register y la
+propiedad requerida ausente produce IllegalStateException en esta versión de Spring. Se corrige
+la prueba nominal para envolver register/refresh, acreditar el error concreto y cerrar el contexto
+en cualquier salida. La configuración productiva conserva su rechazo estricto; no se relaja para
+adaptarla a una assertion incorrecta. Las 17 pruebas de frontera y las regresiones pasaron.
+
 Lista nominal 15I2:
 
 - Nuevos `db/LegalAcceptancePrivilegeVerifier.java`, `db/LegalAcceptanceDatabaseConfiguration.java`,
@@ -894,6 +910,45 @@ I2 rechaza secretos AES/HMAC iguales y carece de fallback a otro subsistema. La 
 HTTP de 15J/15M, que dispone de la configuración web, debe verificar además la separación respecto
 de JWT/credenciales de equipos antes de crear el contexto aislado; no se atribuye esa comprobación
 a un contexto que no recibe tales secretos. La retención personal sigue explícita y sin default.
+
+### Cierre 15I2 — infraestructura y permisos de aceptación
+
+Gate focal final aprobado el 2026-09-07 a las 08:21:08 -03:00, Java 21/PostgreSQL 16.14:
+**307 pruebas**, 205 Surefire y 102 Failsafe, sin fallos/errores/omitidas. Los once XML exactos:
+AcceptanceDatabaseConfiguration (36), AcceptanceTransactionBoundary (17), DatabaseBoundaryMarker
+(3), PrivateRequirementsDatabaseConfiguration (46), IdempotencyKeyring (40), MetadataCodec (50),
+MetadataPolicy (13), AcceptancePrivilegeVerifier (26), AcceptanceDatabaseIsolation (5),
+PrivateRequirementsPrivilegeVerifier (63) y V29AcceptancePrivilegeVerifier (8). Se ejecutó package,
+failsafe:integration-test, failsafe:verify y el gate de propiedades secretas del JAR.
+
+La primera corrida falló en 14 assertions/capturas de ConfigurationTest según lo documentado arriba;
+se corrigió sólo ese test nominal y se repitió el gate entero. No se cambió código productivo por
+esas assertions. La revisión independiente de infraestructura no encontró defectos materiales.
+
+La frontera valida la instancia/manager/propagación/aislamiento/presupuestos antes de tomar conexión
+y acredita READ_COMMITTED mutable real en PostgreSQL. Preflight V29 y privilegios ocurren antes de
+la operación; la entrada editorial sólo se ofrece para una reserva MISS del mismo JDBC. La clase
+de deadline/cleanup privada se reutiliza con un pool y una instancia independientes. El rol exacto
+carece de DDL, ownership, membresías, secuencias, DELETE, escritura de cuentas y lectura de secretos
+o ciphertext; su capacidad de UPDATE se limita a columnas necesarias para locks protegidos.
+
+Las pruebas de aislamiento usan configuración Spring real y acreditan REQUIRES_NEW ante una
+transacción exterior readonly/REPEATABLE_READ del mismo datasource y de otro datasource: se
+suspende y restaura el contexto exterior, y su rollback no elimina el ledger interno confirmado.
+Se prueba rechazo de replay al intentar entrar al grafo editorial. La configuración queda sin
+activar y sin endpoints; retención personal explícita y claves AES/HMAC separadas, sin fallback.
+La separación respecto de secretos JWT/equipos se comprobará en el bridge que los conoce (15J/M).
+
+Auditoría final: diez fuentes coinciden con el gate; las 21 clases nuevas y del marker, incluidas
+las internas, son idénticas a target/classes en ambos JAR. Entrypoints correctos, sin clases I3,
+tests, dependencias de test, propiedades secretas ni duplicados. V27/V28/V29 coinciden en fuente,
+target/classes y ambos artefactos. SHA-256:
+
+- Web: `5a79fe0ce29fbec95af0b4696747ce4452b0dacca693d8c0a2915092f54bc8ff`.
+- CLI: `ca31a69d996d75cadb6123769450257e460845c277bd00d40b20a3f567546f58`.
+
+Cierre con doce archivos nominales y commit `feat(legal): aisla escritura de aceptaciones`, sin push.
+I1 quedó en `94b4d65`; sigue I3 con la operación completa y el clean verify final.
 
 Lista nominal 15I3:
 

@@ -11,7 +11,7 @@ pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
-15I1 cerrado con 304 pruebas; siguen I2/I3 para completar la aceptación atómica interna.
+15I1 cerrado con 304 pruebas e I2 con 307; sigue I3 para completar la aceptación atómica interna.
 
 ## Objetivo y resultado esperado
 
@@ -710,3 +710,15 @@ metadata, con límites y verificación agregada en batches. Preserva SCOPE_V1 ge
 editorial cuando una transacción anterior publica después de aceptar. Selección pura y errores
 contractuales tipados no crean una ruta HTTP. Auditoría de ambos JAR, fuentes y V27/V28/V29 aprobada;
 evidencia y hashes en el plan. Commit atómico I1, sin push; frontend preservado.
+
+I2 inicia sobre `94b4d65`, árbol limpio tras I1. Configuración explícita no escaneable, pool propio y
+rol restringido sin credenciales heredadas; flags exactos, retención explícita y keyrings separados.
+El marker ACCEPTANCE sólo identifica esta frontera para impedir su mezcla con otros contextos.
+
+15I2 cerrado con 307 pruebas frescas (205 unitarias + 102 PostgreSQL), sin fallos/errores/omitidas
+en su repetición final. El primer intento detectó assertions incorrectas del ciclo register/refresh
+y tipo de error Spring, corregidas en el test nominal sin relajar producción. Frontera propia
+REQUIRES_NEW/READ_COMMITTED, preflight V29/privilegios, orden replay antes de editorial, suspensión
+y restauración del llamador y commit independiente acreditados. Auditoría de diez fuentes, 21
+clases nuevas/del marker y ambos JAR aprobada; hashes V27/V28/V29 intactos. El servicio final se
+compone en I3, que además ejecutará clean verify por el marker común. Commit atómico sin push.
