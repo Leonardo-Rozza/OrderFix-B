@@ -5,7 +5,8 @@ Fecha: 2026-09-06
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
 15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I cerrado en I1/I2/I3,
-con clean verify fresco de 6959 pruebas. Sigue 15J (POST autenticado y errores).
+con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; sigue 15J2
+(composición aislada y actor antes del payload); el POST queda pendiente de 15J3.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -46,7 +47,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
 | 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
-| 15J | POST de aceptaciones y errores contractuales | D, E, I |
+| 15J | POST de aceptaciones y errores contractuales; J1 cerrado, J2/J3 pendientes | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
 | 15L | Escritor interno de registro atómico | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
@@ -1103,6 +1104,113 @@ Gate focal: matriz de header/JSON/DTO, 400/409/503, 204 sin cuerpo, no-store, Re
 progreso, no leaks de contraseña/IP/UA/HMAC, replay antes de freshness y lista vacía con sus reglas.
 CORS conserva contrato actual; si se cambia filtro común, ampliar gate por impacto.
 Commit: `feat(legal): publica aceptaciones del usuario`.
+
+### División de 15J ratificada antes de editar código
+
+15J combina protocolo de entrada, composición del servicio y exposición de seguridad/HTTP. Se
+separa en J1/J2/J3; cada uno termina compilable, con gate propio y commit atómico. La ruta de escritura
+se publica sólo al cerrar J3. No cambian el wire, las migraciones ni los estados durables de 15I.
+
+- **15J1 — parser y decisiones de transporte.** Baseline `d7d87c8`, backend limpio en
+  `codex/lanzamiento-publico-backend`; frontend `7545201` y sus dos rutas no versionadas preservados.
+  Nuevos `http/LegalAcceptanceRequests.java`, `http/LegalAcceptanceHttpException.java` y sus tests
+  nominales `LegalAcceptanceRequestsTest.java` / `LegalAcceptanceHttpExceptionTest.java` en el paquete
+  HTTP equivalente. Existentes: sólo este plan y el diseño compañero (seis archivos en total).
+  Sin beans/controller/advice nuevos. Gate focal: límites y sintaxis hostiles, presencia/precedencia
+  del header, estructura exacta, tipado sin coerción, preservación de duplicados/false/vacío,
+  inmutabilidad/redacción y clasificación segura de todos los errores de 15I. Regresión de comando
+  canónico y proyección privada. Commit: `feat(legal): valida solicitudes de aceptacion`.
+- **15J2 — composición aislada y actor antes del payload.** Partirá del commit de J1; confirmar
+  baseline y whitelist nominal antes de editar. Previstos `http/LegalAcceptanceHttpConfiguration.java`,
+  `http/LegalAcceptanceHttpSettings.java` y tests correspondientes; ampliación nominal del servicio
+  interno y sus pruebas para diferir la lectura del request hasta observar el actor persistido,
+  dentro de su frontera existente. Mantener el API interno actual y el segundo chequeo bajo locks.
+  El bridge selecciona sólo propiedades legales, verifica separación de todas las claves retenidas
+  frente a JWT/cifrado de equipos, administra su propio contexto/pool y configura proxies explícitos.
+  Gate focal de composición y PostgreSQL, sin ruta publicada. Commit previsto:
+  `feat(legal): conecta aceptacion al contexto web`.
+- **15J3 — POST y gate HTTP.** Partirá del commit de J2; confirmar whitelist nominal antes de editar.
+  Previstos `http/LegalAcceptanceController.java`, `http/LegalAcceptanceExceptionHandler.java`,
+  `LegalAcceptanceControllerTest.java`, `db/LegalAcceptanceHttpIT.java` y fixture nuevo nominal si
+  corresponde. Extensión exacta del entry point privado (y sus tests) para 401 del POST bajo su flag;
+  no ampliar la política JWT global de 15K. Mantener GET, CORS y flags apagados. Gate HTTP/PG completo
+  del alcance 15J: actor/header/JSON en orden, 204 vacío, 400/409/503, no-store, Retry-After:1,
+  replay/dedup/lista vacía y metadata. Ese cambio de seguridad compartida exige `clean verify`.
+  Commit previsto: `feat(legal): publica aceptaciones del usuario`.
+
+Decisiones de borde de J1: header presente repetido, null, vacío o no UUID v4 canónico minúsculo
+se rechaza antes de leer el cuerpo; header ausente se reclama sólo después de JSON/DTO válidos.
+JSON UTF-8 estricto sin BOM, una única raíz objeto, claves únicas y whitelist exacta en los tres
+niveles. Propiedad JSON ausente/null, propiedad extra (incluida identidad/autoridad), sintaxis, coerción o exceso
+responden 400 `ACEPTACION_LEGAL_INVALIDA` / `PAYLOAD_LEGAL_INCOMPLETO`, sin eco de entrada ni causas.
+Los UUID editoriales requieren formato hexadecimal canónico de 36 caracteres, sin restringirlos a
+v4; los digests y revisión mantienen su gramática minúscula. Sólo booleanos JSON para `confirmado`;
+false, arrays vacíos y duplicados de arrays siguen hasta la fase semántica de 15I.
+Límites congelados de 15A: 8 MiB de bytes, profundidad 32, 300000 tokens, string 1 MiB y nombre 256,
+2048 actos/16 documentos. El parser no cierra el stream de servlet, no acepta identidad ni realiza
+acceso a DB; no sirve como acreditación de actor. J2/J3 deben invocarlo sólo después de esa observación.
+El rechazo por Content-Type/charset/query del POST se instrumentará después del actor en J3;
+no se delega a resolvers MVC que puedan adelantar el error.
+
+### Cierre 15J1 — 2026-09-07
+
+Cerrados los seis archivos nominales sobre `d7d87c8`: dos clases de producción package-private,
+dos suites nuevas y plan/diseño. El parser es explícito y sin beans; el traductor entrega decisiones
+seguras para el advice futuro. No se modificaron servicio interno, autenticación, configuración,
+persistencia, frontend ni migraciones, y no se publicó el POST.
+
+Java 21.0.10; Maven 3.9.11. Compilación inicial aprobada; gate focal final:
+
+```sh
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B \
+  -Dtest=LegalAcceptanceRequestsTest,LegalAcceptanceHttpExceptionTest,LegalAcceptanceCommandTest,LegalAcceptanceCommandValidatorTest,LegalIdempotencyFingerprintTest,LegalPrivateRequirementsControllerTest,StrictJsonReaderTest \
+  package
+```
+
+| Suite final | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalAcceptanceRequestsTest | 128 | 0 / 0 / 0 |
+| LegalAcceptanceHttpExceptionTest | 50 | 0 / 0 / 0 |
+| LegalAcceptanceCommandTest | 6 | 0 / 0 / 0 |
+| LegalAcceptanceCommandValidatorTest | 56 | 0 / 0 / 0 |
+| LegalIdempotencyFingerprintTest | 34 | 0 / 0 / 0 |
+| LegalPrivateRequirementsControllerTest | 42 | 0 / 0 / 0 |
+| StrictJsonReaderTest | 30 | 0 / 0 / 0 |
+| **Total** | **346** | **0 / 0 / 0** |
+
+Son 178 casos nuevos y 168 de regresión. Los siete XML son frescos, posteriores a la última corrección;
+no se suman reportes anteriores. Sin flaky/rerun. Maven final terminó a las 09:33:26 -03:00, en
+17.980 s. La primera ejecución tuvo 0 fallos y 11 errores de fixture en la nueva suite de excepciones:
+se anidaba la creación/configuración de un mock dentro del `when(...).thenReturn(...)` de otro.
+Se corrigieron ocho asignaciones con `doReturn(...).when(...)`, sin alterar producción ni expectativas,
+y se repitió el gate focal completo. Ese defecto de preparación no afecta componentes compartidos
+ni justifica ampliar a clean verify; el gate integral de seguridad sigue previsto en J3.
+
+Acreditados 2048 actos × 16 referencias documentales, sin eliminar duplicados, y cuerpo válido de
+8 MiB incluyendo whitespace; un exceso consume como máximo el byte centinela y no cierra el stream.
+La prueba masiva es de forma/lectura, no de consentimiento, unicidad, SQL ni SLA. Las entradas con
+profundidad/tokens/nombres/strings excesivos se rechazan; algunas formas quedan excluidas por reglas
+más estrictas del DTO antes de alcanzar el límite defensivo de Jackson. No se atribuye a esas pruebas
+un umbral que no haya sido el primer rechazo observado.
+
+Revisión independiente de contrato, código y matriz transaccional sin hallazgos materiales. Auditoría
+final del empaquetado: cuatro clases nuevas (las dos principales, Parsed y el switch sintético), sin
+anotaciones de controller/mapping/configuración/bean; las 1015 entradas previas (983 clases y 32 recursos)
+conservan sus hashes. Cada JAR coincide con target en sus 987 clases y 32 recursos y ambos conservan
+122 bibliotecas idénticas. Start-Class web/CLI correctos, sin clases/dependencias/agentes de tests,
+propiedades secretas ni duplicados. El AspectJ weaver de runtime existente permanece acreditado como
+dependencia JPA, sin agente inesperado. V27/V28/V29 conservan sus hashes congelados en fuente y JAR.
+
+SHA-256 de artefactos finales:
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: `abf332c4f6b63ee7c82743a0bcf1fcfd194bb7e317e670c98db43ee3bcc6f808`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: `d73c111ab8dc38789464b34500ec3ebd68c194ab7fd9804763a592a31de7cdd5`.
+
+Cierre mediante commit atómico `feat(legal): valida solicitudes de aceptacion`, sin push. Siguiente:
+**15J2**, para conectar configuración aislada y observar actor persistido antes de consumir header/JSON.
+J3 conserva la publicación, metadata HTTP, errores/envelopes/headers reales y gate PostgreSQL/seguridad;
+15K–Q siguen pendientes. El clean verify de 6959 casos es baseline de 15I, no evidencia nueva de J1.
 
 ## 15K — Política compartida de sesión
 

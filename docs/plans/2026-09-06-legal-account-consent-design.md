@@ -11,7 +11,8 @@ pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426
 y regresiones aprobadas. El escritor de registro de cuenta sigue pendiente; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
-15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. Sigue 15J.
+15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
+pruebas focales; sigue 15J2 y el POST queda pendiente de 15J3.
 
 ## Objetivo y resultado esperado
 
@@ -747,3 +748,36 @@ Cierre mediante tres commits atómicos, sin push: I1 `94b4d65`, I2 `584e82f` e I
 `feat(legal): registra aceptaciones atomicas`. Frontend y archivos no versionados preservados.
 Todavía no hay endpoint de aceptación ni activación real; sigue 15J y continúan pendientes 15K–Q.
 El cierre no acredita lanzamiento público, registro atómico ni contenido legal definitivo.
+
+## Cierre 15J1 — protocolo de entrada y errores de aceptación
+
+15J se divide antes de editar en J1 (parser/decisiones de transporte), J2 (composición aislada y
+observación del actor antes de consumir payload) y J3 (POST, seguridad y gate HTTP/PG integral).
+La división y las listas nominales constan en el plan; J1 no registra beans ni publica una ruta.
+
+La lectura estricta valida primero un header presente, después toda la forma del JSON y sólo entonces
+reclama un header ausente. Rechaza campos extra/identidad, claves repetidas y coerciones. La raíz y
+ambos niveles anidados son cerrados. UTF-8 sin BOM, UUID editoriales canónicos sin exigir v4 y todos
+los límites de 15A se conservan; arrays vacíos, duplicados y false permanecen para selección/freshness.
+El stream continúa bajo propiedad del servlet. Una primera pasada verifica toda la forma antes de
+construir las listas DTO; el comando canónico sigue a cargo de 15G y no se fabrica un actor en HTTP.
+
+La decisión de transporte combina motivo, finalización y persistencia. Sólo INVALID_ACTOR puede
+producir un rechazo esperado antes de iniciar transacción (NONE/NOT_PERSISTED). Los 400/409 de negocio
+requieren ROLLED_BACK/NOT_PERSISTED y ausencia de recibo. COMMITTED, UNKNOWN, un recibo confirmado o
+incoherencia producen el 503 seguro, sin Retry-After ni exposición de estado transaccional. No se
+reintenta, reconcilia ni transforma un fallo posterior al commit en éxito. STALE/INVALID requieren
+su validación tipada coherente; la revisión enviada igual a la actual no acredita STALE. El 409 usa
+la proyección privada vigente de 15D, sin consultar de nuevo ni filtrar identidades o evidencia.
+
+El adaptador de J2/J3 deberá acreditar al actor persistido antes de invocar esta lectura: el principal
+actual no contiene taller.activo, y resolver automáticamente @RequestBody/@RequestHeader adelantaría
+el parseo frente a esa observación. La publicación queda pendiente hasta acreditar esa precedencia,
+401 del POST, configuración aislada, metadata y escritura/replay reales. El gate compartido de
+seguridad se ampliará en J3 con clean verify; la política global de sesión permanece en 15K.
+
+Cierre 2026-09-07: 346 pruebas focales aprobadas, 178 nuevas y 168 de regresión; siete XML frescos,
+sin fallos/errores/omitidas/flaky. La primera ejecución detectó 11 errores de stubbing anidado en el
+fixture; se corrigieron y la repetición completa pasó sin cambios productivos. JAR web/CLI auditados
+con cuatro clases nuevas exactas, todas las entradas previas intactas y migraciones congeladas.
+Comando, desglose y hashes en el plan. Sigue 15J2; todavía sin endpoint de aceptación ni activación.
