@@ -19,7 +19,8 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.GlobalExceptionHandl
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPrivateRequirementsController;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPrivateRequirementsExceptionHandler;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPrivateRequirementsHttpConfiguration;
-import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAuthenticatedRequirements;
+import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalAcceptanceHistoryController;
+import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalAcceptanceHistoryExceptionHandler;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsITSupport.Actor;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
@@ -63,6 +64,8 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.UUID;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -95,16 +98,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
 
-/** Real private HTTP bridge, security chain and restricted PostgreSQL graph; only JWT/user collaborators are mocked. */
-class LegalPrivateRequirementsHttpIT {
-    private static final String ROOT = "/api/requisitos-legales";
-    private static final String ROLE = "ordenfix_legal_private_requirements_http";
-    private static final String PASSWORD = "private-requirements-http-test-only";
+/** Private own-history HTTP with the real security chain and restricted PostgreSQL reader; only JWT/users are mocked. */
+class LegalAcceptanceHistoryHttpIT {
+    private static final String ROOT = "/api/aceptaciones-legales";
+    private static final String ROLE = "ordenfix_legal_private_requirements_history_http";
+    private static final String PASSWORD = "acceptance-history-http-test-only";
     private static final String PREFIX = LegalPrivateRequirementsDatabaseConfiguration.PROPERTY_PREFIX;
     private static final String FLAG = LegalPrivateRequirementsDatabaseConfiguration.ENABLED_PROPERTY;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
-            .withDatabaseName("ordenfix_legal_private_requirements_http")
+            .withDatabaseName("ordenfix_legal_private_requirements_history_http")
             .withUsername("ordenfix").withPassword("ordenfix");
     private static JdbcTemplate owner;
     private static DataSource ownerDataSource;
@@ -146,8 +149,9 @@ class LegalPrivateRequirementsHttpIT {
     @AfterAll static void stopDedicatedDatabase() { POSTGRES.stop(); }
 
     @ParameterizedTest @ValueSource(strings = {"ADMIN", "USER"})
-    void derivesTheCompleteCanonicalWireFromTheServerPrincipalAndUsesTheRestrictedGraph(String role) throws Exception {
+    void ownActualEvidenceHasExactHistoricalWireAndUsesTheRestrictedGraphWithoutDml(String role) throws Exception {
         Actor actor = seedActor(owner, role);
+        acceptAsOwnerFixture(actor);
         openHttp(properties(true, false, false));
         var before = counts(owner);
         MockHttpServletResponse response = mvc.perform(authenticatedGet(actor)
@@ -155,265 +159,238 @@ class LegalPrivateRequirementsHttpIT {
                         .header("X-User-Id", Long.toString(actor.userId() + 900)))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
                 .andExpect(header().doesNotExist("ETag"))
-                .andExpect(jsonPath("$.locale").value("es-AR"))
-                .andExpect(jsonPath("$.requisitos.length()").value(2))
+                .andExpect(jsonPath("$.content.length()").value(2))
                 .andReturn().getResponse();
 
-        assertThat(metrics.snapshot().commits()).isEqualTo(1);
-        assertThat(metrics.snapshot().rollbacks()).isZero();
-        assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isEqualTo(2);
-        assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 1L)
-                .containsEntry("legal_aceptaciones", before.get("legal_aceptaciones"))
-                .containsEntry("legal_aceptacion_metadatos", before.get("legal_aceptacion_metadatos"));
-        LegalAuthenticatedRequirements canonical = requirementsContext.getBean(LegalPrivateRequirementsReadService.class)
-                .read(principal(actor));
-        assertThat(body(response)).isEqualTo(expectedWire(canonical));
-        assertThat(body(response).get("requiredSetRevision").asText()).matches("sha256:[0-9a-f]{64}");
+        assertThat(body(response)).isEqualTo(expectedWire(actor));
+        assertReadOnlyCommit();
+        assertThat(counts(owner)).isEqualTo(before);
         assertThat(response.getContentAsString()).doesNotContain("userId", "tallerId", "audiencia", "perfil",
-                "scopeRevision", "scopeOrdinal", "acceptanceId", "provenance", "decisions", "requiresReacceptance");
+                "scopeRevision", "scopeOrdinal", "provenance", "requiresReacceptance", "requiredSetRevision",
+                "metadata", "userAgent", "contenidoMarkdown", "heredado", "estado");
         assertThat(requirementsContext.getParent()).isNull();
         assertThat(new JdbcTemplate(pool).queryForObject("SELECT current_user || ':' || session_user", String.class))
                 .isEqualTo(ROLE + ":" + ROLE);
-        assertNoWebDatabaseGraph();
-        assertPoolIdle();
+        assertNoWebDatabaseGraph(); assertPoolIdle();
         assertThat(TenantContext.getTallerId()).isNull();
         verify(context.getBean(UserDetailsServiceImpl.class)).loadUserByUsername(principal(actor).getUsername());
     }
 
-    @Test void everyIfNoneMatchValueRecomputesPendingAndReusesTheAggregateWithoutDml() throws Exception {
-        Actor actor = seedActor(owner, "ADMIN");
-        openHttp(properties(true, false, false));
-        JsonNode first = body(mvc.perform(authenticatedGet(actor)).andExpect(status().isOk()).andReturn().getResponse());
-        String revision = first.get("requiredSetRevision").asText();
-        var original = owner.queryForList("SELECT to_jsonb(t)::text || xmin::text FROM legal_requisito_agregados t");
-        var before = counts(owner);
-        for (String validator : List.of("*", "\"" + revision + "\"", "W/\"" + revision + "\"", "malformed")) {
-            metrics.reset();
-            MockHttpServletResponse response = mvc.perform(authenticatedGet(actor).header("If-None-Match", validator))
-                    .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
-                    .andExpect(header().doesNotExist("ETag")).andReturn().getResponse();
-            assertThat(body(response)).isEqualTo(first);
-            assertReusedCommit();
-        }
-        assertThat(owner.queryForList("SELECT to_jsonb(t)::text || xmin::text FROM legal_requisito_agregados t")).isEqualTo(original);
-        assertThat(counts(owner)).isEqualTo(before);
-    }
-
-    @ParameterizedTest @ValueSource(strings = {"ADMIN", "USER"})
-    void exactOwnEvidenceReturnsLegitimateEmptyPendingWithTheCompleteRevisionAndNoNewEvidence(String role) throws Exception {
-        Actor actor = seedActor(owner, role);
-        openHttp(properties(true, false, false));
-        String revision = body(mvc.perform(authenticatedGet(actor)).andExpect(status().isOk())
-                .andReturn().getResponse()).get("requiredSetRevision").asText();
-        acceptAsOwnerFixture(actor);
-        var before = counts(owner);
-        metrics.reset();
-        mvc.perform(authenticatedGet(actor).header("If-None-Match", "*"))
-                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(header().doesNotExist("ETag"))
-                .andExpect(jsonPath("$.requiredSetRevision").value(revision))
-                .andExpect(jsonPath("$.requisitos").isEmpty());
-        assertReusedCommit();
-        assertThat(counts(owner)).isEqualTo(before);
-    }
-
-    @Test void evidenceFromAnotherUserInTheSameWorkshopAndAnotherTenantDoesNotSatisfyTheActor() throws Exception {
+    @Test void firstReadOfAnActorWithoutEvidenceReturnsAnEmptyPageWithoutMaterializingAnyAggregate() throws Exception {
         Actor actor = seedActor(owner, "USER");
-        Actor sameWorkshop = seedActor(owner, "USER");
-        Actor otherTenant = seedActor(owner, "USER");
-        owner.update("UPDATE users SET taller_id = ? WHERE id = ?", actor.workshopId(), sameWorkshop.userId());
-        sameWorkshop = new Actor(sameWorkshop.userId(), actor.workshopId(), sameWorkshop.role(), sameWorkshop.audience());
-        acceptAsOwnerFixture(sameWorkshop);
-        acceptAsOwnerFixture(otherTenant);
         openHttp(properties(true, false, false));
         var before = counts(owner);
-        mvc.perform(authenticatedGet(actor)).andExpect(status().isOk()).andExpect(jsonPath("$.requisitos.length()").value(2));
-        assertReusedCommit();
-        assertThat(counts(owner)).isEqualTo(before);
+        mvc.perform(authenticatedGet(actor)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(header().doesNotExist("ETag"))
+                .andExpect(jsonPath("$.content").isEmpty()).andExpect(jsonPath("$.page.number").value(0))
+                .andExpect(jsonPath("$.page.size").value(20)).andExpect(jsonPath("$.page.totalElements").value(0))
+                .andExpect(jsonPath("$.page.totalPages").value(0));
+        assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+        assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 0L);
+    }
+
+    @Test void pagesHaveStableTimestampUuidOrderAndTotalsForFiltersAndLargeOffsetsWithoutWrites() throws Exception {
+        Actor actor = seedActor(owner, "ADMIN"); acceptAsOwnerFixture(actor);
+        openHttp(properties(true, false, false));
+        var before = counts(owner);
+        JsonNode complete = expectedWire(actor).get("content");
+        for (int page = 0; page < 3; page++) {
+            metrics.reset();
+            JsonNode wire = body(mvc.perform(authenticatedGet(actor).queryParam("page", Integer.toString(page))
+                            .queryParam("size", "1").queryParam("contexto", "USO_CONTINUADO"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.page.number").value(page))
+                    .andExpect(jsonPath("$.page.totalElements").value(2)).andExpect(jsonPath("$.page.totalPages").value(2))
+                    .andReturn().getResponse());
+            assertThat(wire.path("content").size()).isEqualTo(page < 2 ? 1 : 0);
+            if (page < 2) assertThat(wire.path("content").get(0)).isEqualTo(complete.get(page));
+            assertReadOnlyCommit();
+        }
+        metrics.reset();
+        mvc.perform(authenticatedGet(actor).queryParam("contexto", "CIERRE_CUENTA"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.page.totalElements").value(0));
+        assertReadOnlyCommit(); metrics.reset();
+        mvc.perform(authenticatedGet(actor).queryParam("page", Integer.toString(Integer.MAX_VALUE)).queryParam("size", "100"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.page.number").value(Integer.MAX_VALUE))
+                .andExpect(jsonPath("$.page.totalElements").value(2)).andExpect(jsonPath("$.page.totalPages").value(1));
+        assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+    }
+
+    @Test void anotherUserInTheSameWorkshopAndAnotherTenantAreNeverIncludedInOwnHistory() throws Exception {
+        Actor actor = seedActor(owner, "USER");
+        Actor colleague = seedActor(owner, "USER");
+        Actor foreign = seedActor(owner, "ADMIN");
+        owner.update("UPDATE users SET taller_id = ? WHERE id = ?", actor.workshopId(), colleague.userId());
+        colleague = new Actor(colleague.userId(), actor.workshopId(), colleague.role(), colleague.audience());
+        acceptAsOwnerFixture(colleague); acceptAsOwnerFixture(foreign);
+        openHttp(properties(true, false, false));
+        var before = counts(owner);
+        mvc.perform(authenticatedGet(actor)).andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.page.totalElements").value(0));
+        assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+        acceptAsOwnerFixture(actor);
+        before = counts(owner); metrics.reset();
+        JsonNode wire = body(mvc.perform(authenticatedGet(actor)).andExpect(status().isOk()).andReturn().getResponse());
+        assertThat(wire).isEqualTo(expectedWire(actor));
+        assertThat(wire.path("page").path("totalElements").longValue()).isEqualTo(2);
+        assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+    }
+
+    @Test void changingCurrentRolePreservesTheActualHistoricalActWithoutCreatingAudienceAggregates() throws Exception {
+        Actor employee = seedActor(owner, "USER"); acceptAsOwnerFixture(employee);
+        JsonNode original = expectedWire(employee);
+        owner.update("UPDATE users SET role = 'ADMIN' WHERE id = ?", employee.userId());
+        Actor changed = new Actor(employee.userId(), employee.workshopId(), "ADMIN", "ADMIN_TITULAR");
+        var before = counts(owner); openHttp(properties(true, false, false));
+        JsonNode wire = body(mvc.perform(authenticatedGet(changed)).andExpect(status().isOk()).andReturn().getResponse());
+        assertThat(wire).isEqualTo(original); assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+        assertThat(owner.queryForObject("SELECT count(*) FROM legal_requisito_agregados WHERE audiencia = 'ADMIN_TITULAR'", Long.class)).isZero();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"*", "\"sha256:old\"", "W/\"sha256:old\"", "malformed"})
+    void conditionalRequestsAlwaysReadActualEvidenceWithoutEtagOrNewDml(String validator) throws Exception {
+        Actor actor = seedActor(owner, "USER"); acceptAsOwnerFixture(actor);
+        var before = counts(owner); openHttp(properties(true, false, false));
+        JsonNode wire = body(mvc.perform(authenticatedGet(actor).header("If-None-Match", validator).header("If-Match", "\"old\""))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(header().doesNotExist("ETag")).andReturn().getResponse());
+        assertThat(wire).isEqualTo(expectedWire(actor)); assertReadOnlyCommit(); assertThat(counts(owner)).isEqualTo(before);
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"absent", "invalid", "revoked"})
+    void unauthenticatedExactGetHasScoped401WithoutBorrowingTheLegalPool(String token) throws Exception {
+        openHttp(properties(true, false, false)); var request = get(ROOT);
+        if (token.equals("invalid")) {
+            when(context.getBean(JwtUtils.class).verifyToken("invalid")).thenThrow(new JWTVerificationException("private failure"));
+            request.header("Authorization", "Bearer invalid");
+        } else if (token.equals("revoked")) {
+            request = authenticatedGet(seedActor(owner, "USER"));
+            when(context.getBean(JwtUtils.class).validateToken(org.mockito.ArgumentMatchers.any(DecodedJWT.class),
+                    org.mockito.ArgumentMatchers.any(AuthenticatedUserPrincipal.class))).thenReturn(false);
+        }
+        MockHttpServletResponse response = mvc.perform(request).andExpect(status().isUnauthorized())
+                .andExpect(header().string("Cache-Control", "no-store")).andExpect(header().doesNotExist("ETag"))
+                .andReturn().getResponse();
+        assertSanitized(response); assertNoLegalSql();
+    }
+
+    @Test void unsupportedAuthorityGets403BeforeAnyLegalSql() throws Exception {
+        openHttp(properties(true, false, false));
+        var auth = new UsernamePasswordAuthenticationToken(principal(seedActor(owner, "USER")), null,
+                List.of(new SimpleGrantedAuthority("ROLE_AUDITOR")));
+        mvc.perform(get(ROOT).with(authentication(auth))).andExpect(status().isForbidden())
+                .andExpect(header().string("Cache-Control", "no-store")).andExpect(header().doesNotExist("ETag"));
+        assertNoLegalSql(); verifyNoInteractions(context.getBean(JwtUtils.class), context.getBean(UserDetailsServiceImpl.class));
     }
 
     @ParameterizedTest @ValueSource(strings = {"role", "token", "inactive", "workshop", "tenant", "missing"})
-    void persistedActorInvalidationBetweenJwtResolutionAndTheLegalSnapshotReturns401AndRollsBack(String mutation)
-            throws Exception {
-        Actor actor = seedActor(owner, "USER");
-        openHttp(properties(true, false, false));
+    void invalidatedActorSnapshotReturns401AndRollsBackWithoutReadingAnotherIdentity(String mutation) throws Exception {
+        Actor actor = seedActor(owner, "USER"); openHttp(properties(true, false, false));
         MockHttpServletRequestBuilder request = authenticatedGet(actor);
         switch (mutation) {
             case "role" -> owner.update("UPDATE users SET role = 'ADMIN' WHERE id = ?", actor.userId());
             case "token" -> owner.update("UPDATE users SET token_version = 1 WHERE id = ?", actor.userId());
             case "inactive" -> owner.update("UPDATE users SET active = false WHERE id = ?", actor.userId());
             case "workshop" -> owner.update("UPDATE talleres SET activo = false WHERE id = ?", actor.workshopId());
-            case "tenant" -> owner.update("UPDATE users SET taller_id = ? WHERE id = ?",
-                    seedActor(owner, "ADMIN").workshopId(), actor.userId());
+            case "tenant" -> owner.update("UPDATE users SET taller_id = ? WHERE id = ?", seedActor(owner, "ADMIN").workshopId(), actor.userId());
             case "missing" -> owner.update("DELETE FROM users WHERE id = ?", actor.userId());
             default -> throw new AssertionError(mutation);
         }
+        var before = counts(owner);
         MockHttpServletResponse response = mvc.perform(request).andExpect(status().isUnauthorized())
-                .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(header().doesNotExist("ETag")).andReturn().getResponse();
-        assertSanitized(response);
-        assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 0L);
+                .andExpect(header().string("Cache-Control", "no-store")).andExpect(header().doesNotExist("ETag")).andReturn().getResponse();
+        assertSanitized(response); assertRollback(); assertThat(counts(owner)).isEqualTo(before);
         assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isZero();
-        assertRollback();
         assertThat(TenantContext.getTallerId()).isNull();
     }
 
-    @ParameterizedTest @ValueSource(strings = {"absent", "invalid", "revoked"})
-    void unauthenticatedExactGetReturns401WithoutBorrowingTheLegalPool(String token) throws Exception {
+    @ParameterizedTest @ValueSource(strings = {"locale", "perfil", "audiencia", "role", "userId", "tallerId", "unknown"})
+    void noUnsupportedInputCanSelectEvidenceOrBorrowThePool(String parameter) throws Exception {
         openHttp(properties(true, false, false));
-        var request = get(ROOT);
-        if (token.equals("invalid")) {
-            when(context.getBean(JwtUtils.class).verifyToken("invalid")).thenThrow(new JWTVerificationException("private failure"));
-            request.header("Authorization", "Bearer invalid");
-        } else if (token.equals("revoked")) {
-            Actor actor = seedActor(owner, "USER");
-            request = authenticatedGet(actor);
-            when(context.getBean(JwtUtils.class).validateToken(org.mockito.ArgumentMatchers.any(DecodedJWT.class),
-                    org.mockito.ArgumentMatchers.any(AuthenticatedUserPrincipal.class))).thenReturn(false);
-        }
-        MockHttpServletResponse response = mvc.perform(request).andExpect(status().isUnauthorized())
-                .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(header().doesNotExist("ETag")).andReturn().getResponse();
-        assertSanitized(response);
+        mvc.perform(authenticatedGet(seedActor(owner, "USER")).queryParam(parameter, "selector-must-not-echo"))
+                .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control", "no-store"));
         assertNoLegalSql();
     }
 
-    @Test void unsupportedAuthenticatedAuthorityReturns403BeforeCallingThePrivateGraph() throws Exception {
+    @ParameterizedTest @CsvSource({"page,-1", "page,2147483648", "size,0", "size,101", "contexto,unsupported"})
+    void invalidFiltersAndPaginationFailBeforeLegalSql(String name, String value) throws Exception {
         openHttp(properties(true, false, false));
-        var auth = new UsernamePasswordAuthenticationToken(principal(seedActor(owner, "USER")), null,
-                List.of(new SimpleGrantedAuthority("ROLE_AUDITOR")));
-        mvc.perform(get(ROOT).with(authentication(auth))).andExpect(status().isForbidden())
-                .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(header().doesNotExist("ETag"));
-        assertNoLegalSql();
-        verifyNoInteractions(context.getBean(JwtUtils.class), context.getBean(UserDetailsServiceImpl.class));
-    }
-
-    @ParameterizedTest @ValueSource(strings = {"contexto", "locale", "perfil", "audiencia", "role", "userId", "tallerId", "unknown"})
-    void rejectsEveryQueryParameterBeforeLegalSqlIncludingSelectionAndUnknownInputs(String name) throws Exception {
-        Actor actor = seedActor(owner, "USER");
-        openHttp(properties(true, false, false));
-        mvc.perform(authenticatedGet(actor).param(name, "selector-must-never-echo"))
-                .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(header().doesNotExist("ETag"));
+        var response = mvc.perform(authenticatedGet(seedActor(owner, "USER")).queryParam(name, value))
+                .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control", "no-store")).andReturn().getResponse();
+        if (name.equals("contexto")) assertThat(body(response).path("code").textValue()).isEqualTo("CONTEXTO_LEGAL_NO_SOPORTADO");
         assertNoLegalSql();
     }
 
     @ParameterizedTest @ValueSource(strings = {"HEAD", "POST", "PUT", "PATCH", "DELETE"})
-    void methodsOtherThanExactGetNeverInvokeThePrivateGraph(String method) throws Exception {
-        Actor actor = seedActor(owner, "USER");
+    void methodsOtherThanGetNeverReachTheHistoryReader(String method) throws Exception {
         openHttp(properties(true, false, false));
-        String token = authorize(actor);
-        mvc.perform(request(HttpMethod.valueOf(method), ROOT).header("Authorization", "Bearer " + token))
+        mvc.perform(request(HttpMethod.valueOf(method), ROOT).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
                 .andExpect(status().is(method.equals("HEAD") ? 405 : 500));
-        // Unmapped methods retain the existing global MVC error envelope; HEAD is guarded by this controller.
         assertNoLegalSql();
     }
 
-    @ParameterizedTest @ValueSource(strings = {"/api/requisitos-legales/", "/api/requisitos-legales/extra", "/api/aceptaciones-legales/extra"})
-    void neighboringPathsKeepExistingAuthenticationPolicyAndDoNotBorrowThePrivatePool(String path) throws Exception {
+    @ParameterizedTest @ValueSource(strings = {"/api/aceptaciones-legales/", "/api/aceptaciones-legales/extra", "/api/aceptaciones-legales-extra"})
+    void neighborsKeepExistingAuthenticationAndUnmappedBehaviorWithoutSql(String path) throws Exception {
         openHttp(properties(true, false, false));
         mvc.perform(get(path)).andExpect(status().isForbidden());
         mvc.perform(get(path).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
                 .andExpect(status().isInternalServerError());
-        // The pre-existing global advice maps a missing handler to 500; it must never reach legal SQL.
         assertNoLegalSql();
     }
 
-    @Test void anEncodedAliasNeverReachesTheLegalReaderEvenWhenMvcDecodesThePath() throws Exception {
+    @Test void encodedAliasDoesNotReadEvenWhenMvcDecodesItsPath() throws Exception {
         openHttp(properties(true, false, false));
-        mvc.perform(get(URI.create("/api/requisitos%2dlegales"))
+        mvc.perform(get(URI.create("/api/aceptaciones%2dlegales"))
                         .header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
-                .andExpect(status().isNotFound());
-        assertNoLegalSql();
+                .andExpect(status().isNotFound()); assertNoLegalSql();
     }
 
-    @ParameterizedTest @ValueSource(strings = {"current-digest", "evidence-digest", "evidence-document"})
-    void corruptCanonicalOrOwnEvidenceReturnsSanitized503EvenForAConditionalRequest(String corruption) throws Exception {
-        Actor actor = seedActor(owner, "USER");
-        if (corruption.startsWith("evidence")) acceptAsOwnerFixture(actor);
-        openHttp(properties(true, false, false));
-        if (corruption.equals("current-digest")) {
-            mvc.perform(authenticatedGet(actor)).andExpect(status().isOk());
-        }
-        var before = counts(owner);
+    @ParameterizedTest @ValueSource(strings = {"evidence-digest", "evidence-document"})
+    void corruptOwnEvidenceReturnsSanitized503AndRollsBackWithoutWrites(String corruption) throws Exception {
+        Actor actor = seedActor(owner, "USER"); acceptAsOwnerFixture(actor);
         LegalManifestPersistenceITSupport.withReplicaRole(owner, () -> {
-            switch (corruption) {
-                case "current-digest" -> owner.update("UPDATE legal_requisito_versiones SET afirmacion_sha256 = ? WHERE requisito_linea_id IN (SELECT id FROM legal_requisito_lineas WHERE contexto = 'USO_CONTINUADO')", "0".repeat(64));
-                case "evidence-digest" -> owner.update("UPDATE legal_aceptaciones SET afirmacion_sha256 = ? WHERE user_id = ?", "0".repeat(64), actor.userId());
-                case "evidence-document" -> owner.update("DELETE FROM legal_aceptacion_documentos WHERE aceptacion_id IN (SELECT id FROM legal_aceptaciones WHERE user_id = ?)", actor.userId());
-                default -> throw new AssertionError(corruption);
-            }
+            if (corruption.equals("evidence-digest")) owner.update("UPDATE legal_aceptaciones SET afirmacion_sha256 = ? WHERE user_id = ?", "0".repeat(64), actor.userId());
+            else owner.update("DELETE FROM legal_aceptacion_documentos WHERE aceptacion_id IN (SELECT id FROM legal_aceptaciones WHERE user_id = ?)", actor.userId());
         });
-        var afterCorruption = counts(owner);
-        metrics.reset();
+        var before = counts(owner); openHttp(properties(true, false, false));
         assertUnavailable(authenticatedGet(actor).header("If-None-Match", "*"));
-        assertRollback();
-        assertThat(counts(owner)).isEqualTo(afterCorruption);
-        assertThat(counts(owner).get("legal_requisito_agregados")).isEqualTo(before.get("legal_requisito_agregados"));
-    }
-
-    @Test void readerFailureAfterCreatingANewAudienceAggregateRollsBackTheWholeHttpObservation() throws Exception {
-        Actor employee = seedActor(owner, "USER");
-        acceptAsOwnerFixture(employee); // Only the USER aggregate exists; history remains tied to its actual actor.
-        owner.update("UPDATE users SET role = 'ADMIN' WHERE id = ?", employee.userId());
-        Actor ownerActor = new Actor(employee.userId(), employee.workshopId(), "ADMIN", "ADMIN_TITULAR");
-        LegalManifestPersistenceITSupport.withReplicaRole(owner, () -> owner.update(
-                "UPDATE legal_aceptaciones SET afirmacion_sha256 = ? WHERE user_id = ?",
-                "0".repeat(64), employee.userId()));
-        var before = counts(owner);
-        var original = owner.queryForList("SELECT to_jsonb(t)::text || xmin::text FROM legal_requisito_agregados t");
-        openHttp(properties(true, false, false));
-
-        assertUnavailable(authenticatedGet(ownerActor).header("If-None-Match", "*"));
-
-        // The real store inserts ADMIN header + scopes before the real reader rejects the actor's corrupt history.
-        assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isEqualTo(2);
-        assertRollback();
+        assertRollback(); assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isZero();
         assertThat(counts(owner)).isEqualTo(before);
-        assertThat(owner.queryForList("SELECT to_jsonb(t)::text || xmin::text FROM legal_requisito_agregados t"))
-                .isEqualTo(original);
-        assertThat(owner.queryForObject("SELECT count(*) FROM legal_requisito_agregados WHERE audiencia = 'ADMIN_TITULAR'",
-                Long.class)).isZero();
     }
 
-    @Test void ownerCredentialsFailTheRestrictedRolePreflightWith503BeforeLocksAndDml() throws Exception {
-        Actor actor = seedActor(owner, "USER");
-        Map<String, Object> properties = properties(true, false, false);
-        properties.put(PREFIX + "username", POSTGRES.getUsername());
-        properties.put(PREFIX + "password", POSTGRES.getPassword());
-        openHttp(properties);
-        assertUnavailable(authenticatedGet(actor));
+    @Test void ownerCredentialsFailRestrictedPreflightBeforeLocksAndDml() throws Exception {
+        Actor actor = seedActor(owner, "USER"); Map<String, Object> properties = properties(true, false, false);
+        properties.put(PREFIX + "username", POSTGRES.getUsername()); properties.put(PREFIX + "password", POSTGRES.getPassword());
+        openHttp(properties); assertUnavailable(authenticatedGet(actor));
         assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isZero();
-        assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.ADVISORY_LOCK)).isZero();
-        assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 0L);
-        assertRollback();
+        assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.ADVISORY_LOCK)).isZero(); assertRollback();
     }
 
     @ParameterizedTest @CsvSource({"false,false", "false,true", "true,false", "true,true"})
-    void privateRouteRunsIndependentlyOfBothPublicFlags(boolean documents, boolean registration) throws Exception {
+    void historyRunsIndependentlyOfBothPublicFlags(boolean documents, boolean registration) throws Exception {
         openHttp(properties(true, documents, registration));
-        mvc.perform(authenticatedGet(seedActor(owner, "USER"))).andExpect(status().isOk());
+        mvc.perform(authenticatedGet(seedActor(owner, "USER"))).andExpect(status().isOk()); assertReadOnlyCommit();
         assertThat(requirementsContext.getEnvironment().getProperty(LegalPublicDocumentRequestMatcher.ENABLED_PROPERTY)).isNull();
         assertThat(requirementsContext.getEnvironment().getProperty(LegalPublicRequirementsRequestMatcher.ENABLED_PROPERTY)).isNull();
         assertNoWebDatabaseGraph();
     }
 
     @ParameterizedTest @ValueSource(strings = {"absent", "false"})
-    void privateDefaultOffHasNoRouteFacadeOrPoolEvenWithBothPublicFlagsEnabled(String flag) throws Exception {
+    void defaultOffHasNoHistoryRouteFacadeOrPoolEvenWithPublicFlagsOn(String flag) throws Exception {
         Map<String, Object> properties = properties(false, true, true);
         if (flag.equals("absent")) properties.remove(FLAG);
         properties.put("spring.datasource.url", POSTGRES.getJdbcUrl());
-        properties.put("spring.datasource.username", POSTGRES.getUsername());
-        properties.put("spring.datasource.password", POSTGRES.getPassword());
+        properties.put("spring.datasource.username", POSTGRES.getUsername()); properties.put("spring.datasource.password", POSTGRES.getPassword());
         openHttp(properties);
         mvc.perform(get(ROOT)).andExpect(status().isForbidden());
         mvc.perform(authenticatedGet(seedActor(owner, "USER"))).andExpect(status().isInternalServerError());
-        assertThat(context.getBeansOfType(LegalPrivateRequirementsController.class)).isEmpty();
+        assertThat(context.getBeansOfType(LegalAcceptanceHistoryController.class)).isEmpty();
+        assertThat(context.getBeansOfType(LegalAcceptanceHistoryService.class)).isEmpty();
         assertThat(context.getBeansOfType(LegalPrivateRequirementsReadService.class)).isEmpty();
         assertThat(context.getBeansOfType(LegalPrivateRequirementsAuthenticationEntryPoint.class)).isEmpty();
-        assertThat(requirementsContext).isNull();
-        assertNoWebDatabaseGraph();
+        assertThat(requirementsContext).isNull(); assertNoWebDatabaseGraph();
         assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 0L);
     }
 
@@ -424,6 +401,7 @@ class LegalPrivateRequirementsHttpIT {
             context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("private-http-it", properties));
             context.register(WebConfiguration.class, LegalPrivateRequirementsHttpConfiguration.class,
                     LegalPrivateRequirementsController.class, LegalPrivateRequirementsExceptionHandler.class,
+                    LegalAcceptanceHistoryController.class, LegalAcceptanceHistoryExceptionHandler.class,
                     LegalPrivateRequirementsAuthenticationEntryPoint.class, GlobalExceptionHandler.class,
                     SecurityConfig.class, CorsConfig.class, JwtFilter.class, PublicEndpointRateLimitFilter.class,
                     LegalPublicDocumentRequestMatcher.class, LegalPublicRequirementsRequestMatcher.class,
@@ -518,7 +496,7 @@ class LegalPrivateRequirementsHttpIT {
                 "SELECT", "legal_requisito_versiones", "private failure", "server-principal", "stackTrace");
     }
 
-    private void assertReusedCommit() {
+    private void assertReadOnlyCommit() {
         assertThat(metrics.snapshot().commits()).isEqualTo(1);
         assertThat(metrics.snapshot().rollbacks()).isZero();
         assertThat(metrics.snapshot().executions(LegalJdbcMetricsSupport.Category.DML)).isZero();
@@ -537,7 +515,6 @@ class LegalPrivateRequirementsHttpIT {
         }
         assertThat(metrics.snapshot().commits()).isZero();
         assertThat(metrics.snapshot().rollbacks()).isZero();
-        assertThat(counts(owner)).containsEntry("legal_requisito_agregados", 0L);
     }
 
     private void assertPoolIdle() { assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isZero(); }
@@ -550,33 +527,40 @@ class LegalPrivateRequirementsHttpIT {
         assertThat(context.getBeansOfType(LegalPrivateRequirementsReader.class)).isEmpty();
     }
 
-    private static JsonNode expectedWire(LegalAuthenticatedRequirements canonical) {
+    /** Independent expected wire is built only from the persisted evidence snapshots, never current versions. */
+    private static JsonNode expectedWire(Actor actor) {
         ObjectNode result = JSON.createObjectNode();
-        result.put("locale", canonical.snapshot().applicableScopes().locale().getCodigo());
-        result.put("requiredSetRevision", canonical.requiredSetRevision());
-        var requirements = result.putArray("requisitos");
-        canonical.requirements().forEach(requirement -> {
-            ObjectNode output = requirements.addObject();
-            output.put("id", requirement.versionId().toString());
-            output.put("contexto", requirement.context().name());
-            output.put("tipoActo", requirement.actType().name());
-            output.put("afirmacion", requirement.statement());
-            output.put("afirmacionSha256", requirement.statementSha256());
-            output.put("requerido", requirement.required());
+        var content = result.putArray("content");
+        owner.query("""
+                SELECT act.id, act.requisito_version_id, act.contexto, act.tipo_acto,
+                       act.afirmacion, act.afirmacion_sha256, lot.aceptado_en
+                  FROM legal_aceptaciones act
+                  JOIN legal_aceptacion_lotes lot ON lot.id = act.lote_id
+                 WHERE act.user_id = ? AND act.taller_id = ?
+                 ORDER BY lot.aceptado_en DESC, act.id DESC
+                """, row -> {
+            UUID id = row.getObject("id", UUID.class);
+            ObjectNode output = content.addObject();
+            output.put("id", id.toString());
+            output.put("requisitoVersionId", row.getObject("requisito_version_id", UUID.class).toString());
+            output.put("contexto", row.getString("contexto")); output.put("tipoActo", row.getString("tipo_acto"));
+            output.put("afirmacion", row.getString("afirmacion")); output.put("afirmacionSha256", row.getString("afirmacion_sha256"));
+            output.put("aceptadoEn", row.getObject("aceptado_en", OffsetDateTime.class).toInstant().toString());
             var documents = output.putArray("documentos");
-            requirement.documents().forEach(document -> {
+            owner.query("""
+                    SELECT documento_version_id, tipo, version, titulo, sha256
+                      FROM legal_aceptacion_documentos WHERE aceptacion_id = ?
+                     ORDER BY documento_ordinal
+                    """, document -> {
                 ObjectNode item = documents.addObject();
-                item.put("id", document.versionId().toString());
-                item.put("tipo", document.type().name());
-                item.put("version", document.version());
-                item.put("titulo", document.title());
-                item.put("contenidoMarkdown", document.markdown());
-                item.put("sha256", document.sha256());
-                item.put("vigenteDesde", document.effectiveAt().toInstant().toString());
-                item.put("estado", "VIGENTE");
-                item.put("locale", document.locale().getCodigo());
-            });
-        });
+                item.put("documentoVersionId", document.getObject("documento_version_id", UUID.class).toString());
+                item.put("tipo", document.getString("tipo")); item.put("version", document.getString("version"));
+                item.put("titulo", document.getString("titulo")); item.put("sha256", document.getString("sha256"));
+            }, id);
+        }, actor.userId(), actor.workshopId());
+        ObjectNode page = result.putObject("page");
+        page.put("size", 20); page.put("number", 0); page.put("totalElements", content.size());
+        page.put("totalPages", content.isEmpty() ? 0 : (content.size() + 19) / 20);
         return result;
     }
 

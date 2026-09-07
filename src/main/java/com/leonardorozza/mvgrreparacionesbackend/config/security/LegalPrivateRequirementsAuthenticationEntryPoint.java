@@ -18,11 +18,12 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.time.LocalDateTime;
 
-/** Changes only the anonymous response for the enabled private GET; grants no access. */
+/** Changes only anonymous responses for the two enabled private account GETs; grants no access. */
 @Component
 @Conditional(LegalPrivateRequirementsHttpConfiguration.Enabled.class)
 public final class LegalPrivateRequirementsAuthenticationEntryPoint implements AuthenticationEntryPoint {
     public static final String BASE_PATH = "/api/requisitos-legales";
+    public static final String HISTORY_PATH = "/api/aceptaciones-legales";
     private final AuthenticationEntryPoint fallback = new Http403ForbiddenEntryPoint();
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules()
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -30,7 +31,7 @@ public final class LegalPrivateRequirementsAuthenticationEntryPoint implements A
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
                          AuthenticationException failure) throws IOException, ServletException {
-        if (!isPrivateGet(request)) {
+        if (!isPrivateGet(request) && !isHistoryGet(request)) {
             // Preserve the pre-existing security chain's default entry point for all other paths/methods.
             fallback.commence(request, response, failure);
             return;
@@ -44,6 +45,14 @@ public final class LegalPrivateRequirementsAuthenticationEntryPoint implements A
     }
 
     public static boolean isPrivateGet(HttpServletRequest request) {
+        return isExactGet(request, BASE_PATH);
+    }
+
+    public static boolean isHistoryGet(HttpServletRequest request) {
+        return isExactGet(request, HISTORY_PATH);
+    }
+
+    private static boolean isExactGet(HttpServletRequest request, String expectedPath) {
         if (!"GET".equals(request.getMethod())) {
             return false;
         }
@@ -58,6 +67,6 @@ public final class LegalPrivateRequirementsAuthenticationEntryPoint implements A
             }
             path = path.substring(context.length());
         }
-        return BASE_PATH.equals(path);
+        return expectedPath.equals(path);
     }
 }

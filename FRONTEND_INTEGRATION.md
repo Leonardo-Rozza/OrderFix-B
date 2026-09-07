@@ -64,8 +64,8 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     `documentSetRevision` y documento exacto con rol restringido, ETag, errores, seguridad y rate limit,
     detrás de un flag apagado y con gate integral acreditado en 13D. El bloque 14 agrega requisitos
     públicos `REGISTRO/es-AR` con agregado V28, su propio flag apagado y gate de cierre en 14E.
-    El corte 15D agrega el GET autenticado de pendientes con lector privado V29 y flag apagado.
-    Quedan aceptación de aplicación, historial propio,
+    El corte 15D agrega el GET autenticado de pendientes con lector privado V29 y flag apagado;
+    15E agrega historial propio paginado sobre la misma frontera. Quedan aceptación de aplicación,
     idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
     staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
@@ -222,7 +222,8 @@ Errores: `401` (email o contraseña incorrectos).
 > `REGISTRO/es-AR`, detrás de su propio flag apagado. El corte 14E acredita
 > concurrencia, capacidad, tiempos límite y un gate integral fresco sobre esa superficie.
 > El corte 15D conecta el lector privado de 15C al GET autenticado de pendientes, bajo su propio
-> flag apagado. Quedan aceptación de aplicación, historial propio, idempotencia HTTP, respuestas
+> flag apagado. 15E agrega el historial propio paginado, sin metadata técnica. Quedan aceptación
+> de aplicación, idempotencia HTTP, respuestas
 > de escritura `409/428/503`, enforcement, contenido real,
 > staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
@@ -239,7 +240,8 @@ Errores: `401` (email o contraseña incorrectos).
 | GET | `/api/aceptaciones-legales?page=0&size=20` | ADMIN/USER | Evidencia propia; `contexto` es opcional |
 | POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
 
-Las dos primeras filas están implementadas en 13C, la tercera en 14D y la cuarta en 15D. El flag
+Las dos primeras filas están implementadas en 13C, la tercera en 14D, la cuarta en 15D y la quinta
+en 15E. El POST de aceptaciones sigue pendiente. El flag
 `ordenfix.legal.public-documents.enabled` vale `false` por defecto: apagado no registra mappings
 documentales ni excepciones de autenticación. Sólo `true` (sin distinguir mayúsculas) activa las
 tres políticas y los mappings; aliases como `yes`, `on` o `1` no habilitan lectura pública.
@@ -715,6 +717,12 @@ local como autorización.
 
 #### Consultar aceptaciones propias
 
+Implementado en 15E bajo `ordenfix.legal.account-read.enabled`, apagado por defecto. Comparte
+credencial restringida, preflight V29, contexto y pool con el GET privado de requisitos; no agrega
+configuración ni activa el flag. ADMIN sólo consulta sus propios actos: no ve evidencia de sus
+empleados. USER tampoco ve al titular, otros usuarios ni otros talleres. El actor se obtiene de la
+sesión validada y se contrasta nuevamente con el estado persistido.
+
 ```http
 GET /api/aceptaciones-legales?contexto=REGISTRO&page=0&size=20
 Authorization: Bearer <token>
@@ -722,6 +730,26 @@ Authorization: Bearer <token>
 
 `contexto` es opcional. `page` empieza en cero; `size` por defecto es 20 y admite 1 a 100. El orden
 es `aceptadoEn` descendente y luego UUID descendente.
+
+`page` por defecto es 0. Sólo se admiten `contexto`, `page` y `size`, una vez cada uno, sin signos
+ni espacios para los números. Parámetros desconocidos, repetidos o paginación inválida devuelven
+400 genérico; un contexto no reconocido usa `CONTEXTO_LEGAL_NO_SOPORTADO`. No hay selectores de
+usuario, taller, audiencia, locale ni orden. Una página posterior a la última devuelve content vacío
+conservando los conteos; si el filtro propio no tiene actos, totalElements y totalPages son 0.
+
+Cuenta actos y pagina dentro de la misma observación bajo el lock compartido del actor, de modo
+que los escritores legales que respeten ese protocolo no pueden cambiar el total entre consultas.
+La historia incluye únicamente evidencia real, tanto SCOPE_V1 anterior a V28 como AGGREGATE_V1,
+y conserva afirmaciones, documentos y fechas originales después de reemplazos o retiros. Los
+`documentos` conservan su ordinal histórico. La herencia no agrega entradas ni modifica fechas.
+No depende de un conjunto vigente: esta consulta no materializa agregados ni ejecuta DML.
+
+Éxito `private, no-store`, sin ETag ni respuesta 304: los condicionales no evitan consultar evidencia.
+HEAD autenticado no lee y responde 405, y las URI codificadas equivalentes se rechazan antes del
+lector. La sesión inválida o un actor que cambió produce 401, un rol no permitido, 403 y una historia
+inconsistente o no disponible, 503 `CONTRATO_LEGAL_NO_DISPONIBLE`; sus details contienen únicamente
+el contexto del filtro (o null) y locale es-AR. Los errores propios tienen no-store y nunca entregan
+una página parcial. Métodos/rutas sin mapping conservan el manejador global existente.
 
 Respuesta `200`:
 

@@ -2,13 +2,14 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B, 15F, 15C y 15D cerrados el 2026-09-06, con ejecución autorizada por el titular. La
+Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06, con ejecución autorizada por el titular. La
 [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) fija el protocolo ratificado en
 FRONTEND_INTEGRATION. 15B agrega el núcleo puro; 15F implementa V29 y compatibilidad estricta,
 acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el lector privado interno,
 acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al lector, con 209
-pruebas focales y regresiones aprobadas. El historial y los escritores de cuenta siguen pendientes;
-no cambian campos ni códigos legales del contrato. Sigue 15E.
+pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
+y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
+legales del contrato. Sigue 15G, dado que 15F ya está cerrado.
 
 ## Objetivo y resultado esperado
 
@@ -424,3 +425,63 @@ aceptación, enforcement, alta atómica, frontend runtime ni un handoff de lanza
 
 Cierre 15D: 209 pruebas aprobadas el 2026-09-06T21:22:33-03:00, 137 nuevas y 72 regresiones,
 sin fallos/errores/omitidas; artefactos y migraciones congeladas auditados. Sigue 15E: historial propio.
+
+
+## Implementación 15E — historial propio paginado
+
+GET `/api/aceptaciones-legales` obtiene sólo actos reales del principal servidor, con el mismo
+permiso ADMIN/USER que requisitos. ADMIN no adquiere visibilidad sobre empleados; la consulta
+siempre restringe user_id y taller_id y vuelve a acreditar estado/rol/tokenVersion del actor.
+Contexto es un filtro del snapshot original, no un selector de otro usuario o de scopes actuales.
+
+La historia reutiliza la frontera privada de 15C: misma credencial, preflight exacto V29 y
+privilegios, gate editorial compartido, advisory shared del actor y filas taller/user FOR SHARE.
+Una REQUIRES_NEW/READ_COMMITTED propia incluye count, página, acreditación y commit; refresca
+la observación después de estabilizar actor. El servicio no tiene store ni resolver de scopes.
+No crea agregados, actos ni metadata y una historia vacía es válida sin catálogo publicado.
+Las fachadas de requisitos e historial comparten contexto y pool; cualquiera puede inicializarlo,
+no heredan credenciales web y el cierre libera los recursos una sola vez, incluso tras un fallo.
+
+Count parte de actos propios crudos, con filtro opcional de contexto, para no ocultar evidencia
+por un JOIN a una fuente faltante. La selección de página usa LEFT JOIN, orden aceptadoEn DESC y
+UUID DESC de PostgreSQL, y verifica cardinalidad exacta. PageMeta incluye cero para un filtro vacío
+y preserva total fuera de la última página, con enteros seguros para JavaScript y offset long.
+La comparación de UUID en el modelo respeta el orden unsigned de PostgreSQL.
+
+Sólo se hidratan documentos/fuentes correspondientes a la página. Se acreditan snapshot de acto
+y lote, keys/versiones, contexto/audiencia histórica, pertenencia SCOPE_V1 o AGGREGATE_V1, ordinales
+y documentos exactos, digests y transiciones. Las igualdades de texto son binarias UTF-8 para no
+depender de collation. Las fuentes pueden estar REEMPLAZADA/RETIRADA; no se sustituyen por versiones
+vigentes. La fecha original SCOPE_V1 puede ser anterior a una espera de publicación de su transacción;
+no se impone una causalidad de COMMIT basada en ese timestamp. Sí se exigen fuentes y fecha del
+lote no posteriores a la observación, y activación documental acorde con su vigente_desde.
+
+Límites de lectura: 100 actos por página, 16 documentos por acto, batches/fetch 32, afirmación
+1000 code points/4000 bytes, Markdown de 1 MiB por fuente y presupuesto de 128 MiB de fuentes distintas.
+Las cabeceras/tamaños se acreditan antes de cualquier consulta de bytes. Las sentinelas se rechazan
+antes de mapear exceso. No se cargan linajes o actos fuera de página ni columnas IP/UA/HMAC/ciphertext.
+Se conserva el plazo exterior de 15 s, SQL/socket de 5 s, locks/borrow/connect/cancel de 1 s y pool máximo 2 de 15A/15C;
+no se introduce auto-retry ni se atribuye una capacidad integral a las pruebas focales.
+
+Wire idéntico al contrato aprobado: content de actos/documentos originales y PageMeta, sin campos
+de actor, estados actuales, metadata ni procedencia. Page/size/contexto son los únicos parámetros,
+sin repeticiones ni coerción silenciosa; se mantienen los defaults 0/20/null y size 1–100. El entry point
+existente agrega únicamente este GET exacto, manteniendo separada la clasificación de requisitos.
+Sin sesión válida, 401; actor discordante, 401; rol no autorizado, 403 antes del lector, e indisponibilidad
+503 con contexto del filtro/locale es-AR sin causas internas. Respuestas privadas no-store, sin ETag/304.
+HEAD y URI equivalentes codificadas se rechazan antes del lector; rutas sin mapping conservan el
+manejo global anterior documentado en 15D. No se activó account-read ni se ampliaron grants.
+
+Pruebas PostgreSQL observan el lock de un escritor mientras el lector está detenido tras count;
+la página conserva el conteo inicial y una lectura posterior observa el nuevo acto confirmado.
+La evidencia legacy se crea en V27 con guards activos y luego migra a V29 preservando bytes/IDs/fechas/xmin.
+REPLACE y RETIRE se ejecutan mediante los servicios editoriales existentes. La página de 100 actos
+sobre 105 carga documentos en cuatro batches y deja el resto para su página correspondiente.
+Las inyecciones de tamaño excesivo mantienen concordantes fuente/snapshot/digest para demostrar
+rechazo por cabeceras antes de consultas text_utf8, sin DML y con rollback/cierre.
+
+El registro de comandos, correcciones de fixtures y gate final está en el plan de implementación.
+El historial no convierte la herencia en evidencia ni completa POST/idempotencia/enforcement/alta.
+
+Cierre 15E: 426 pruebas aprobadas el 2026-09-06T21:51:19-03:00, cero fallos/errores/omitidas.
+Ambos artefactos y migraciones congeladas auditados. Sigue 15G: comando canónico e idempotencia.

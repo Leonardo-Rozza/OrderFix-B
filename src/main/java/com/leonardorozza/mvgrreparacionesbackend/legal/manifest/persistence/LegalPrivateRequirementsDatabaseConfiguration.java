@@ -178,6 +178,20 @@ public class LegalPrivateRequirementsDatabaseConfiguration {
                 jdbc, dataSource, gate, resolver, store, reader, actorReader, schema, privileges);
     }
 
+    @Bean
+    LegalAcceptanceHistoryReader legalAcceptanceHistoryReader(JdbcTemplate jdbc) {
+        return new LegalAcceptanceHistoryReader(jdbc);
+    }
+
+    @Bean
+    LegalAcceptanceHistoryService legalAcceptanceHistoryService(JdbcTemplate jdbc,
+            LegalPrivateRequirementsDataSource dataSource, LegalManifestDatabaseGate gate,
+            LegalActorSnapshotReader actorReader, LegalAcceptanceHistoryReader reader,
+            LegalV29AcceptanceSchemaVerifier schema, LegalPrivateRequirementsPrivilegeVerifier privileges,
+            LegalDatabaseBoundaryMarker.Guard guard) {
+        return new LegalAcceptanceHistoryService(jdbc, dataSource, gate, actorReader, reader, schema, privileges);
+    }
+
     private static String required(Environment environment, String suffix) {
         String value = environment.getRequiredProperty(PROPERTY_PREFIX + suffix);
         if (value.isBlank()) {

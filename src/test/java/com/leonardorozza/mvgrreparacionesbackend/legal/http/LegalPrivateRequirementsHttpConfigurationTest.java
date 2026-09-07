@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.http;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalAcceptanceHistoryService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsReadException;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsReadService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPublicDocumentReadDatabaseConfiguration;
@@ -86,6 +87,7 @@ class LegalPrivateRequirementsHttpConfigurationTest {
 
             assertThat(children.constructed()).isEmpty();
             assertThat(web.getBeansOfType(LegalPrivateRequirementsReadService.class)).isEmpty();
+            assertThat(web.getBeansOfType(LegalAcceptanceHistoryService.class)).isEmpty();
             assertThat(web.getBeansOfType(LegalPrivateRequirementsHttpConfiguration.class)).isEmpty();
             assertWebGraphUnchanged(web);
         }
@@ -178,6 +180,9 @@ class LegalPrivateRequirementsHttpConfigurationTest {
 
             assertWebGraphUnchanged(web);
             assertThat(facade).isSameAs(isolated.getBean(LegalPrivateRequirementsReadService.class));
+            assertThat(web.getBean(LegalAcceptanceHistoryService.class))
+                    .isSameAs(isolated.getBean(LegalAcceptanceHistoryService.class));
+            assertThat(web.containsBean("legalAcceptanceHistoryReader")).isFalse();
             assertThat(isolated.getParent()).isNull();
             assertThat(isolated.getBeanFactory()).isNotSameAs(web.getBeanFactory());
             assertThat(isolated.containsBean("webDataSource")).isFalse();
@@ -389,6 +394,48 @@ class LegalPrivateRequirementsHttpConfigurationTest {
             assertThatThrownBy(() -> configuration.legalPrivateRequirementsReadService(configuredEnvironment()))
                     .isInstanceOf(IllegalStateException.class);
             verify(contexts.constructed().getFirst(), times(1)).close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void eitherFacadeCanCreateTheSingleSharedOwnedContext(boolean historyFirst) {
+        var requirements = mock(LegalPrivateRequirementsReadService.class);
+        var history = mock(LegalAcceptanceHistoryService.class);
+        var configuration = new LegalPrivateRequirementsHttpConfiguration();
+        try (MockedConstruction<AnnotationConfigApplicationContext> contexts = mockConstruction(
+                AnnotationConfigApplicationContext.class, (candidate, ignored) -> {
+                    when(candidate.getEnvironment()).thenReturn(new StandardEnvironment());
+                    when(candidate.getBean(LegalPrivateRequirementsReadService.class)).thenReturn(requirements);
+                    when(candidate.getBean(LegalAcceptanceHistoryService.class)).thenReturn(history);
+                })) {
+            if (historyFirst) configuration.legalAcceptanceHistoryService(configuredEnvironment());
+            else configuration.legalPrivateRequirementsReadService(configuredEnvironment());
+            assertThat(configuration.legalAcceptanceHistoryService(new MockEnvironment())).isSameAs(history);
+            assertThat(configuration.legalPrivateRequirementsReadService(new MockEnvironment())).isSameAs(requirements);
+            assertThat(contexts.constructed()).hasSize(1);
+            verify(contexts.constructed().getFirst(), times(1)).refresh();
+            configuration.destroy();
+            configuration.destroy();
+            verify(contexts.constructed().getFirst(), times(1)).close();
+            assertThatThrownBy(() -> configuration.legalAcceptanceHistoryService(configuredEnvironment()))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void historyFacadeInitializationFailureClosesTheCandidateWithoutTakingOwnership() {
+        var failure = new IllegalStateException("deliberate history facade failure");
+        var configuration = new LegalPrivateRequirementsHttpConfiguration();
+        try (MockedConstruction<AnnotationConfigApplicationContext> contexts = mockConstruction(
+                AnnotationConfigApplicationContext.class, (candidate, ignored) -> {
+                    when(candidate.getEnvironment()).thenReturn(new StandardEnvironment());
+                    when(candidate.getBean(LegalAcceptanceHistoryService.class)).thenThrow(failure);
+                })) {
+            assertThatThrownBy(() -> configuration.legalAcceptanceHistoryService(configuredEnvironment()))
+                    .isSameAs(failure);
+            verify(contexts.constructed().getFirst()).close();
+            assertThat(ReflectionTestUtils.getField(configuration, "requirementsContext")).isNull();
         }
     }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -19,9 +20,10 @@ class LegalPrivateRequirementsAuthenticationEntryPointTest {
             new LegalPrivateRequirementsAuthenticationEntryPoint();
 
     @ParameterizedTest
-    @ValueSource(strings = {"", "/ordenfix"})
-    void exactPrivateGetReturnsOnlyTheSanitized401Envelope(String context) throws Exception {
-        var request = new MockHttpServletRequest("GET", context + ROOT);
+    @CsvSource({"'',/api/requisitos-legales", "/ordenfix,/api/requisitos-legales",
+            "'',/api/aceptaciones-legales", "/ordenfix,/api/aceptaciones-legales"})
+    void exactPrivateGetReturnsOnlyTheSanitized401Envelope(String context, String path) throws Exception {
+        var request = new MockHttpServletRequest("GET", context + path);
         request.setContextPath(context);
         request.addHeader("Authorization", "Bearer jwt-secret");
         request.addHeader("If-None-Match", "*");
@@ -38,7 +40,7 @@ class LegalPrivateRequirementsAuthenticationEntryPointTest {
         assertThat(body.path("timestamp").isTextual()).isTrue();
         assertThat(java.time.LocalDateTime.parse(body.path("timestamp").asText())).isNotNull();
         assertThat(body.path("status").asInt()).isEqualTo(401);
-        assertThat(body.path("path").asText()).isEqualTo(context + ROOT);
+        assertThat(body.path("path").asText()).isEqualTo(context + path);
         assertThat(body.path("message").asText()).isEqualTo("Se requiere una sesión válida");
         assertThat(response.getContentAsString()).doesNotContain("jwt-secret", "another-tenant", "internal-secret");
     }
@@ -47,14 +49,26 @@ class LegalPrivateRequirementsAuthenticationEntryPointTest {
     @ValueSource(strings = {"HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "get"})
     void otherMethodsPreserveTheOriginalForbiddenEntryPoint(String method) throws Exception {
         assertFallback(new MockHttpServletRequest(method, ROOT));
+        assertFallback(new MockHttpServletRequest(method, LegalPrivateRequirementsAuthenticationEntryPoint.HISTORY_PATH));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"/api/requisitos-legales/", "/api/requisitos-legales/id", "/api/requisitos-legales-admin",
-            "/api/public/requisitos-legales", "/api/aceptaciones-legales", "/api/requisitos%2dlegales",
+            "/api/public/requisitos-legales", "/api/aceptaciones-legales/",
+            "/api/aceptaciones-legales/id", "/api/aceptaciones-legales-admin", "/api/aceptaciones%2dlegales", "/api/requisitos%2dlegales",
             "/api/requisitos-legales;anything", "/api/requisitos-legales//", "/api/auth/login"})
     void otherPathsPreserveTheOriginalForbiddenEntryPoint(String path) throws Exception {
         assertFallback(new MockHttpServletRequest("GET", path));
+    }
+
+    @Test
+    void theTwoControllersHaveSeparateExactClassifications() {
+        var requirements = new MockHttpServletRequest("GET", ROOT);
+        var history = new MockHttpServletRequest("GET", LegalPrivateRequirementsAuthenticationEntryPoint.HISTORY_PATH);
+        assertThat(LegalPrivateRequirementsAuthenticationEntryPoint.isPrivateGet(requirements)).isTrue();
+        assertThat(LegalPrivateRequirementsAuthenticationEntryPoint.isPrivateGet(history)).isFalse();
+        assertThat(LegalPrivateRequirementsAuthenticationEntryPoint.isHistoryGet(history)).isTrue();
+        assertThat(LegalPrivateRequirementsAuthenticationEntryPoint.isHistoryGet(requirements)).isFalse();
     }
 
     @Test

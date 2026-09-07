@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B, 15F, 15C y 15D cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los cortes posteriores no están iniciados. Sigue 15E.
+Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los cortes posteriores no están iniciados. Sigue 15G (15F ya está cerrado).
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -287,6 +287,51 @@ no produce 304, vecinos/métodos, flag apagado, sin dependencia del flag públic
 permitAll ni cambio de políticas públicas. Commit: `feat(legal): publica requisitos del usuario`.
 
 ## 15E — Historial de evidencia propia
+
+Baseline de ejecución: `688b020`, backend limpio y rama confirmada; frontend `7545201`
+preservado con sus dos rutas no versionadas. Lista nominal confirmada antes de editar producción:
+
+- Ocho clases nuevas: `db/LegalAcceptanceHistoryReader.java`, `LegalAcceptanceHistoryService.java`,
+  `LegalAcceptanceHistoryPage.java`, `LegalAcceptanceHistoryReadException.java`;
+  `http/LegalAcceptanceHistoryController.java`, `LegalAcceptanceHistoryResponses.java`,
+  `LegalAcceptanceHistoryHttpException.java` y `LegalAcceptanceHistoryExceptionHandler.java`.
+- Ampliaciones acotadas: `db/LegalPrivateRequirementsDatabaseConfiguration.java` registra lector y
+  servicio históricos sobre la misma frontera; `http/LegalPrivateRequirementsHttpConfiguration.java`
+  expone ambas fachadas y conserva un único contexto/pool; `sec/LegalPrivateRequirementsAuthenticationEntryPoint.java`
+  admite además el GET exacto de historial en su clasificación privada, sin tocar SecurityConfig.
+- Tests nuevos nominales: `db/LegalAcceptanceHistoryReaderIT.java`, `LegalAcceptanceHistoryITSupport.java`,
+  `LegalAcceptanceHistoryPageTest.java`, `LegalAcceptanceHistoryServiceTest.java`,
+  `LegalAcceptanceHistoryHttpIT.java`; `http/LegalAcceptanceHistoryControllerTest.java`.
+- Tests existentes que se amplían para las dos fachadas/rutas: `http/LegalPrivateRequirementsHttpConfigurationTest.java`
+  y `sec/LegalPrivateRequirementsAuthenticationEntryPointTest.java`. Se agrega nominalmente
+  `db/LegalPrivateRequirementsHttpIT.java`: su caso vecino usaba la ruta de aceptaciones que ahora
+  existe; se reemplaza por su subruta no implementada para mantener la regresión de vecinos.
+- Este plan, el diseño compañero y FRONTEND_INTEGRATION.md. No se editan SQL, verificadores de
+  privilegios, fuentes del reader de pendientes ni fixtures históricos de cortes previos.
+
+La credencial 15C ya permite las tablas históricas necesarias; no se amplían grants ni consumidores.
+Historia comparte preflight V29, gate editorial shared, advisory shared de actor, filas taller/user
+FOR SHARE y una única REQUIRES_NEW/READ_COMMITTED, con observación refrescada después de locks.
+No resuelve scopes actuales ni invoca store/materialización: una historia vacía es válida aun sin
+catálogo vigente y la consulta no ejecuta DML. Count y página se estabilizan frente a escritores que
+respeten el advisory de actor según 15A; no se atribuye ese protocolo a un INSERT SQL arbitrario.
+
+Se pagina el snapshot propio de actos (no lotes), sin joins que omitan corrupción antes de contar;
+orden aceptadoEn DESC, UUID DESC de PostgreSQL, filtro opcional por contexto original. Sólo se
+hidratan fuentes y documentos de esa página, en batches 32 y con sentinelas antes de mapear exceso.
+Límites: 100 actos, 16 documentos por acto, afirmación 1000 code points/4000 bytes, Markdown 1MiB
+por fuente y 128MiB de fuentes históricas distintas por observación, acreditados antes de texto.
+Count no carga historia fuera de página; sus enteros respetan el máximo exacto JavaScript. Se
+validan snapshot, digest, pertenencia histórica SCOPE_V1/AGGREGATE_V1 y fechas contra la observación,
+sin reconstruir un agregado vigente ni exigir aceptadoEn posterior a una publicación legacy.
+REPLACE/RETIRE conservan la evidencia original; la herencia no crea filas históricas.
+
+HTTP sólo admite contexto/page/size, sin selectores de actor: defaults null/0/20, decimales ASCII
+sin signo, size 1–100 y page hasta Integer.MAX_VALUE, con offset long comprobado. Contexto inválido
+usa CONTEXTO_LEGAL_NO_SOPORTADO; parámetros repetidos, desconocidos o paginación inválida usan 400
+genérico. No hay ETag/304; éxito private,no-store y errores propios no-store. Head/URI codificada
+mantienen los controles explícitos 405/404 de 15D y las rutas sin mapping conservan el advice global
+previo. 401/403 ocurren por sesión/actor o rol; 503 conserva sólo contexto del filtro y locale es-AR.
 
 Resultado: GET /api/aceptaciones-legales paginado y filtrable por contexto. Obtiene actos y documentos
 reales, sin convertir herencia en evidencia ni exponer metadata técnica.
@@ -903,3 +948,97 @@ El 500 previo para rutas/métodos sin mapping queda caracterizado como limitaci�
 fuera del nuevo GET. No constituye un permiso ni consulta legal. El flag privado permanece apagado
 por defecto y el handoff global sigue cerrado. Commit del corte:
 `feat(legal): publica requisitos del usuario`. Sigue **15E — historial de evidencia propia**.
+
+
+## Ejecución 15E — 2026-09-06
+
+Cerrado desde `688b020`, rama y baseline verificados antes de editar; frontend `7545201` preservado.
+Veintitrés archivos nominales: once de producción (ocho nuevos), nueve de pruebas/fixture (seis
+nuevos) y tres documentos. Las ampliaciones previas están registradas en la lista del corte. No se
+modificaron SQL, verificadores de schema/ACL, readers previos, roles compartidos ni configuración
+de entorno. El fixture nuevo reutiliza los de 15A/15C sin cambiarlos.
+
+El servicio histórico se ejecuta en la frontera privada existente, con su rol restringido y todos
+los locks/plazos de 15A/15C. El puente posee un único contexto sin padre y expone dos fachadas. No
+invoca scopes actuales ni store: todo GET de historia usa cero DML y no necesita un catálogo
+vigente. Actor, count, selección, fuentes, documentos y transiciones se acreditan antes de devolver
+la página tras commit/cierre. Las versiones históricas, textos y fechas originales permanecen
+iguales tras REPLACE/RETIRE; no se convierte una decisión de herencia en evidencia nueva.
+
+La revisión independiente confirmó el aislamiento, conteo sin ocultar filas, ambos esquemas de
+pertenencia histórica, límites/sentinelas antes de texto y ausencia de consultas de metadata.
+Se añadió comparación binaria UTF-8 de campos del snapshot para evitar depender de collation.
+El IT crea SCOPE_V1 genuino bajo V27 con constraints activos y transaction_timestamp anterior a la
+publicación; migra a V29 y compara bytes, IDs, fechas y xmin. No simula historia legacy insertando
+sólo un enum antiguo sobre el esquema nuevo.
+
+Concurrencia acotada: un lector se detiene después de su count SQL real; otro backend PostgreSQL
+queda esperando el advisory exclusivo de ese actor, observado mediante pg_locks. La primera página
+conserva count/content iniciales y la siguiente observación incluye el acto recién confirmado.
+La prueba presupone el protocolo de escritores 15A y no se extiende a DML arbitrario externo.
+Capacidad focal: 105 actos, página de 100 con cuatro batches documentales y cinco actos en la
+siguiente página. Dos corrupciones owner con fuente/snapshot/digest concordantes demuestran rechazo
+de afirmación de 1001 code points o Markdown de 1.048.577 bytes antes de cualquier consulta text_utf8,
+con rollback, pool liberado y cero DML. No se presenta como gate integral de capacidad 15P.
+
+### Pruebas y correcciones de fixtures
+
+Primera tanda: 218 unitarios/configuración aprobados. Integración inicial: 113 unitarios y 66 casos
+PostgreSQL; todos los 50 HTTP aprobaron y el reader tuvo dos aserciones de fixture a corregir. El
+contador por nombre de tabla mezclaba cuatro consultas documentales con ocho preflights: ahora
+identifica sólo el JOIN real de datos y acredita cuatro batches/100 filas. El validador editorial
+rechazó la ruta temporal con /var enlazado de macOS: el fixture ahora le entrega toRealPath(), sin
+relajar ninguna regla del validador. Antes de ejecutar se corrigió también el literal RETIRADA del
+fixture. La tanda siguiente aprobó 49 unitarios y los 18 PostgreSQL del reader, incluidos límites.
+
+No hubo fallos de producción ni regresiones transversales. Se conserva la política de gate focal,
+ampliado a la configuración/frontera privada, GET previo, seguridad pública, JWT/auth y tenant.
+No se ejecutó clean verify; el gate integral continúa reservado a 15Q y a cambios transversales
+que lo requieran. No se suman ejecuciones repetidas a los resultados de cierre.
+
+### Gate final y artefactos
+
+Java 21.0.10, Maven 3.9.11, PostgreSQL 16.14 en contenedores efímeros. Gate final aprobado el
+2026-09-06T21:51:19-03:00 en 1:48 min: **426 pruebas aprobadas**, 298 Surefire y 128 Failsafe,
+sin fallos/errores/omitidas. Son 181 casos en las cinco suites nuevas y 245 de configuración/regresión,
+incluidos nueve casos adicionales de ambas fachadas/rutas. Se inspeccionaron los dieciséis XML.
+
+| Suite | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalAcceptanceHistoryPageTest | 37 | 0 / 0 / 0 |
+| LegalAcceptanceHistoryServiceTest | 12 | 0 / 0 / 0 |
+| LegalAcceptanceHistoryControllerTest | 64 | 0 / 0 / 0 |
+| LegalPrivateRequirementsHttpConfigurationTest | 35 | 0 / 0 / 0 |
+| LegalPrivateRequirementsAuthenticationEntryPointTest | 25 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDatabaseConfigurationTest | 45 | 0 / 0 / 0 |
+| LegalPrivateRequirementsControllerTest | 42 | 0 / 0 / 0 |
+| LegalPublicRequirementsSecurityTest | 16 | 0 / 0 / 0 |
+| LegalPublicDocumentSecurityTest | 9 | 0 / 0 / 0 |
+| JwtSecurityIntegrationTests | 3 | 0 / 0 / 0 |
+| TenantIsolationTests | 5 | 0 / 0 / 0 |
+| AuthTests | 5 | 0 / 0 / 0 |
+| LegalAcceptanceHistoryReaderIT | 18 | 0 / 0 / 0 |
+| LegalAcceptanceHistoryHttpIT | 50 | 0 / 0 / 0 |
+| LegalPrivateRequirementsHttpIT | 44 | 0 / 0 / 0 |
+| LegalPrivateRequirementsDatabaseContextIT | 16 | 0 / 0 / 0 |
+
+Comando final, sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalAcceptanceHistoryPageTest,LegalAcceptanceHistoryServiceTest,LegalAcceptanceHistoryControllerTest,LegalPrivateRequirementsHttpConfigurationTest,LegalPrivateRequirementsAuthenticationEntryPointTest,LegalPrivateRequirementsDatabaseConfigurationTest,LegalPrivateRequirementsControllerTest,LegalPublicRequirementsSecurityTest,LegalPublicDocumentSecurityTest,JwtSecurityIntegrationTests,TenantIsolationTests,AuthTests \
+  -Dit.test=LegalAcceptanceHistoryReaderIT,LegalAcceptanceHistoryHttpIT,LegalPrivateRequirementsHttpIT,LegalPrivateRequirementsDatabaseContextIT \
+  package failsafe:integration-test failsafe:verify antrun:run@verify-no-secret-properties-in-jar
+```
+
+Las veinte fuentes Java nominales permanecieron iguales durante el gate. La auditoría independiente
+comparó 25 clases de las once fuentes productivas contra target/classes en ambos JAR; Start-Class
+web/CLI correcto, sin clases de tests, application-secret ni entradas duplicadas. Las migraciones
+V27/V28/V29 coinciden con sus hashes congelados en fuentes y en ambos artefactos.
+
+Account-read sigue apagado por defecto, sin grants compartidos, push ni activación frontend.
+Se preservan los archivos no versionados del frontend y el handoff global continúa cerrado. El
+manejo global anterior para rutas/métodos sin mapping permanece documentado en 15D; no se amplía
+este corte para modificarlo. Commit: `feat(legal): consulta aceptaciones propias`.
+Sigue **15G — comando canónico, HMAC y coordinación idempotente**, dado que 15F ya está cerrado.

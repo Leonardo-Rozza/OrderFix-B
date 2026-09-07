@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.http;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalAcceptanceHistoryService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsReadService;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.annotation.Conditional;
@@ -21,7 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Exposes only the authenticated requirements facade, keeping its mutable PostgreSQL graph outside the web factory.
+ * Exposes the two account read facades, keeping their shared PostgreSQL graph outside the web factory.
  * The independent context receives three dedicated credentials and the shared strict account-read flag.
  */
 @Configuration(proxyBeanMethods = false)
@@ -36,11 +37,20 @@ public class LegalPrivateRequirementsHttpConfiguration implements DisposableBean
 
     @Bean(destroyMethod = "")
     public synchronized LegalPrivateRequirementsReadService legalPrivateRequirementsReadService(Environment environment) {
+        return facade(environment, LegalPrivateRequirementsReadService.class);
+    }
+
+    @Bean(destroyMethod = "")
+    public synchronized LegalAcceptanceHistoryService legalAcceptanceHistoryService(Environment environment) {
+        return facade(environment, LegalAcceptanceHistoryService.class);
+    }
+
+    private <T> T facade(Environment environment, Class<T> type) {
         if (destroyed) {
             throw new IllegalStateException("El contexto HTTP de requisitos ya está cerrado");
         }
         if (requirementsContext != null) {
-            return requirementsContext.getBean(LegalPrivateRequirementsReadService.class);
+            return requirementsContext.getBean(type);
         }
         Map<String, Object> selected = requirementsProperties(environment);
         AnnotationConfigApplicationContext isolated = new AnnotationConfigApplicationContext();
@@ -55,7 +65,7 @@ public class LegalPrivateRequirementsHttpConfiguration implements DisposableBean
             sources.addFirst(new MapPropertySource(PROPERTY_SOURCE, selected));
             isolated.register(LegalPrivateRequirementsDatabaseConfiguration.class);
             isolated.refresh();
-            LegalPrivateRequirementsReadService facade = isolated.getBean(LegalPrivateRequirementsReadService.class);
+            T facade = isolated.getBean(type);
             requirementsContext = isolated;
             return facade;
         } catch (RuntimeException | Error failure) {
