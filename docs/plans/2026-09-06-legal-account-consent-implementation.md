@@ -3,7 +3,8 @@
 Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-15G1 y 15G2 cerrados el 2026-09-06; 15G completo. Sigue 15H (metadata protegida).
+15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
+Sigue 15H2 (persistencia de metadata protegida); 15H sigue abierto hasta completar ese paso.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -41,7 +42,8 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15F | V29 y compatibilidad estricta del esquema | A; regresión 12–14 y 15A |
 | 15G1 | Comando canónico y HMAC/keyring — cerrado | A, F |
 | 15G2 | Coordinación SQL y replay durable — cerrado | G1 |
-| 15H | IP confiable, metadata cifrada y retención declarada | A, F |
+| 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
+| 15H2 | Persistencia de metadata en la transacción del escritor — pendiente | H1, G2 |
 | 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
@@ -653,6 +655,47 @@ El servicio escritor completo y sus fronteras REQUIRES_NEW/privilegios siguen en
 
 ## 15H — Metadata protegida
 
+### Ejecución subdividida: 15H1 y 15H2
+
+Baseline 15H: `5669248`, backend limpio en `codex/lanzamiento-publico-backend`; frontend `7545201`
+preservado con sus dos rutas no versionadas. El 2026-09-07 se divide ejecución pura y JDBC antes
+de editar, manteniendo un commit atómico por corte. Se completan ambos pasos para cerrar 15H.
+
+Lista nominal 15H1:
+
+- Nuevo `core/LegalRequestMetadata.java` y `core/LegalRequestMetadataTest.java`.
+- Nuevo `http/LegalRequestMetadataResolver.java` y su test equivalente.
+- Nuevos `db/LegalAcceptanceMetadataPolicy.java`, `db/LegalAcceptanceMetadataCodec.java` y sus tests.
+- Este plan y el diseño compañero. El valor core adicional evita duplicar validación de literales
+  IP/Unicode o hacer depender persistencia de HTTP; no acredita identidad ni confianza de proxies.
+
+Lista nominal 15H2, después del commit 15H1:
+
+- Nuevo `db/LegalAcceptanceMetadataWriter.java` y `db/LegalAcceptanceMetadataWriterTest.java`.
+- Nuevos `db/LegalAcceptanceMetadataIT.java` y `db/LegalAcceptanceMetadataITSupport.java`.
+- Este plan y el diseño compañero. Reutiliza fixtures 15A/15G2 sin modificarlos. Sólo se provisionan
+  roles y datos de prueba en PostgreSQL efímero; no se amplían ACL ni credenciales compartidas.
+
+La captura admite sólo direcciones literales IPv4/IPv6 sin DNS, resuelve X-Forwarded-For desde el
+peer y de derecha a izquierda mediante CIDR explícitos; no confía en prefijos enviados por clientes.
+UA ausente/vacía se omite; presente conserva valores exactos, hasta 512 code points Unicode válidos
+(2048 bytes UTF-8), sin truncar ni normalizar y sin controles C0/C1. Diagnósticos redactados.
+El keyring AES es explícito e independiente, sin fallback a HMAC/JWT/equipos ni configuración runtime.
+La retención positiva es obligatoria, no tiene default y se redondea hacia arriba a microsegundos.
+Los futuros escritores deberán validar su configuración completa antes del negocio.
+
+El codec entrega un preparado inmutable ligado a su instancia y lote, con IP obligatoria y UA opcional,
+AAD contractual y nonces aleatorios. El writer sólo admite preparados propios ya cifrados y una
+reserva MISS de 15G2 ligada al mismo JDBC, actor estabilizado y lote nuevo de esa transacción.
+Inserta cabecera/campos, sin completar la reserva ni gestionar commit/REQUIRES_NEW propios.
+Cualquier error o colisión de nonce marca rollback; no hay retry, upsert ni lectura de ciphertext
+con el rol de escritura. Registro/aceptación completos, configuración y mantenimiento quedan en
+15I/15L/15O. V27/V28/V29, consumidores actuales, flags, HTTP de escritura y frontend quedan fuera.
+
+Commit 15H1: `feat(legal): prepara captura y cifrado de metadata`.
+Commit 15H2: `feat(legal): protege metadata de aceptaciones` (commit original de 15H).
+
+
 Resultado: captura confiable y cifrado de IP/UA listo para confirmar en el lote, con retención
 explícita y claves independientes. No endpoint de lectura de metadata.
 
@@ -664,6 +707,36 @@ Gate focal: proxies no confiables, cadena válida/hostil, IP ausente, UA Unicode
 keyrings independientes, nonce duplicado, manipulación de tag, retención inválida y rollback completo.
 Ningún secreto en DTO/error/log. No reutilizar el helper que confía en primer X-Forwarded-For.
 Commit: `feat(legal): protege metadata de aceptaciones`.
+
+### Cierre 15H1
+
+Gate fresco aprobado el 2026-09-07T06:59:01-03:00, Java 21. Comando focal:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalRequestMetadataTest,LegalRequestMetadataResolverTest,LegalAcceptanceMetadataPolicyTest,LegalAcceptanceMetadataCodecTest,LegalIdempotencyKeyringTest \
+  package antrun:run@verify-no-secret-properties-in-jar
+```
+
+259 pruebas en cinco XML frescos, sin fallos, errores u omitidas: 89 del valor core, 67 del resolver,
+50 del codec y 13 de política (219 nuevas), más 40 regresiones del keyring idempotente. Los ocho
+archivos Java permanecieron idénticos durante el gate. Parser IPv4/IPv6 sin DNS, CIDR/mapped,
+spoofing/prefijos, límites/duplicados, Unicode/512, vector AES-GCM fijo, AAD y bytes alterados,
+rotación, copias defensivas, nonces por preparado y concurrencia del codec están cubiertos.
+El componente sólo cifra; los tests acreditan autenticación y contenido mediante JCE independiente.
+No se crea un descifrador productivo, endpoint o configuración de claves/retención reales.
+
+15H1 se cierra con los diez archivos nominales y su commit atómico, sin push. 15H2 conserva pendiente
+la persistencia y la prueba PostgreSQL de colisiones globales de nonce, tombstones y rollback del grafo.
+La prueba pura no atribuye unicidad global ni commit a un preparado cifrado.
+
+Auditoría H1 independiente aprobada: ambos JAR contienen 938 clases, incluidas ocho nuevas
+idénticas a target/classes. V27/V28/V29 congeladas en fuente/target/artefactos; entrypoints correctos,
+sin tests, dependencias de test, duplicados ni propiedades secretas. SHA-256:
+
+- Web: `d53e74778bdc432aedb4ba0b01f3fefd4c17ebc5759735ea72e6c12e17c14eb0`.
+- CLI: `37c24e26b0df945c58d56284933d0132c1b441ef264cded7a041d52298a93d4f`.
 
 ## 15I — Aceptación autenticada interna y atómica
 

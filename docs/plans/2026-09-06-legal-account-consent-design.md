@@ -10,7 +10,7 @@ acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al 
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
-Sigue 15H (metadata protegida).
+15H1 cerrado con 259 pruebas el 2026-09-07; sigue 15H2 (persistencia de metadata).
 
 ## Objetivo y resultado esperado
 
@@ -611,3 +611,49 @@ Los siete archivos Java permanecieron idénticos durante el gate. Ambos JAR fuer
 15 clases nuevas exactas, entrypoints correctos, sin tests, duplicados ni propiedades secretas;
 V27/V28/V29 intactas. Se cierra 15G; sigue 15H. El registro/escritor completo, credenciales y política
 de sesión permanecen en sus cortes previstos, sin activar endpoints ni flags de escritura.
+
+
+## Implementación 15H — captura y metadata protegida
+
+Se divide 15H en H1 (captura/cifrado puros) y H2 (writer y PostgreSQL), con listas nominales en el
+plan. LegalRequestMetadata es un valor core compartido: valida IP literal y Unicode sin acoplar
+persistencia a Servlet. El resolver HTTP acredita la cadena de proxies; el valor por sí solo no
+acredita procedencia o autorización. UA vacía/ausente se omite; se conserva el resto exactamente
+hasta 512 code points, sin controles C0/C1 ni surrogates inválidos. No hay DNS ni truncamiento.
+
+La política personal exige Duration positiva explícita, sin valor legal por defecto; se usa
+precisión de microsegundos redondeada hacia arriba. El keyring AES-GCM es propio y no se conecta a
+configuración, HMAC, JWT o cifrado de equipos. La futura composición de configuración acreditará
+separación de secretos entre subsistemas antes de habilitar consumidores. Tests usan claves y
+retenciones sintéticas. No se genera ni configura un secreto para un entorno real en este corte.
+
+El codec prepara IP obligatoria y UA opcional con AAD por lote/campo/versión. Su resultado es opaco,
+inmutable y ligado al codec, para impedir que el writer acepte bytes arbitrarios o de otro dueño.
+El writer participa en la reserva/transacción existente, exige lote propio no vacío y actor válido,
+y guarda sólo cabecera y campos cifrados. Usa el aceptado_en impuesto por PostgreSQL como origen de
+capturado_en/retener_hasta. La unicidad global de nonce, incluida metadata tombstone, se decide en
+V27 y cualquier colisión revierte el flujo completo. No completa el resultado idempotente ni abre
+otra transacción: esas responsabilidades siguen en 15I/15L. No se crea endpoint de metadata.
+
+
+Detalle de captura 15H1: IPv4 requiere cuatro octetos decimales sin ceros iniciales; IPv6 se
+normaliza a RFC 5952 y las direcciones mapped a IPv4. No se aceptan DNS, zonas, puertos, corchetes,
+whitespace o formas abreviadas de IPv4. La política de red admite hasta 64 CIDR explícitos, con
+host bits en cero; mapped requiere prefijo >=96 que se convierte a IPv4. No se infiere si una IP
+es pública/privada ni se añaden listas de redes confiables por defecto.
+
+Si el peer no es confiable se ignora por completo X-Forwarded-For. Si lo es, se exige una única
+cabecera no vacía, hasta 4096 caracteres y 32 saltos; todos sus literales se validan y la búsqueda
+desde la derecha se detiene en el primer no confiable. Si todos son confiables, se usa el extremo
+izquierdo. UA repetida se rechaza. La integración futura debe preservar remoteAddr como peer real
+del conector y no aplicar antes una reescritura de headers no acreditada. Este corte no cambia
+el rate limiter existente ni configura proxies de un entorno real.
+
+
+Cierre 15H1: 259 pruebas aprobadas el 2026-09-07T06:59:01-03:00, incluidas 219 nuevas y
+40 regresiones de keyring. Sin fallos, errores u omitidas; ocho archivos Java estables durante
+el gate. Se acredita captura/cifrado puro, no persistencia ni unicidad global de nonce. 15H2
+conserva esos requisitos pendientes y probará los tombstones y el rollback en PostgreSQL.
+
+Auditoría H1: ocho clases nuevas exactas en ambos JAR, migraciones congeladas intactas, entrypoints
+correctos y ausencia de tests/duplicados/propiedades secretas. Hashes del empaquetado en el plan.
