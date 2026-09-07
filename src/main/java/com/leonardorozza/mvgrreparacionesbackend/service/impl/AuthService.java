@@ -1,16 +1,12 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
-
-import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
-import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
+import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.AuthResponseDto;
-import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -18,24 +14,19 @@ import org.springframework.stereotype.Service;
 public class AuthService {
 
     private final AuthenticationManager authenticationManager;
-    private final JwtUtils jwtUtils;
-    private final UserRepository userRepository;
+    private final AccountSessionPolicy accountSessionPolicy;
 
     public AuthResponseDto login(String email, String password) {
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(email, password)
         );
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof AuthenticatedUserPrincipal principal)) {
+            throw new BadCredentialsException("Usuario o contraseña incorrectos");
+        }
 
-        UserDetails userDetails = (UserDetails) authentication.getPrincipal();
-
-        // Recuperamos el taller (tenant) para incluirlo como claim en el token
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new UsernameNotFoundException("Usuario no encontrado: " + email));
-
-        Long tallerId = user.getTaller() != null ? user.getTaller().getId() : null;
-
-        String token = jwtUtils.generateToken(userDetails, tallerId);
-        return new AuthResponseDto(token, "Bearer", email, Boolean.TRUE.equals(user.getEmailVerificado()));
+        // El provider puede borrar las credenciales de su resultado. Revalidamos el argumento
+        // original contra una lectura actual, sin combinar datos de dos versiones de la cuenta.
+        return accountSessionPolicy.issueSession(principal.getUserId(), principal.getTallerId(), password);
     }
 }
-

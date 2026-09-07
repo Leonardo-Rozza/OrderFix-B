@@ -21,7 +21,11 @@ public final class AuthenticatedUserPrincipal
         super(
                 user.getEmail(),
                 user.getPassword(),
-                Boolean.TRUE.equals(user.getActive()),
+                Boolean.TRUE.equals(user.getActive())
+                        && user.getTaller() != null
+                        && user.getTaller().getId() != null
+                        && user.getTaller().getId() > 0
+                        && Boolean.TRUE.equals(user.getTaller().getActivo()),
                 true,
                 true,
                 true,

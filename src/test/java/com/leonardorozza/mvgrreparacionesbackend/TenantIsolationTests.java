@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.Map;
 
@@ -13,6 +15,34 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Invariante más crítico del sistema: un taller NUNCA accede a datos de otro.
  */
 class TenantIsolationTests extends IntegrationTestBase {
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Test
+    void cambioDeTallerRevocaElTenantAnteriorYSesionNuevaUsaElActual() throws Exception {
+        String emailA = "iso-current-tenant-a@test.com";
+        String a = registrar("Taller identidad A", emailA);
+        String b = registrar("Taller identidad B", "iso-current-tenant-b@test.com");
+        long clienteA = idOf(authPost("/api/clientes", a, json(Map.of(
+                "nombre", "Cliente previo", "apellido", "A", "telefono", "9091")))
+                .andExpect(status().isOk()));
+        long clienteB = idOf(authPost("/api/clientes", b, json(Map.of(
+                "nombre", "Cliente actual", "apellido", "B", "telefono", "9092")))
+                .andExpect(status().isOk()));
+        Long tallerB = jdbc.queryForObject("SELECT taller_id FROM users WHERE email = ?",
+                Long.class, "iso-current-tenant-b@test.com");
+        // El titular de B permanece único: el actor trasladado pasa a empleado.
+        jdbc.update("UPDATE users SET taller_id = ?, role = 'USER' WHERE email = ?", tallerB, emailA);
+
+        authGet("/api/clientes/" + clienteA, a).andExpect(status().isForbidden());
+        String actual = login(emailA, "secret123");
+        authGet("/api/clientes/" + clienteA, actual).andExpect(status().isNotFound());
+        authGet("/api/clientes/" + clienteB, actual).andExpect(status().isOk());
+        JsonNode listed = node(authGet("/api/clientes", actual).andExpect(status().isOk()));
+        assertThat(listed.get("page").get("totalElements").asInt()).isEqualTo(1);
+    }
+
 
     @Test
     void unTallerNoVeNiAccedeAClientesDeOtro() throws Exception {

@@ -13,7 +13,8 @@ legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focale
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
 pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). 15J3 cerrado con
-920 focales y clean verify fresco de 7488 pruebas. 15J completo; sigue 15K.
+920 focales y clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 pruebas
+focales y clean verify fresco de 7567; sigue 15L.
 
 ## Objetivo y resultado esperado
 
@@ -838,3 +839,30 @@ en el plan compañero. V27/V28/V29, frontend y archivos ajenos preservados. Un c
 archivos, sin push. No se activó un entorno real ni se completa sesión, registro o enforcement;
 sigue **15K**. Las limitaciones de captura conocida, checkpoints cooperativos y simulación JWT de
 los IT nuevos permanecen documentadas, sin atribuir SLA ni criptografía end to end a esas pruebas.
+
+
+### Decisión de implementación 15K — 2026-09-07
+
+La política de emisión se ubica en AccountSessionPolicy, separada del servicio de login para que su
+REQUIRES_NEW/READ_COMMITTED/readOnly opere mediante proxy JPA. Recibe únicamente userId/tallerId
+servidor y la contraseña presentada; relee con grafo de taller y construye una identidad nueva.
+AuthService conserva el provider inicial y revalida la contraseña en la política, porque los datos
+pueden cambiar entre ambas lecturas y el provider puede borrar las credenciales de su principal.
+Una respuesta nunca combina el email viejo con el tenant/rol/tokenVersion de otra lectura.
+
+La condición de habilitación del principal incorpora el taller presente, identificado y activo,
+además del usuario activo. Así, provider y validación JWT conservan una sola noción de habilitación,
+sin cambiar claims, algoritmo, TTL, excepciones del filtro ni verificación suave de email.
+La consulta por IDs también funciona si el email original fue cambiado y reasignado a otra cuenta.
+Un contexto JPA exterior se suspende: ni sus entidades antiguas ni sus cambios pendientes alimentan
+la emisión. El estado es el observado por la consulta, sin promesa de serialización frente a cambios
+posteriores; el siguiente request contrasta el JWT con el estado persistido como hasta ahora.
+
+Esta decisión no integra todavía el alta poscommit ni modifica los efectos de RegistroService.
+Los IDs que recibirá 15M deben corresponder a un resultado durable confirmado; la política no
+reconstruye registro, no lee idempotencia ni envía email. 15K cerrado: 107 focales y clean verify fresco
+de 7567 pruebas, ambos al primer intento. Los diez casos PostgreSQL acreditan RC/readOnly,
+suspensión/restauración real, datos confirmados y frescura frente a entidades antiguas; los snapshots
+con xmin cubren users/talleres/suscripciones/auth_tokens. La auditoría final confirmó los 14 archivos
+nominales, V27/V28/V29 congeladas, ambos artefactos sin archivos `*secret*.properties` ni componentes de test y el contrato JWT intacto.
+El siguiente corte es 15L; no se completan todavía registro poscommit, replay HTTP ni enforcement.

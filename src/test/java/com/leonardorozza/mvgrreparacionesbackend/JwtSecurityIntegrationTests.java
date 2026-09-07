@@ -6,6 +6,9 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -13,6 +16,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -21,6 +25,26 @@ class JwtSecurityIntegrationTests extends IntegrationTestBase {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @ParameterizedTest
+    @ValueSource(strings = {"usuario", "taller"})
+    void tokenVigenteDejaDeAutenticarTrasDeshabilitarCuenta(String target) throws Exception {
+        String email = "jwt-disabled-" + target + "@test.com";
+        String token = registrar("Taller JWT disabled " + target, email);
+        authGet("/api/suscripcion", token).andExpect(status().isOk());
+        if (target.equals("usuario")) {
+            jdbc.update("UPDATE users SET active = false WHERE email = ?", email);
+        } else {
+            jdbc.update("UPDATE talleres SET activo = false WHERE id = "
+                    + "(SELECT taller_id FROM users WHERE email = ?)", email);
+        }
+
+        authGet("/api/suscripcion", token).andExpect(status().isForbidden());
+    }
+
 
     @Value("${security.jwt.secret}")
     private String secret;
@@ -70,7 +94,20 @@ class JwtSecurityIntegrationTests extends IntegrationTestBase {
 
         authGet("/api/suscripcion", tokenAnterior).andExpect(status().isForbidden());
 
+        mvc.perform(post("/api/auth/login").contentType(APPLICATION_JSON)
+                        .content(json(Map.of("email", email, "password", "secret123"))))
+                .andExpect(status().isUnauthorized());
         String tokenNuevo = login(email, "nueva-segura-123");
+        var original = JWT.decode(tokenAnterior);
+        var renewed = JWT.decode(tokenNuevo);
+        assertThat(renewed.getClaims().keySet()).containsExactlyInAnyOrderElementsOf(original.getClaims().keySet());
+        assertThat(renewed.getIssuer()).isEqualTo(issuer);
+        assertThat(renewed.getAudience()).containsExactly(audience);
+        assertThat(renewed.getSubject()).isEqualTo(email);
+        assertThat(renewed.getClaim("role").asString()).isEqualTo("ROLE_ADMIN");
+        assertThat(renewed.getClaim("tallerId").asLong()).isEqualTo(original.getClaim("tallerId").asLong());
+        assertThat(renewed.getClaim("tokenVersion").asLong()).isEqualTo(original.getClaim("tokenVersion").asLong() + 1);
+        assertThat(renewed.getId()).isNotEqualTo(original.getId());
         authGet("/api/suscripcion", tokenNuevo).andExpect(status().isOk());
     }
 

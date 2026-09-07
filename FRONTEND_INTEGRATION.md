@@ -129,7 +129,7 @@ CORS habilitado para:
   valida siempre el backend** (no confíes en el token para habilitar acciones críticas).
 - Duración del token: la define cada entorno mediante `JWT_EXPIRATION`. El front debe guiarse por
   el claim `exp`, no asumir una duración fija. En la configuración actual, una ruta protegida con
-  token ausente, inválido, revocado o de un usuario desactivado responde `403`; ver el manejo de
+  token ausente, inválido, revocado o de un usuario/taller desactivado responde `403`; ver el manejo de
   sesión debajo.
 - **Roles**: `ADMIN` (dueño) y `USER` (empleado). Hoy el registro crea siempre ADMIN.
   Operaciones **solo ADMIN** (un USER recibe `403`): iniciar/cancelar la suscripción PRO, gestionar
@@ -183,7 +183,15 @@ Respuesta `200`:
 ```json
 { "token": "eyJ...", "type": "Bearer", "email": "juan@celexpress.com", "emailVerificado": true }
 ```
-Errores: `401` (email o contraseña incorrectos).
+Errores: `401` genérico (email/contraseña incorrectos o usuario/taller deshabilitado).
+
+Desde 15K, el login relee la cuenta por sus IDs persistidos y vuelve a comprobar contraseña y estado
+actuales antes de emitir la sesión. Email, `emailVerificado`, rol, tenant y `tokenVersion` provienen
+de esa lectura; la forma del JWT y de la respuesta permanece igual. La desactivación del taller
+invalida también sus sesiones existentes al validar el siguiente request. No es un bloqueo por
+suscripción ni por verificación de email. Las rutas legales conservan sus errores 401/403 propios.
+La emisión común por IDs queda preparada para el registro/replay legal de 15M; el registro histórico
+conserva por ahora su integración anterior.
 
 > **`emailVerificado`** también viene en el register (siempre `false` ahí). Si es `false`,
 > mostrá un banner "Confirmá tu email (revisá tu casilla)" con botón de reenviar — el usuario
@@ -2104,7 +2112,7 @@ Por ejemplo, un conflicto de cobro agrega:
 | 400 | Validación / dato inválido (incl. teléfono duplicado al crear cliente) | Mostrar `message` en el form/toast |
 | 401 | Login rechazado; también firma inválida del webhook, que el frontend no invoca | No crear sesión / volver a `/login` |
 | 402 | **Límite del plan / suscripción no vigente** | Modal "Pasá a PRO" con el `message` |
-| 403 | Token ausente/inválido/revocado, usuario desactivado o rol insuficiente | Validar sesión base; logout si falla, o "sin permisos" si la sesión sigue válida |
+| 403 | Token ausente/inválido/revocado, usuario/taller desactivado o rol insuficiente | Validar sesión base; logout si falla, o "sin permisos" si la sesión sigue válida |
 | 404 | No encontrado (o recurso de otro taller) | "No existe" |
 | 409 | Conflicto: unicidad, transición ilegal, checkout MP o invariantes de cobro (`COBRO_SUPERA_SALDO`, `TOTAL_MENOR_QUE_COBRADO`, `COBRO_YA_ANULADO`) | Resolver por `code`, conservar el formulario y mostrar `message` |
 | 413 | QR por encima de 1 MiB (`ARCHIVO_DEMASIADO_GRAN`) | Conservar el QR vigente y pedir una imagen menor |

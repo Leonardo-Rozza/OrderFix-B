@@ -13,6 +13,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @EntityGraph(attributePaths = "taller")
     Optional<User> findByEmail(String email);
 
+    /** Lectura de emisión de sesión por identidad durable, con estado actual del taller. */
+    @EntityGraph(attributePaths = "taller")
+    Optional<User> findSessionByIdAndTallerId(Long id, Long tallerId);
+
     boolean existsByEmail(String email);
 
     List<User> findAllByTallerId(Long tallerId);

@@ -7,7 +7,8 @@ Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecuci�
 15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I cerrado en I1/I2/I3,
 con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
-clean verify fresco de 7488 pruebas. 15J completo; sigue 15K, política compartida de sesión.
+clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
+fresco de 7567 pruebas; sigue 15L, escritor interno de registro atómico.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -49,7 +50,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
-| 15K | Política compartida de emisión de sesión | A |
+| 15K | Política compartida de emisión de sesión — cerrado | A |
 | 15L | Escritor interno de registro atómico | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
@@ -1536,6 +1537,135 @@ TenantIsolationTests y los de JWT afectados.
 Gate transversal: clean verify; usuario/taller inactivo, password/tokenVersion cambiados,
 principal y tenant coherentes. Esta condición de taller no está acreditada hoy en AuthService.
 Commit: `fix(auth): unifica condiciones de emision de sesion`.
+
+### Apertura 15K — 2026-09-07
+
+Baseline `e13ba2c`, backend limpio en la rama ratificada. Frontend `7545201` y sus dos rutas
+no versionadas preservados. No hay instrucciones AGENTS.md aplicables a las rutas nominales.
+La revisión de JWT se aplica a la política de estado actual, sin alterar algoritmo, claims ni TTL.
+
+Decisión previa al código: conservar AuthenticationManager/DaoAuthenticationProvider en login.
+AuthService exigirá su principal tipado y pasará únicamente IDs persistidos y contraseña recibida
+a `AccountSessionPolicy.issueSession(userId, tallerId, password)`. Este mismo método queda disponible
+para la futura emisión poscommit de 15M; no acepta un email ni un principal persistido en el ledger.
+Una segunda comprobación BCrypt es deliberada: acredita la contraseña contra la lectura actual y
+no combina la identidad del provider con otra versión de la cuenta. El provider conserva su
+comprobación inicial y mitigación de usuario inexistente.
+
+La política usa una lectura JPA propia REQUIRES_NEW/READ_COMMITTED/readOnly, con grafo de taller
+cargado por el nuevo método nominal `findSessionByIdAndTallerId`. OSIV está apagado. Suspende un
+contexto transaccional llamador para no emitir con entidades antiguas o datos aún no confirmados;
+no hace DML, no consulta por email y no invoca servicios de alta/email. Verifica pertenencia,
+usuario/taller habilitados, contraseña actual y datos de identidad válidos; luego construye un
+principal nuevo y la respuesta actual (email, verificación suave, rol y tokenVersion). El error de
+autenticación conserva el 401 genérico existente y los fallos operativos no se convierten en éxito.
+No se promete exclusión frente a cambios posteriores al SELECT: la validación JWT de cada request
+vuelve a consultar la cuenta y rechaza tenant/tokenVersion o estado deshabilitado.
+
+AuthenticatedUserPrincipal incluirá taller activo en isEnabled, compartiendo esa condición con el
+provider y el filtro JWT existentes. UserDetailsServiceImpl/JwtFilter/JwtUtils no necesitan cambios
+productivos; se conservan sus APIs y el rol wire ROLE_ADMIN/ROLE_USER. RegistroService y sus efectos
+precommit históricos quedan para 15M; 15K no habilita el alta legal ni adelanta el writer de 15L.
+
+Lista nominal exacta de 14 archivos, fijada antes de editar código:
+
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AccountSessionPolicy.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AuthService.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/config/security/AuthenticatedUserPrincipal.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/persistence/repository/UserRepository.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AccountSessionPolicyTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AuthServiceTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AccountSessionPolicyIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/flows/AuthTests.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/JwtSecurityIntegrationTests.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/TenantIsolationTests.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/JwtUtilsTests.java`
+- `FRONTEND_INTEGRATION.md`
+- `docs/plans/2026-09-06-legal-account-consent-implementation.md`
+- `docs/plans/2026-09-06-legal-account-consent-design.md`
+
+Los tests nuevos tienen fixtures propios dentro de esos archivos; no se amplían helpers históricos.
+Gate focal: política/emisión y rechazo sin JWT, carreras deterministas entre provider y relectura,
+login ADMIN/USER, usuario/taller inactivo, revocación por password/tokenVersion, identidad/tenant,
+email cambiado por IDs durables y PostgreSQL 16 real para suspensión/frescura/sólo lectura.
+Luego `clean verify` completo obligatorio por el alcance transversal de autenticación, con reporte
+fresco e inventario de artefactos. Ninguna ejecución Maven paralela sobre target.
+
+### Gate focal 15K — 2026-09-07
+
+Primer intento aprobado: `./mvnw -B -Dstyle.color=never
+-Dtest=AccountSessionPolicyTest,AuthServiceTest,AuthTests,JwtSecurityIntegrationTests,TenantIsolationTests,JwtUtilsTests,CuentaTests,PerfilTests
+-Dit.test=AccountSessionPolicyIT verify`, con Java 21.0.10. Terminó a las 18:09:55 -03:00 en
+46,743 segundos. **107 pruebas: 97 Surefire en ocho suites y 10 Failsafe en una suite**;
+cero fallos, errores, omitidas, flakes o reintentos. El conteo se obtiene de XML frescos y se
+contrasta con clases/métodos JUnit compilados; los reportes se preservan antes del clean integral.
+
+Las diez invocaciones nuevas del IT usan PostgreSQL 16.14/Flyway V29, JPA, BCrypt y JwtUtils reales.
+El encoder de fixture delega BCrypt y sólo observa la conexión durante matches: acredita en servidor
+READ_COMMITTED/readOnly, distinto backend y distinto EntityManager respecto de una transacción
+exterior REPEATABLE_READ, y la restauración de esa transacción sin rollback-only accidental.
+No acepta un alta aún sin confirmar ni cambios pendientes, y ve modificaciones confirmadas desde
+otra conexión incluso si el EntityManager exterior retiene entidades antiguas. IDs cruzados,
+cuenta/taller desactivado o contraseña anterior se rechazan; el email viejo reasignado a otra cuenta
+no cambia la identidad durable. Emisiones repetidas tienen jti distinto sin modificar snapshots
+completos de users/talleres/suscripciones/auth_tokens, incluidos xmin.
+
+Las regresiones MockMvc usan el stack de seguridad, BCrypt y JWT reales sobre H2; comprueban
+login/401 genérico, verificación suave, roles actuales, revocación y aislamiento del tenant.
+Los tests unitarios complementan carreras deterministas entre provider y relectura, credenciales
+borradas por el provider, IDs/snapshot inválidos y errores operativos sin emisión. No se confunde
+esa simulación de orden con una prueba concurrente de PostgreSQL.
+
+Auditoría focal aprobada: lista nominal exacta de 14 archivos, once Java congelados, una clase nueva
+y tres existentes cambiadas; 1032 entradas del baseline permanecen idénticas. Ambos JAR contienen
+1004 clases productivas y 32 recursos coincidentes byte a byte, con V27/V28/V29 intactas,
+dependencias runtime iguales y sin archivos `*secret*.properties` ni clases/dependencias de test. El weaver AspectJ
+runtime conserva la excepción de procedencia ya acreditada, sin javaagent productivo activado.
+Este foco no sustituye el clean verify transversal que se ejecuta a continuación.
+
+### Cierre 15K — 2026-09-07
+
+`clean verify` completo aprobado al primer intento, con el mismo código que el foco: finalizó
+2026-09-07T18:34:43-03:00 en 24:05 min, Java 21.0.10/Maven 3.9.11 y PostgreSQL 16.14 en las suites de integración.
+**7567 pruebas**: 6534 Surefire en 188 suites y
+1033 Failsafe en 78 suites; cero fallos, errores,
+omitidas, flakes o reintentos. Son 79 casos adicionales sobre el baseline de 15J3; los 107
+focales se solapan con el integral y no se suman de nuevo.
+
+Auditoría posterior al build aprobada: 266 suites frescas, inventario completo de
+295 fuentes y 738 clases de test,
+1884 métodos JUnit Surefire y
+655 Failsafe contrastados con XML sin duplicados/reintentos.
+El inventario de compilación y los hashes acreditan los once Java nominales, una clase productiva
+nueva y tres existentes modificadas; 1032 entradas del baseline idénticas.
+No se agregan mappings HTTP. Ambos JAR coinciden con target en 1004 clases y
+32 recursos y comparten las mismas 122 dependencias runtime.
+Start-Class web/CLI correctos, sin entradas ZIP duplicadas, archivos `*secret*.properties` ni clases/dependencias/agentes
+de test. AspectJ runtime conserva su procedencia JPA y la excepción documentada; no hay javaagent
+productivo habilitado.
+
+SHA-256 de artefactos finales:
+
+- Web: `66c6dabbd0244eba615d4cb2fd83c25be64c0ba57d0b64927f34411d0f380ffe`.
+- CLI legal: `8bebff9076156ba0f8d42d43284d764f357dfe598254ee413395d751b502bf77`.
+
+V27/V28/V29 permanecen idénticas en fuentes, recursos compilados y ambos JAR, respectivamente:
+
+- `52fd5f3eda14fde228e218f127b5e9362c8542dc7e26df7b502ba65061332b9b`.
+- `1227c8261cfcca1263a0b2105bf0dc797c1f59f3b5bdc71225464fc4aa154a5e`.
+- `976a66c0a7f234e79c1ba84be4721ecb2407a1d6e076f2444630ccb9afc949e9`.
+
+15K cierra la política común de login/futura sesión por identidad durable, con estado actual de
+usuario y taller y contrato JWT conservado. No promete serialización después del SELECT ni
+capacidad/latencia integral; no se activaron flags ni se configuró un entorno compartido. Las
+pruebas nuevas PostgreSQL son internas; las HTTP de autenticación usan MockMvc/H2, y el integral
+incluye además los HTTP reales de las fases legales anteriores. RegistroService aún conserva sus
+efectos históricos y su migración poscommit corresponde a 15M.
+
+Commit atómico `fix(auth): unifica condiciones de emision de sesion`, con los 14 archivos nominales,
+sin push. Frontend y sus rutas no versionadas preservados. **Sigue 15L**, writer interno que confirma
+taller, suscripción, ADMIN y evidencia legal en una sola transacción; integración HTTP/replay y
+email poscommit siguen en 15M. Enforcement, retención, capacidad y cierre del bloque quedan en N–Q.
 
 ## 15L — Registro interno sobre una transacción JDBC
 
