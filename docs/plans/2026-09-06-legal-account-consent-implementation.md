@@ -4,8 +4,8 @@ Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
-15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I1 cerrado con 304 pruebas,
-15I2 con 307; sigue I3 para completar la aceptación interna y atómica.
+15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I cerrado en I1/I2/I3,
+con clean verify fresco de 6959 pruebas. Sigue 15J (POST autenticado y errores).
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -45,7 +45,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15G2 | Coordinación SQL y replay durable — cerrado | G1 |
 | 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
 | 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
-| 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
+| 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
 | 15L | Escritor interno de registro atómico | F, G, H, I, K |
@@ -950,6 +950,46 @@ target/classes y ambos artefactos. SHA-256:
 Cierre con doce archivos nominales y commit `feat(legal): aisla escritura de aceptaciones`, sin push.
 I1 quedó en `94b4d65`; sigue I3 con la operación completa y el clean verify final.
 
+### Ejecución 15I3 — servicio completo y confirmación
+
+Baseline `584e82f`, backend limpio y rama confirmada antes de integrar nueve Java nominales:
+ocho archivos nuevos y composición del bean final en DatabaseConfiguration, más ambos documentos.
+El servicio une las primitivas ya acreditadas; no crea HTTP ni modifica la configuración web.
+El writer usa INSERT SELECT de fuentes canónicas en batches de 32 y valida conteos/IDs; no copia
+snapshots del request. Cifra la metadata antes del primer INSERT de evidencia. La operación fuerza
+SET CONSTRAINTS ALL IMMEDIATE antes de entregar el receipt tentativo, para acreditar rollback de
+fallos diferidos antes de COMMIT. Fallos de COMMIT conservan UNKNOWN sin retry automático; cleanup
+tardío conserva COMMITTED y su receipt confirmado.
+
+Gate focal previo al integral: ServiceTest, DatabaseConfigurationTest, TransactionBoundaryTest y
+SelectionTest; PostgreSQL ServiceIT, CommitIT y DatabaseIsolationIT. Después clean verify completo
+por el marker común, con auditoría fresca de XML, clases y artefactos. Los faults pertenecen sólo
+a proxies JDBC de los fixtures efímeros; producción no incorpora interruptores de prueba.
+
+Primera corrida focal I3: 111 unitarias aprobaron y Failsafe ejecutó 48 casos, con 43 errores
+previos al servicio. El username sintético del fixture medía 54 caracteres frente a VARCHAR(50).
+Se acorta sólo el prefijo del usuario de LegalAcceptanceServiceITSupport a accept-it- (46 caracteres
+con UUID); no se altera esquema ni producción. Los cinco IT de aislamiento aprobaron. Se repite
+el gate focal completo antes del integral y no se toma el rechazo del fixture como evidencia del
+comportamiento del servicio.
+
+Segunda corrida focal I3: 111 unitarias aprobadas y 47/48 IT aprobados, incluidos los diez de
+commit/cleanup. La prueba de fallo SQL al insertar la cabecera de metadata no inyectaba su error
+porque exigía un espacio entre tabla y lista de columnas. Se corrige únicamente el detector de
+INSERT del ServiceIT para admitir espacio o paréntesis como delimitador exacto de tabla, sin
+confundirla con la tabla de cifrados. El test sigue exigiendo fallo real SQLSTATE 22012, préstamo
+único y rollback completo. Además se completan los dos casos del gate requerido de cambio de
+estado durante espera: desactivar usuario y taller, junto a los ya presentes de rol/tokenVersion.
+No cambió producción. Se repite el gate focal con 35 casos ServiceIT antes del clean verify.
+
+Gate focal I3 final aprobado el 2026-09-07 a las 08:30:51 -03:00: **161 pruebas**, 111 unitarias
+(Configuration 36, Selection 48, Service 10, Boundary 17) y 50 PostgreSQL (Commit 10, Isolation 5,
+Service 35), cero fallos/errores/omitidas. Auditoría independiente de los siete XML frescos y nueve
+fuentes aprobada; se conserva evidencia antes de clean. Los 35 casos ServiceIT incluyen 34 actos
+en dos batches reales, dedup histórico, replay sin DML con gate exclusivo/catálogo retirado,
+selección mixta/vacía, herencia, corrupción, fallos por fase y estados del actor durante espera.
+Se inicia ahora clean verify integral; el corte aún no se considera cerrado por el gate focal.
+
 Lista nominal 15I3:
 
 - Nuevos `db/LegalAcceptanceService.java`, `db/LegalAcceptanceWriter.java`,
@@ -962,8 +1002,10 @@ Lista nominal 15I3:
 Una única REQUIRES_NEW/READ_COMMITTED acredita el principal servidor, reserva y replay, disponibilidad,
 selección, actos/documentos nuevos, metadata y ledger. El receipt se entrega sólo después de commit,
 liberación y deadline final; un fallo tardío conserva COMMITTED sin anunciar rollback, y una excepción
-al invocar COMMIT permanece UNKNOWN sin retry ni reconciliación automática. Exact dedup/EMPTY sólo
-guardan el resultado técnico. La frontera HTTP sigue en 15J.
+al invocar COMMIT permanece UNKNOWN sin retry ni reconciliación automática. DEDUP/EMPTY no crean
+evidencia ni metadata: guardan el resultado técnico y pueden materializar el agregado actual que
+la observación necesita.
+El replay confirmado no realiza DML. La frontera HTTP sigue en 15J.
 
 Commits: I1 `feat(legal): selecciona aceptaciones y acredita evidencia`; I2
 `feat(legal): aisla escritura de aceptaciones`; I3 `feat(legal): registra aceptaciones atomicas`.
@@ -985,6 +1027,68 @@ previa no habilitan el atajo 204; probar
 revisión actual (400) y desactualizada (409). Cambio de actor/estado durante la operación no
 confirma un acto inválido. COMMITTED/ROLLED_BACK/UNKNOWN honestos; sin retry automático que oculte
 resultado incierto. Commit: `feat(legal): registra aceptaciones atomicas`.
+
+### Cierre 15I3 — aceptación autenticada interna y atómica
+
+La composición final queda disponible sólo mediante el contexto explícito de aceptación y su
+flag exacto. No es escaneable, no usa JPA ni la credencial web y no crea controller/endpoint HTTP.
+La operación identifica al usuario desde AuthenticatedUserPrincipal, verifica rol/tenant/estado y
+respeta preflight → reserva idempotente → replay o gate editorial compartido → advisory exclusivo
+del actor → FOR SHARE de taller/usuario → agregado/disponibilidad → evidencia/selección → escritura.
+Después de esperar el gate se vuelven a acreditar rol, tokenVersion y estado de usuario/taller.
+
+El replay confirmado no realiza DML y no depende del catálogo actual ni del gate editorial.
+Un MISS que termina en DEDUP o EMPTY no crea ni refecha lotes, actos, documentos aceptados o
+metadata personal: guarda el resultado técnico y, para DEDUP, referencias a evidencia existente.
+La observación previa reutiliza el agregado actual o lo materializa si aún no existe, dentro de
+la misma transacción. WITH_ACTS crea un solo lote con los actos que faltan, snapshots SQL canónicos,
+documentos, cabecera/cifrados y ledger. La mezcla conserva los IDs previos sin copiarlos a otro lote.
+La metadata se prepara antes del primer INSERT de evidencia; las restricciones diferidas se
+fuerzan antes del receipt tentativo y cualquier fallo conocido revierte también el agregado nuevo.
+
+El receipt público de la fachada interna es inmutable y sus diagnósticos no contienen identidad.
+LegalAcceptanceFailure separa motivo, completion y persistence: NONE/ROLLED_BACK/COMMITTED/UNKNOWN
+no se deducen de la mera presencia de una excepción. Un COMMIT cuyo resultado se pierde queda
+UNKNOWN; un fallo posterior a la confirmación conserva COMMITTED y el receipt confirmado. No hay
+retry, rollback compensatorio ni reconciliación automática. Las pruebas consultan filas durables
+desde otra conexión y verifican que un replay explícito posterior recupera el resultado sin DML.
+
+Los faults permanecen sólo en fixtures PostgreSQL efímeros. Las tres corridas focales y sus
+correcciones de fixture se documentan arriba; ninguna exigió cambiar el código productivo después
+de integrarlo. El foco final aprobó 161 casos antes del integral. Las revisiones independientes de
+servicio, writer, metadata, actor, asserts de rollback y composición no encontraron defectos materiales.
+La evidencia de 34 actos acredita dos batches de INSERT dentro de un único commit; no se presenta
+como medición del límite máximo, throughput, heap o SLA. La capacidad integral del flujo HTTP sigue
+en 15P. El registro de cuenta y sus efectos poscommit siguen en 15L/M.
+
+Gate integral fresco: `./mvnw clean verify`, Java 21/PostgreSQL 16.14, terminado `2026-09-07T08:55:22-03:00`
+(23:01 min). **6959 pruebas aprobadas**, 5999 Surefire en 179 suites y 960
+Failsafe en 75 suites; cero fallos, errores, omitidas o flakes. Los XML se contrastaron con
+el inventario de clases y métodos JUnit compilados, no sólo con el total de consola. También
+coinciden las listas de fuentes/outputs del compilador; ninguna prueba nominal quedó omitida.
+
+La auditoría final compara las nueve fuentes nominales con los hashes del gate y verifica el diff
+exacto de once archivos frente a I2. Todas las clases y recursos de target/classes coinciden byte
+a byte con los JAR web y CLI, con sus entrypoints correctos y sin entradas duplicadas, clases o
+dependencias de prueba ni propiedades secretas. V27/V28/V29 coinciden en fuente, baseline, target
+y ambos artefactos. El detector genérico de Agent-Class se precisó para distinguir AspectJ,
+dependencia runtime de spring-aspects incorporada por starter-data-jpa, de un agente de pruebas.
+No se modificó el runtime para resolver esa comprobación; no se empaquetaron agentes de pruebas.
+
+La excepción nominal es aspectjweaver-1.9.25.1.jar, gestionado por Boot 4.0.6, SHA-256
+`4fe86fdc18faea571f29129c70eaad5d121363504a06d7907be88f6c60ba3116`; su manifest ofrece
+org.aspectj.weaver.loadtime.Agent, pero no hay -javaagent productivo. Ambos JAR contienen las
+mismas 122 dependencias, comparadas también por bytes.
+
+- Web: 983 clases y 32 recursos; SHA-256 `bf3dba1d60961746add8d4b4404aa1a443479a526d20f94368e040db039502fa`.
+- CLI: 983 clases y 32 recursos; SHA-256 `439899b928d575cdf31553a54de93f88e48a84a1dfc21e6f2a6f3cf23f448587`.
+
+Se cierra I3 con sus once archivos nominales y commit `feat(legal): registra aceptaciones atomicas`,
+sin push. **15I completo en tres commits atómicos**: I1 `94b4d65`, I2 `584e82f` y este I3.
+Frontend `7545201`, su rama y las rutas no versionadas `.agents/` y `public/OrdenFix project naming/`
+preservados. No se activa un entorno real ni se configura retención, credenciales o claves operativas.
+Sigue **15J: POST autenticado y errores contractuales**; permanecen pendientes registro atómico,
+sesión, enforcement, mantenimiento, capacidad HTTP y cierre integral del bloque 15 (K–Q).
 
 ## 15J — POST autenticado y errores
 

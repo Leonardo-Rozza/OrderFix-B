@@ -206,6 +206,15 @@ public class LegalAcceptanceDatabaseConfiguration {
         return new LegalAcceptanceSelection();
     }
 
+    @Bean
+    LegalAcceptanceService legalAcceptanceService(
+            JdbcTemplate jdbc, LegalAcceptanceTransactionBoundary boundary,
+            LegalApplicableScopeResolver resolver, LegalRequiredSetAggregateStore aggregates,
+            LegalPrivateRequirementsReader requirements, LegalAcceptanceEvidenceReader evidence,
+            LegalV29AcceptanceSchemaVerifier schema, LegalAcceptanceKeyConfiguration keys) {
+        return new LegalAcceptanceService(jdbc, boundary, resolver, aggregates, requirements, evidence, schema, keys);
+    }
+
     private static String required(Environment environment, String suffix) {
         String value = environment.getRequiredProperty(PROPERTY_PREFIX + suffix);
         if (value.isBlank()) {

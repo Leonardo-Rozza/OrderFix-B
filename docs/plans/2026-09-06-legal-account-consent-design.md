@@ -8,10 +8,10 @@ FRONTEND_INTEGRATION. 15B agrega el núcleo puro; 15F implementa V29 y compatibi
 acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el lector privado interno,
 acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al lector, con 209
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
-y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
+y regresiones aprobadas. El escritor de registro de cuenta sigue pendiente; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
-15I1 cerrado con 304 pruebas e I2 con 307; sigue I3 para completar la aceptación atómica interna.
+15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. Sigue 15J.
 
 ## Objetivo y resultado esperado
 
@@ -722,3 +722,28 @@ REQUIRES_NEW/READ_COMMITTED, preflight V29/privilegios, orden replay antes de ed
 y restauración del llamador y commit independiente acreditados. Auditoría de diez fuentes, 21
 clases nuevas/del marker y ambos JAR aprobada; hashes V27/V28/V29 intactos. El servicio final se
 compone en I3, que además ejecutará clean verify por el marker común. Commit atómico sin push.
+
+I3 inicia sobre `584e82f`, árbol limpio. El servicio conserva actor servidor, prioridad replay/MISS,
+validación semántica y selección; writer canónico, metadata y ledger comparten la misma transacción.
+Los fallos físicos de commit/cleanup se acreditan con conexiones PostgreSQL instrumentadas en
+fixtures; no hay reintento ni reconciliación automática dentro del servicio.
+
+15I3 y 15I cerrados el 2026-09-07: 161 pruebas focales y clean verify fresco de **6959 pruebas**
+(5999 Surefire + 960 PostgreSQL), sin fallos/errores/omitidas/flakes. El servicio y writer integran
+actor servidor, REQUIRES_NEW/READ_COMMITTED, reserva/replay, disponibilidad, evidencia histórica,
+selección, snapshots canónicos, metadata y ledger. Toda evidencia nueva comparte un único commit;
+los errores conocidos revierten también el agregado nuevo. COMMITTED y UNKNOWN se conservan
+honestamente ante fallos físicos de commit/cleanup, sin retry ni reconciliación automática.
+
+El replay no realiza DML. DEDUP/EMPTY no crean ni refechan lotes, actos, documentos aceptados o
+metadata: persisten resultado técnico/referencias y pueden materializar el agregado actual si aún
+no existe. Se acreditan mezcla, herencia, stale/duplicados, corrupción, cambios de rol/token/estado
+de usuario o taller durante espera y 34 actos en dos batches. Las correcciones de las primeras
+corridas afectaron sólo fixtures y se registraron antes del gate final; fuentes productivas
+congeladas durante la corrida integral. Inventarios completos de compilación/tests y ambos JAR
+auditados, V27/V28/V29 intactas. AspectJ runtime se distingue de agentes de prueba en la auditoría.
+
+Cierre mediante tres commits atómicos, sin push: I1 `94b4d65`, I2 `584e82f` e I3 con el mensaje
+`feat(legal): registra aceptaciones atomicas`. Frontend y archivos no versionados preservados.
+Todavía no hay endpoint de aceptación ni activación real; sigue 15J y continúan pendientes 15K–Q.
+El cierre no acredita lanzamiento público, registro atómico ni contenido legal definitivo.
