@@ -2,12 +2,13 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B, 15F y 15C cerrados el 2026-09-06, con ejecución autorizada por el titular. La
+Estado: 15A, 15B, 15F, 15C y 15D cerrados el 2026-09-06, con ejecución autorizada por el titular. La
 [decisión 15A](2026-09-06-legal-account-consent-v29-decision.md) fija el protocolo ratificado en
 FRONTEND_INTEGRATION. 15B agrega el núcleo puro; 15F implementa V29 y compatibilidad estricta,
 acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el lector privado interno,
-acreditado con 430 pruebas focales y regresiones. Los endpoints y escritores de cuenta siguen pendientes.
-No cambian campos/códigos HTTP; sigue 15D.
+acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al lector, con 209
+pruebas focales y regresiones aprobadas. El historial y los escritores de cuenta siguen pendientes;
+no cambian campos ni códigos legales del contrato. Sigue 15E.
 
 ## Objetivo y resultado esperado
 
@@ -382,3 +383,44 @@ ni omitidas. Se probaron roles, locks reales, replay sin DML, rollback/cierre, S
 herencia con 130 versiones reales, origen de lote y coherencia bajo aceptación concurrente. Ambos
 JAR finales contienen las clases verificadas y V27/V28/V29 intactas; la evidencia detallada y las
 correcciones de fixtures constan en el plan. Commit atómico local, sin push. Sigue 15D.
+
+
+## Implementación 15D — adaptador HTTP privado
+
+El GET exacto `/api/requisitos-legales` requiere una sesión ADMIN/USER. Method security rechaza un
+rol no autorizado antes del lector; éste sigue contrastando la identidad con el estado persistido.
+El controller recibe exclusivamente el principal tipado del servidor. No acepta query params ni
+selectores de actor/tenant/perfil/contextos; su locale y revisión salen del snapshot completo.
+La respuesta sólo contiene locale, requiredSetRevision y requisitos pendientes con documentos completos;
+no expone procedencia, revisiones por scope, metadata de aceptación ni identidad del actor.
+
+El puente posee y cierra su contexto sin padre y pool privado. Sólo pasan las credenciales
+account-read.jdbc-url/username/password y account-read.enabled. El flag privado, apagado por defecto,
+exige true/false exactos y no depende de las dos superficies públicas. No hay pool ni mappings
+privados cuando está apagado; no se activaron flags ni se provisionaron roles fuera de fixtures.
+
+El entry point opcional de SecurityConfig cambia únicamente el GET privado habilitado a 401 ante
+falta de sesión; conserva el Http403ForbiddenEntryPoint existente fuera de esa clasificación y no
+agrega permisos, bypass JWT ni políticas de rate limit. Controller y entry point comparten la
+comprobación de URI cruda/contextPath: una equivalencia codificada que MVC haya resuelto no puede
+materializar. HEAD atendido por el controller produce 405 con Allow: GET. El manejo global anterior
+de métodos/vecinos sin mapping produce 500 con sesión; se caracteriza sin alterarlo en este corte.
+Su corrección general queda fuera de 15D y no se presenta como comportamiento del nuevo GET.
+
+Cada GET acredita de nuevo toda la observación y devuelve private, no-store sin ETag; If-None-Match
+no abre una vía 304. Errores propios tienen no-store y un ApiError fijo: snapshot de actor inválido
+401, rol sin permiso 403 y contrato indisponible 503 con contexto:null/locale:es-AR. No se transmiten
+causas SQL ni payloads parciales. Timestamp conserva el formato textual del contrato tanto en MVC
+como en el entry point. El token completo se mantiene al filtrar requisitos, incluso con lista vacía.
+
+La integración utiliza el servicio 15C sin modificar su transacción, permisos o migraciones.
+Se acredita por HTTP un rechazo de historia corrupta después de INSERT del agregado nuevo de otra
+audiencia: ambas escrituras se revierten, ningún commit se confirma y el agregado previo permanece.
+La observación estable reutiliza el agregado sin DML y no crea ni refecha evidencia. La prueba usa
+sólo el owner de una base efímera para preparar historia; la ruta se ejecuta con su rol restringido.
+
+La evidencia final y comandos se registran en el plan de implementación. No incluye historial,
+aceptación, enforcement, alta atómica, frontend runtime ni un handoff de lanzamiento público.
+
+Cierre 15D: 209 pruebas aprobadas el 2026-09-06T21:22:33-03:00, 137 nuevas y 72 regresiones,
+sin fallos/errores/omitidas; artefactos y migraciones congeladas auditados. Sigue 15E: historial propio.

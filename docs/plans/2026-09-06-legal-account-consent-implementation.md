@@ -2,8 +2,8 @@
 
 Fecha: 2026-09-06
 
-Estado: 15A, 15B, 15F y 15C cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los cortes posteriores no están iniciados. Sigue 15D.
+Estado: 15A, 15B, 15F, 15C y 15D cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
+Los cortes posteriores no están iniciados. Sigue 15E.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -233,6 +233,47 @@ metadata fuera de alcance, REUSED estable sin DML de agregado, rollback y cierre
 cuando se toque un componente compartido. Commit: `feat(legal): consulta pendientes privados`.
 
 ## 15D — GET autenticado de requisitos
+
+Baseline de ejecución: `cf50844`, backend limpio en la rama prevista; frontend `7545201`
+preservado con sus dos rutas no versionadas. Lista nominal confirmada antes de editar código:
+
+- Seis clases nuevas: `http/LegalPrivateRequirementsController.java`,
+  `LegalPrivateRequirementsResponses.java`, `LegalPrivateRequirementsHttpConfiguration.java`,
+  `LegalPrivateRequirementsHttpException.java`, `LegalPrivateRequirementsExceptionHandler.java`
+  y `sec/LegalPrivateRequirementsAuthenticationEntryPoint.java`.
+- Una integración acotada en `config/SecurityConfig.java`: entry point opcional que devuelve 401
+  exclusivamente para GET exacto `/api/requisitos-legales` con el flag privado encendido. Conserva
+  el entry point 403 existente para cualquier otra solicitud; no agrega `permitAll`, bypass JWT,
+  reglas de autorización ni cambios de rate limit. Es necesaria porque la configuración actual
+  responde 403 a toda solicitud anónima y este contrato distingue ausencia de sesión (401).
+- Tests nuevos: `http/LegalPrivateRequirementsControllerTest.java`,
+  `LegalPrivateRequirementsHttpConfigurationTest.java`,
+  `sec/LegalPrivateRequirementsAuthenticationEntryPointTest.java`,
+  `db/LegalPrivateRequirementsHttpIT.java` y su helper nominal
+  `LegalPrivateRequirementsHttpITSupport.java` si lo exige el fixture PostgreSQL propio.
+- Este plan, el diseño compañero y `FRONTEND_INTEGRATION.md`; este último se amplía nominalmente
+  para reflejar la ruta disponible y sustituir el estado previo del lector ya cerrado en 15C.
+
+Decisiones del adaptador: sólo el principal tipado del servidor selecciona actor; ADMIN/USER se
+verifican con method security antes del lector. No hay query params admitidos (400 genérico sin
+código legal nuevo); HEAD no consulta ni materializa (405, Allow: GET). La ruta no ofrece ETag ni
+304: siempre vuelve a acreditar pendientes y devuelve `private, no-store`. Errores propios tienen
+`no-store`; snapshot de actor inválido produce 401 y contrato indisponible 503 con `contexto: null`,
+`locale: es-AR`, sin causa interna. La bandera privada acepta únicamente `true`/`false` literales,
+por defecto false; se comprueba además la URI cruda exacta (incluido contextPath), porque Spring
+decodifica segmentos antes de resolver el mapping. Una equivalencia codificada responde 404 antes
+de materializar. Controller y entry point comparten esa clasificación exacta. El puente crea un
+contexto sin padre con sólo sus tres credenciales y esa bandera.
+El GET puede materializar un agregado faltante mediante el lector 15C; no escribe aceptaciones.
+
+Caracterización durante el focal: los métodos sin mapping (POST/PUT/PATCH/DELETE) y vecinos no
+mapeados llegan al `GlobalExceptionHandler` existente y producen 500 con sesión (403 sin sesión),
+sin invocar el lector. No se amplía este corte para modificar el advice global; HEAD y URI codificada
+que sí alcanzan este controller mantienen sus 405/404 propios. El flag apagado tampoco tiene mapping.
+
+Gate focal con regresiones de las dos superficies públicas y seguridad compartida por la conexión
+aditiva del entry point. No cambia la política general de autenticación/autorización; si la regresión
+revela un fallo transversal se amplía a clean verify conforme a la política acordada.
 
 Resultado: GET exacto /api/requisitos-legales con contrato privado, sin parámetros de selección de
 actor/perfil/contextos; respuesta completa acreditada, incluso requisitos vacíos legítimos.
@@ -784,3 +825,81 @@ V29 mantiene SHA-256 `976a66c0a7f234e79c1ba84be4721ecb2407a1d6e076f2444630ccb9af
 Cierre: commit atómico `feat(legal): consulta pendientes privados`, local y sin push. Backend en la
 rama prevista; frontend preservado en 7545201 con sus dos rutas no versionadas. Sigue **15D — GET
 autenticado de requisitos**, usando este servicio y conservando la frontera privada.
+
+
+## Ejecución 15D — 2026-09-06
+
+Cerrado desde `cf50844` en la rama prevista. Catorce archivos nominales: seis clases nuevas,
+una conexión opcional en SecurityConfig, cuatro suites nuevas y tres documentos. Se reutilizaron
+los fixtures propios de 15A/15C sin modificarlos; no hizo falta el helper HTTP adicional previsto.
+No cambian persistencia, SQL congelado, permisos, wire público, configuración de entorno ni frontend.
+
+El GET privado exige principal del servidor y permiso ADMIN/USER; sólo publica la proyección
+completa entregada después de la transacción 15C. Incluye pendientes opcionales/obligatorios,
+conserva el token completo al filtrar y devuelve una lista vacía legítima para el actor satisfecho.
+El contrato privado no contiene identidad, evidencia, metadata, procedencia ni revisiones de scopes.
+Las pruebas de MVC incluyen composición multicontexto real del núcleo puro; PostgreSQL usa la
+política actual USO_CONTINUADO para ambas audiencias, sin ampliar contextos por falta de evidencia.
+
+Pruebas HTTP con JWT/filtros reales y sólo colaboradores JWT/UserDetails simulados: credencial
+PostgreSQL restringida, preflight V29, actor/tenant/rol/tokenVersion/estado discordantes, evidencia
+ajena en el mismo taller y en otro tenant, propios totalmente satisfechos, reutilización sin DML,
+If-None-Match sin304, rollback, error sanitizado y cierre del pool. El nuevo caso de rollback crea
+un agregado ADMIN con historia propia USER corrupta: se ejecutan las dos inserciones, el reader
+rechaza la evidencia y ambas se revierten; agregado anterior y conteos quedan intactos. El owner
+sólo prepara corrupción dentro de la base efímera protegida por su prefijo nominal.
+
+Se mantuvo el gate focal acordado, con regresiones públicas y de autenticación/tenant por el
+entry point opcional. No hubo cambio de autorización general ni fallo de regresión transversal;
+clean verify continúa reservado al gate integral previsto. Los errores iniciales fueron de pruebas:
+17 aserciones esperaban el texto viejo de Spring para 403 (el actual es Forbidden), siete suponían
+404/405 donde el advice global previo devuelve500 y un matcher Mockito ambiguo requería DecodedJWT
+explícito. Se corrigieron fixtures/aserciones sin modificar auth ni el advice global. La revisión
+sí corrigió antes del gate la serialización textual de timestamp y el guard compartido de URI cruda.
+
+La primera integración aprobó 42 casos MVC y 43 PostgreSQL. La auditoría pidió además acreditar
+el rollback posterior a un agregado nuevo desde HTTP; su caso se añadió al gate final. No se suman
+las repeticiones a los totales de cierre.
+
+### Evidencia final
+
+Java 21.0.10, Maven 3.9.11, PostgreSQL 16.14 en contenedores efímeros. Gate final aprobado el
+2026-09-06T21:22:33-03:00, duración 1:44 min. Se inspeccionaron los once XML nominales:
+**209 pruebas aprobadas**, 137 nuevas y 72 regresiones; 131 Surefire y 78 Failsafe, sin fallos,
+errores ni omitidas.
+
+| Suite | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalPrivateRequirementsControllerTest | 42 | 0 / 0 / 0 |
+| LegalPrivateRequirementsHttpConfigurationTest | 32 | 0 / 0 / 0 |
+| LegalPrivateRequirementsAuthenticationEntryPointTest | 19 | 0 / 0 / 0 |
+| LegalPublicRequirementsSecurityTest | 16 | 0 / 0 / 0 |
+| LegalPublicDocumentSecurityTest | 9 | 0 / 0 / 0 |
+| JwtSecurityIntegrationTests | 3 | 0 / 0 / 0 |
+| TenantIsolationTests | 5 | 0 / 0 / 0 |
+| AuthTests | 5 | 0 / 0 / 0 |
+| LegalPrivateRequirementsHttpIT | 44 | 0 / 0 / 0 |
+| LegalPublicRequirementsHttpIT | 27 | 0 / 0 / 0 |
+| LegalPublicDocumentHttpIT | 7 | 0 / 0 / 0 |
+
+Comando secuencial final (sin ejecuciones Maven concurrentes sobre target):
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalPrivateRequirementsControllerTest,LegalPrivateRequirementsHttpConfigurationTest,LegalPrivateRequirementsAuthenticationEntryPointTest,LegalPublicRequirementsSecurityTest,LegalPublicDocumentSecurityTest,JwtSecurityIntegrationTests,TenantIsolationTests,AuthTests \
+  -Dit.test=LegalPrivateRequirementsHttpIT,LegalPublicRequirementsHttpIT,LegalPublicDocumentHttpIT \
+  package failsafe:integration-test failsafe:verify antrun:run@verify-no-secret-properties-in-jar
+```
+
+Los once archivos de código/pruebas permanecieron idénticos durante el gate. Una revisión
+independiente acreditó las once clases compiladas de las siete fuentes productivas contra
+`target/classes` en ambos JAR, Start-Class correcto para web/CLI, ausencia de clases de tests y de
+application-secret, y hashes congelados V27/V28/V29 en fuentes y artefactos. No se activaron flags ni se provisionaron
+grants compartidos. No se hizo push. Frontend `7545201` y sus dos rutas no
+versionadas permanecen preservados.
+
+El 500 previo para rutas/métodos sin mapping queda caracterizado como limitación del advice global,
+fuera del nuevo GET. No constituye un permiso ni consulta legal. El flag privado permanece apagado
+por defecto y el handoff global sigue cerrado. Commit del corte:
+`feat(legal): publica requisitos del usuario`. Sigue **15E — historial de evidencia propia**.

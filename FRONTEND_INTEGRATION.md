@@ -64,7 +64,8 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     `documentSetRevision` y documento exacto con rol restringido, ETag, errores, seguridad y rate limit,
     detrás de un flag apagado y con gate integral acreditado en 13D. El bloque 14 agrega requisitos
     públicos `REGISTRO/es-AR` con agregado V28, su propio flag apagado y gate de cierre en 14E.
-    Quedan requisitos autenticados, aceptación de aplicación,
+    El corte 15D agrega el GET autenticado de pendientes con lector privado V29 y flag apagado.
+    Quedan aceptación de aplicación, historial propio,
     idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
     staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
@@ -220,8 +221,9 @@ Errores: `401` (email o contraseña incorrectos).
 > El gate integral 13D está acreditado. El corte 14D implementa el GET de requisitos públicos
 > `REGISTRO/es-AR`, detrás de su propio flag apagado. El corte 14E acredita
 > concurrencia, capacidad, tiempos límite y un gate integral fresco sobre esa superficie.
-> Quedan requisitos autenticados, aceptación de aplicación, historial
-> propio, idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido real,
+> El corte 15D conecta el lector privado de 15C al GET autenticado de pendientes, bajo su propio
+> flag apagado. Quedan aceptación de aplicación, historial propio, idempotencia HTTP, respuestas
+> de escritura `409/428/503`, enforcement, contenido real,
 > staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
 > activo. No actives la UI basándote solamente en esta documentación.
@@ -237,7 +239,7 @@ Errores: `401` (email o contraseña incorrectos).
 | GET | `/api/aceptaciones-legales?page=0&size=20` | ADMIN/USER | Evidencia propia; `contexto` es opcional |
 | POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
 
-Las dos primeras filas están implementadas en 13C y la tercera en 14D. El flag
+Las dos primeras filas están implementadas en 13C, la tercera en 14D y la cuarta en 15D. El flag
 `ordenfix.legal.public-documents.enabled` vale `false` por defecto: apagado no registra mappings
 documentales ni excepciones de autenticación. Sólo `true` (sin distinguir mayúsculas) activa las
 tres políticas y los mappings; aliases como `yes`, `on` o `1` no habilitan lectura pública.
@@ -258,7 +260,7 @@ El [cierre documental 13D](docs/plans/2026-09-05-legal-public-document-read-clos
 capacidad, concurrencia HTTP y el gate integral fresco. Esa evidencia no certifica los grants de
 un entorno compartido ni acredita los requisitos públicos de 14D, las aceptaciones o el handoff.
 
-El GET de requisitos usa el flag independiente `ordenfix.legal.public-requirements.enabled`,
+El GET de requisitos públicos usa el flag independiente `ordenfix.legal.public-requirements.enabled`,
 `false` por defecto. Sólo `true` sin distinguir mayúsculas y sin espacios registra ruta, advice,
 puente y excepción pública. Requiere las tres credenciales dedicadas
 `ordenfix.legal.public-requirements.jdbc-url`, `.username` y `.password`; no usa las credenciales
@@ -586,6 +588,14 @@ conserva y reenvía sin calcular revisiones por contexto.
 
 #### Requisitos pendientes autenticados
 
+Implementado en 15D con `ordenfix.legal.account-read.enabled=false` por defecto. A diferencia de
+los flags públicos, sólo admite los literales exactos `true` y `false`; un valor inválido impide el
+arranque. Encenderlo exige `ordenfix.legal.account-read.jdbc-url`, `.username` y `.password` propias,
+sin fallback a credenciales web/públicas. Su contexto aislado sin padre sólo recibe esas propiedades
+y la bandera, no ejecuta Flyway y cierra su pool con la aplicación. La credencial restringida acredita
+V29 y los privilegios privados de 15C en cada operación. No se provisionaron grants compartidos ni
+se activó esta bandera.
+
 ```http
 GET /api/requisitos-legales
 Authorization: Bearer <token>
@@ -595,6 +605,23 @@ Devuelve `200 RequisitosLegalesPendientesResponse`. El backend resuelve primero 
 aplicable y su revisión agregada sobre conjuntos completos; después filtra la lista por el actor,
 su rol actual y las evidencias ya registradas. Puede incluir más de un contexto. No envíes perfil,
 audiencia, rol, tenant ni un vector de contextos para elegir o reducir el resultado.
+
+Esta ruta no admite parámetros de consulta: incluso `locale` devuelve 400 genérico si se envía.
+El locale sale de la política del servidor (`es-AR`). Sólo GET consulta el lector; HEAD autenticado
+responde 405 con `Allow: GET`, y métodos o rutas vecinas no amplían el acceso. Una URI codificada
+que Spring asimile a la ruta se rechaza con 404 antes del lector si no coincide literalmente. El JWT sigue pasando
+por la autenticación habitual; sin sesión válida, el GET exacto habilitado responde 401. Un rol sin
+permiso recibe 403 antes de consultar legal. El principal se contrasta además con usuario, taller,
+rol, estado y versión de token persistidos; una discordancia produce 401.
+
+El éxito devuelve `Cache-Control: private, no-store`, sin ETag. `If-None-Match`, incluso `*`, no
+produce 304 ni evita la observación completa. Los fallos legales propios devuelven `no-store`;
+la indisponibilidad del contrato produce 503 `CONTRATO_LEGAL_NO_DISPONIBLE` con
+`details: {"contexto": null, "locale": "es-AR"}`, sin causas SQL, datos del actor ni resultados
+parciales. El lector utiliza el gate compartido, una transacción propia `REQUIRES_NEW/READ_COMMITTED`
+y el rol restringido de 15C: materializa un agregado faltante y reutiliza uno existente sin DML del
+agregado. Un fallo previo al commit revierte las escrituras nuevas; un fallo posterior al commit
+no se describe como rollback. Esta consulta no registra aceptaciones ni aplica el bloqueo 428.
 
 Incluye requisitos aplicables todavía no evidenciados, tanto obligatorios como opcionales. Sólo la
 ausencia de un requisito `requerido=true` puede disparar `428`; omitir uno opcional nunca bloquea la
@@ -623,8 +650,8 @@ Si el actor satisfizo todo, la respuesta válida es:
 La revisión es autoritativa y conserva el mismo valor que antes de satisfacer esos requisitos,
 mientras no cambie la composición aplicable ni sus revisiones. `requisitos: []` no representa un
 agregado sin scopes ni provoca un hash nuevo del conjunto vacío. El valor de ejemplo no debe
-recalcularse ni asumirse en el cliente. El cálculo de pendientes y las reglas de herencia descritas
-arriba siguen pendientes en la capa de aplicación.
+recalcularse ni asumirse en el cliente. El núcleo de 15B y el lector PostgreSQL de 15C acreditan
+estas reglas; 15D expone el resultado completo del lector en esta ruta.
 
 #### Registrar aceptación autenticada
 
