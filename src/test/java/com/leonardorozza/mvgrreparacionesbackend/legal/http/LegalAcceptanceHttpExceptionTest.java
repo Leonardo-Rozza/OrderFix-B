@@ -76,6 +76,14 @@ class LegalAcceptanceHttpExceptionTest {
     }
 
     @Test
+    void anUncontractedRouteHasOnlyASafeNotFoundDecision() throws Exception {
+        var rejected = LegalAcceptanceHttpException.notFound();
+        fields(rejected, HttpStatus.NOT_FOUND, "Recurso no encontrado", null, null, null);
+        assertThat(rejected.getCause()).isNull();
+        assertThat(rejected.getSuppressed()).isEmpty();
+    }
+
+    @Test
     void incompletePayloadUsesTheSingleStableMotivo() throws Exception {
         var rejected = LegalAcceptanceHttpException.invalidPayload();
         fields(rejected, HttpStatus.BAD_REQUEST, "Solicitud inválida", "ACEPTACION_LEGAL_INVALIDA",

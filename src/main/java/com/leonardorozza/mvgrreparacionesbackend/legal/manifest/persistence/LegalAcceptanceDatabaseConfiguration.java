@@ -62,7 +62,7 @@ public class LegalAcceptanceDatabaseConfiguration {
         config.setReadOnly(false);
         config.addDataSourceProperty("connectTimeout", "1");
         config.addDataSourceProperty("loginTimeout", "1");
-        config.addDataSourceProperty("socketTimeout", "5");
+        config.addDataSourceProperty("socketTimeout", "6");
         config.addDataSourceProperty("cancelSignalTimeout", "1");
         config.addDataSourceProperty("ApplicationName", "ordenfix-legal-account-acceptance");
         return new HikariDataSource(config);
@@ -71,7 +71,8 @@ public class LegalAcceptanceDatabaseConfiguration {
     @Bean(destroyMethod = "close")
     LegalPrivateRequirementsDataSource legalAcceptanceDataSource(
             @Qualifier("legalAcceptancePool") HikariDataSource pool) {
-        return new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15));
+        // Keep SQL/idempotency waits at five seconds, with bounded time to receive their PG result.
+        return new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15), System::nanoTime, 1_000);
     }
 
     @Bean

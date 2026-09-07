@@ -6,7 +6,8 @@ Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecuci�
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
 15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I cerrado en I1/I2/I3,
 con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
-628 pruebas focales (550 unitarias y 78 PostgreSQL). Sigue 15J3: publicación del POST y gate HTTP.
+628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
+clean verify fresco de 7488 pruebas. 15J completo; sigue 15K, política compartida de sesión.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -47,7 +48,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
 | 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
-| 15J | POST de aceptaciones y errores contractuales; J1/J2 cerrados, J3 pendiente | D, E, I |
+| 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
 | 15L | Escritor interno de registro atómico | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
@@ -1341,6 +1342,185 @@ frente al servidor/reescritores, publicar POST y advice con 204/400/401/409/503,
 replay/errores reales y clean verify por el cambio de seguridad compartida. J2 no acredita preempción
 sobre una lectura servlet bloqueada, endpoint desplegado ni disponibilidad de producción. 15K–Q
 siguen pendientes; el clean verify de 6959 casos sigue siendo baseline de 15I.
+
+### Ejecución 15J3 — publicación del POST y gate HTTP
+
+Baseline `4b06af0`, backend limpio en `codex/lanzamiento-publico-backend`. Frontend `7545201`,
+rama y dos rutas no versionadas preservados. Antes de editar código se confirman estos **18 archivos**:
+
+- Nuevos `http/LegalAcceptanceController.java`, `LegalAcceptanceExceptionHandler.java`,
+  `LegalAcceptanceRequestReader.java` y `LegalAcceptancePeerConfiguration.java`.
+- Existentes `http/LegalAcceptanceRequests.java` y `LegalAcceptanceHttpException.java`;
+  `config/security/LegalPrivateRequirementsAuthenticationEntryPoint.java` para el POST exacto
+  bajo su flag, conservando constructores y comportamiento GET anteriores. SecurityConfig no cambia.
+- Nuevos tests HTTP `LegalAcceptanceControllerTest.java`, `LegalAcceptanceRequestReaderTest.java`,
+  `LegalAcceptancePeerConfigurationTest.java`; existentes `LegalAcceptanceRequestsTest.java`,
+  `LegalAcceptanceHttpExceptionTest.java` y el test nominal del entry point.
+- Nuevos `db/LegalAcceptanceHttpIT.java` y `LegalAcceptanceHttpITSupport.java`. Componen los fixtures
+  históricos sin modificarlos y levantan Tomcat real en puerto efímero con PostgreSQL 16 restringido.
+- Este plan, el diseño compañero y FRONTEND_INTEGRATION.md para publicar estado y precisión del wire.
+  No otros archivos, cambios JWT globales, CORS, configuración real ni migraciones V27/V28/V29.
+
+El controller publica sólo POST bajo account-acceptance=true (que exige account-read=true), usa el
+principal servidor y el Reader de J2, sin @RequestBody, binding requerido, consumes ni produces.
+Una URI cruda no exacta se rechaza sin escribir. El éxito exige receipt no nulo y devuelve 204 vacío,
+no-store y sin ETag, aun con headers condicionales. El advice se limita a este controller; conserva
+los códigos de J1/J2, Retry-After:1 sólo para IN_PROGRESS y 503 ante completion incierto o inesperado.
+El entry point extiende el 401 exclusivamente al POST exacto habilitado; no otorga acceso ni altera
+otros métodos/rutas o la política de sesión pendiente de K.
+
+Después del actor se capturan como máximo dos valores de Idempotency-Key. Un stream lazy permite
+rechazar el header presente inválido antes de abrir el cuerpo. En su primera lectura se valida la
+promesa de J1: un único Content-Type de hasta 256 caracteres, application/json (tipo/subtipo sin
+sensibilidad a mayúsculas), sin parámetros o sólo charset que represente UTF-8, incluido alias UTF8
+y valor entre comillas; parámetros repetidos o vacíos se rechazan.
+Header ausente/repetido, otro MIME/charset/parámetro y query cruda no vacía producen INVALID_PAYLOAD;
+query null/vacía es válida. No se llama a getParameterMap ni se acepta identidad del navegador.
+Esto concreta la política de entrada pendiente, sin cambiar el DTO ni prioridades: actor → header
+presente → transporte/JSON/DTO → header requerido. La metadata se captura sólo tras Parsed válido,
+fuera del catch que convierte los tres errores conocidos al marcador neutral. Fallos de captura son
+operativos. El parser conserva su API e incorpora checkpoints antes/después de bloques de 8192 bytes
+y durante ambas pasadas; los fallos del checkpoint atraviesan la sanitización sin convertirse en 400.
+El stream sigue perteneciendo al servlet. Es cooperación, no preempción de una lectura bloqueada.
+
+Peer: se mantienen las restricciones de propiedades de J2. Un customizer de Tomcat registra un
+listener Lifecycle.START_EVENT del contexto: los FilterDefs ya están finalizados, antes de que Boot
+vuelva a habilitar conectores. Rechaza ForwardedHeaderFilter/RemoteIpFilter y RemoteIpValve conocidos,
+incluidas subclases, registrados en filtros y pipelines engine/host/context. No pretende certificar
+wrappers arbitrarios; el inventario de filtros productivos actual se revisa además por fuente. La
+prueba con socket real acredita getRemoteAddr frente a headers Forwarded/X-Forwarded-For hostiles y
+proxies explícitos. No cambia el timeout del conector ni afirma SLA HTTP; esa capacidad corresponde P.
+
+Gate: primero protocolo/controller/peer/seguridad focal y HTTP real + PostgreSQL; después clean verify
+integral por el entry point compartido. Se auditan XML frescos, inventario de pruebas compiladas,
+JAR web/CLI, ausencia de tests/secretos y hashes de migraciones congeladas. No Maven simultáneos.
+Commit previsto: `feat(legal): publica aceptaciones del usuario`, sin push.
+
+Chequeo temprano de seguridad J3: compilación aprobada, 56 casos del entry point aprobados y
+27/28 del guard. El único fallo era del fixture: StandardHost instala MemoryLeakTrackingListener,
+por lo que la prueba no debe suponer un solo listener total. Se corrige sólo el test para seleccionar
+por identidad el único listener agregado por el customizer. No cambió producción. El gate focal
+conjunto y el clean verify posteriores acreditarán la fuente corregida, sin sumar esta corrida.
+
+Primera corrida focal conjunta: la compilación de tests encontró una colisión de imports estáticos
+en LegalAcceptanceHttpIT: PATH pertenecía tanto al fixture como a Assertions/InstanceOfAssertFactories.
+Se reemplaza el wildcard de AssertJ por assertThat/catchThrowable/fail explícitos, sin cambiar producción
+ni expectativas. Esta corrida no ejecutó tests. Se repite el gate focal con fuentes y fecha renovadas.
+
+Segunda corrida focal: 685/686 unitarias aprobadas; Failsafe aún no ejecutado. El único fallo era
+el fixture de header repetido: MockHttpServletRequest reemplaza Content-Type al agregarlo nuevamente,
+en lugar de conservar dos valores. ObservedRequest suministra ahora explícitamente la enumeración de
+dos headers en ese caso. Se preservan el rechazo esperado y producción. Se repite el gate focal completo.
+
+### Ajuste nominal 15J3 tras integración real — transporte y espera idempotente
+
+Tercera corrida focal: 686 unitarias aprobadas y 155/157 PostgreSQL aprobadas. Los GET y diferimiento
+pasaron; de los 35 casos HTTP nuevos, 33 aprobaron. Un error era de Mockito al evaluar
+principal.getUsername() (otro mock) dentro de thenReturn: se captura el username antes de configurar
+el DecodedJWT. El otro es un hallazgo de integración productiva: la espera de lock cercana a 5 s
+competía con networkTimeout/socketTimeout de 5 s. El XML/log acredita Read timed out, SQLSTATE08006,
+conexión rota y rollback fallido. El 503 actual es honesto; no debe convertirse ese fallo en 409.
+
+Antes de editar se amplía la lista nominal de **18 a 22 archivos**, por necesidad del contrato
+IN_PROGRESS con el pool real. Se agregan exclusivamente los existentes
+`db/LegalPrivateRequirementsDataSource.java`, `db/LegalAcceptanceDatabaseConfiguration.java` y sus
+Tests nominales. No se cambia Coordinator, WaitBudget, mapper, fronteras SQL ni migraciones.
+
+El datasource incorpora un overload interno con networkTimeoutGraceMillis entre 0 y 1000.
+Los constructores existentes delegan con 0 y conservan red de 5 s. Sólo el bean de aceptación
+solicita 1000: timeout de red máximo 6 s y socketTimeout=6 en su pool. Lease y cada beforeIo lo
+limitan al remanente real de la operación. SQL/lock/queryTimeout mantienen 5 s; watchdog y plazo
+global mantienen 15 s, incluido commit/cleanup. El margen permite recibir la cancelación PostgreSQL
+sin reducir arbitrariamente la espera idempotente. No es propiedad configurable ni permiso para
+extender la operación, y 08006/commit incierto continúan 503.
+
+Los tests nuevos acreditan default preservado, margen válido/acotado, SQL inalterado y reducción al
+remanente durante execute/fetch. El test de configuración exige socketTimeout=6 y margen de su bean;
+el HTTP real vuelve a exigir 409 IN_PROGRESS, Retry-After:1, rollback y ausencia de DML. Se amplía el
+foco con ambas suites y las integraciones de commit/aislamiento. El clean verify sigue obligatorio.
+
+### Gate focal 15J3 aprobado — 2026-09-07 16:58:01 -03:00
+
+Cuarta corrida conjunta, con el ajuste nominal de transporte: **920 pruebas aprobadas**, 748 Surefire
+en 15 suites y 172 Failsafe en seis suites, cero fallos/errores/omitidas/flaky/rerun. Son reportes
+frescos de las 19 fuentes Java finales; las corridas anteriores no se suman. Los 35 casos HTTP
+reales ahora aprueban, incluido lock idempotente →409/Retry-After:1, rol rechazado, SQL503 y commit
+con ACK perdido →503 seguido de replay204 sin DML. Los seis contenedores usan PostgreSQL16.
+Tomcat/socket, cadena de filtros, bridge, acreditación del actor en PostgreSQL y persistencia son
+reales; JwtUtils y UserDetailsServiceImpl están simulados para la verificación del token y la carga
+inicial del principal. Esos 35 IT no acreditan criptografía JWT end to end ni completan la política
+común de sesión de 15K. El gate integral incluye además las regresiones de autenticación existentes.
+
+Auditoría focal aprobada: XML por suite/clase/método JUnit compilado, diff nominal22 y hashes de
+19Java exactos. Web y CLI tienen 1003 clases+32 recursos idénticos a target, nueve clases nuevas y
+nueve clases existentes cambiadas; las restantes1017 entradas de baseline conservan hashes. Sólo el
+controller nominal introduce mappings. Ambos conservan 122 dependencias idénticas, entrypoints
+correctos, sin tests/secretos/agentes inesperados y migraciones V27/V28/V29 congeladas. El weaver
+AspectJ runtime mantiene su procedencia acreditada. XML y resultado del foco preservados fuera del
+repositorio antes de clean. Se inicia ahora clean verify integral; el corte todavía no está cerrado.
+
+### Cierre 15J3 — 2026-09-07
+
+Cerrados los **22 archivos nominales** sobre `4b06af0`: POST exacto bajo flag, parser y metadata
+diferidos hasta acreditar actor persistido, advice exclusivo, peer original y entry point 401
+condicional. El éxito devuelve 204 vacío/no-store/sin ETag; los errores conservan prioridad,
+envelope y detalles contractuales, con Retry-After:1 sólo para IN_PROGRESS. Una URI codificada
+que MVC normalice no habilita escritura. Accept incompatible no sustituye un error por 406.
+El servicio entrega un receipt sólo tras su frontera; el adaptador nunca lo serializa.
+
+El gate real encontró y corrigió la competencia entre la espera idempotente y el socket. La red
+exclusiva de aceptación admite hasta 6 s frente a SQL/lock de 5 s, siempre limitada al remanente
+de 15 s. El resto de consumidores conserva 5 s. No se acorta arbitrariamente la espera ni se
+reclasifican pérdidas de conexión o rollback incierto como 409. El caso HTTP de contención aprobó
+tanto en el foco final como en el integral, junto con SQL503 y ACK perdido seguido de replay sin DML.
+Los defectos de preparación de pruebas y cada repetición focal están registrados arriba; no se
+omitieron tests ni se relajaron expectativas para obtener el cierre.
+
+Gate integral fresco, con Java 21.0.10, Maven 3.9.11 y PostgreSQL 16.14:
+
+```sh
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B clean verify
+```
+
+Terminado `2026-09-07T17:23:20-03:00`, duración Maven **23:46 min**, aprobado en el primer intento
+integral y sin cambios Java posteriores. Los 920 casos del foco no se suman al integral: son
+verificaciones parcialmente coincidentes.
+
+| Motor | Suites | Casos | Fallos / errores / omitidos / flakes |
+| --- | ---: | ---: | --- |
+| Surefire | 186 | 6465 | 0 / 0 / 0 / 0 |
+| Failsafe | 77 | 1023 | 0 / 0 / 0 / 0 |
+| **Total** | **263** | **7488** | **0 / 0 / 0 / 0** |
+
+Auditoría final aprobada: las 292 fuentes de tests, 730 clases compiladas y los métodos JUnit
+(incluidos heredados) coinciden con los XML frescos y las listas del compilador. Ninguna suite
+nominal queda fuera del inventario; sin retries ni reportes de corridas anteriores sumados. El
+diff coincide con los 22 archivos y los hashes con las 19 fuentes Java del inicio del integral.
+
+JAR web y CLI: **1003 clases + 32 recursos** idénticos byte a byte a target, entrypoints correctos y
+122 bibliotecas iguales entre ambos. Nueve clases nuevas exactas y nueve clases existentes cambiadas;
+las otras 1017 entradas del baseline conservan sus hashes. Sólo el controller nominal añade mappings.
+Sin ZIP duplicados, clases/dependencias/agentes de tests ni propiedades secretas. El AspectJ weaver
+runtime mantiene la procedencia JPA y el hash ya acreditados, sin agente productivo activado.
+V27/V28/V29 conservan sus hashes congelados en fuente, target y ambos artefactos.
+
+SHA-256 finales:
+
+- Web `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: `f7c91aaa961a3ac623fd55e0d6aa883621ba38fa2f1326a23c3f0cc5d05c0d7d`.
+- CLI `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: `14c79890e8b603b3e9c0a0fa5c9a6970d13566341724b5f066eb9304d2e9df00`.
+
+El guard rechaza los reescritores conocidos de Tomcat antes de servir; no certifica wrappers
+arbitrarios. Los checkpoints no interrumpen una lectura servlet bloqueada ni acreditan SLA.
+Las 35 pruebas nuevas HTTP usan socket/Tomcat, filtros, bridge y PostgreSQL reales; JwtUtils y
+la carga inicial del principal son simulados. El integral cubre además las regresiones JWT
+existentes; la política compartida de sesión sigue en 15K. Capacidad HTTP integral permanece en 15P.
+
+Commit atómico `feat(legal): publica aceptaciones del usuario`, sin push. Frontend `7545201`, su
+rama y las rutas no versionadas `.agents/` y `public/OrdenFix project naming/` preservados. No se
+habilitan flags, roles, secretos ni entorno de producción. **15J completo; sigue 15K**, política
+compartida de emisión de sesión. Registro, enforcement, mantenimiento, capacidad y cierre del bloque
+15 conservan sus cortes L–Q.
 
 ## 15K — Política compartida de sesión
 

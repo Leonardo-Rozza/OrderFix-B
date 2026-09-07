@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionSystemException;
@@ -27,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -38,6 +41,85 @@ import static org.mockito.Mockito.when;
 class LegalPrivateRequirementsDataSourceTest {
 
     private static final Duration BUDGET = Duration.ofSeconds(2);
+
+    @ParameterizedTest @ValueSource(ints = {-1, 1_001})
+    void rejectsAnUnboundedTransportMarginBeforeBorrowing(int grace) {
+        DataSource pool = mock(DataSource.class);
+        assertThatThrownBy(() -> new LegalPrivateRequirementsDataSource(
+                pool, Duration.ofSeconds(15), System::nanoTime, grace))
+                .isInstanceOf(IllegalArgumentException.class).hasNoCause();
+        verifyNoInteractions(pool);
+    }
+
+    @ParameterizedTest @ValueSource(ints = {0, 1_000})
+    void transportMarginPreservesSqlLimitsAndShrinksForFetchAndCommit(int grace) throws SQLException {
+        DataSource pool = mock(DataSource.class);
+        Connection driver = mock(Connection.class);
+        Statement query = mock(Statement.class);
+        Statement settings = mock(Statement.class);
+        ResultSet rows = mock(ResultSet.class);
+        AtomicLong clock = new AtomicLong();
+        when(pool.getConnection()).thenReturn(driver);
+        when(driver.createStatement()).thenReturn(query, settings);
+        when(query.executeQuery("SELECT fixture")).thenReturn(rows);
+
+        try (LegalPrivateRequirementsDataSource source = grace == 0
+                ? new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15), clock::get)
+                : new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15), clock::get, grace)) {
+            String receipt = source.withinDeadline(deadline -> {
+                try (Connection lease = source.getConnection(); Statement statement = lease.createStatement()) {
+                    try (ResultSet result = statement.executeQuery("SELECT fixture")) {
+                        verify(driver, atLeastOnce()).setNetworkTimeout(any(), eq(5_000 + grace));
+                        verify(query).setQueryTimeout(5);
+                        verify(settings).execute("SET LOCAL statement_timeout TO '5000ms'");
+                        clock.set(14_250_000_000L);
+                        assertThat(result.next()).isFalse();
+                        verify(driver).setNetworkTimeout(any(), eq(750));
+                        assertThat(deadline.remainingMillis()).isEqualTo(750);
+                    }
+                    clock.set(14_500_000_000L);
+                    lease.commit();
+                    verify(driver).setNetworkTimeout(any(), eq(500));
+                    assertThat(deadline.remainingMillis()).isEqualTo(500);
+                    return "committed";
+                } catch (SQLException failure) {
+                    throw new AssertionError(failure);
+                }
+            });
+            assertThat(receipt).isEqualTo("committed");
+        }
+        verify(driver).commit();
+        verify(driver, never()).rollback();
+        verify(driver).close();
+        verify(rows).close();
+        verify(query).close();
+        verify(settings).close();
+    }
+
+    @Test void transportMarginDoesNotAuthorizeLateCommitAndStillPermitsRollbackAndClose() throws SQLException {
+        DataSource pool = mock(DataSource.class);
+        Connection driver = mock(Connection.class);
+        AtomicLong clock = new AtomicLong();
+        when(pool.getConnection()).thenReturn(driver);
+
+        try (LegalPrivateRequirementsDataSource source = new LegalPrivateRequirementsDataSource(
+                pool, Duration.ofSeconds(15), clock::get, 1_000)) {
+            assertThatThrownBy(() -> source.withinDeadline(deadline -> {
+                try (Connection lease = source.getConnection()) {
+                    verify(driver).setNetworkTimeout(any(), eq(6_000));
+                    clock.set(15_000_000_000L);
+                    assertThatThrownBy(lease::commit).isInstanceOf(LegalPrivateRequirementsReadException.class);
+                    lease.rollback();
+                    return "must not escape after expiry";
+                } catch (SQLException failure) {
+                    throw new AssertionError(failure);
+                }
+            })).isInstanceOf(LegalPrivateRequirementsReadException.class);
+        }
+        verify(driver, never()).commit();
+        verify(driver).rollback();
+        verify(driver).close();
+    }
 
     @Test
     void requiresAnActiveScopeAndNeverAcceptsAlternativeCredentials() {

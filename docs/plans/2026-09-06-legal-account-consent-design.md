@@ -12,7 +12,8 @@ y regresiones aprobadas. El escritor de registro de cuenta sigue pendiente; no c
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
-pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). Sigue 15J3.
+pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). 15J3 cerrado con
+920 focales y clean verify fresco de 7488 pruebas. 15J completo; sigue 15K.
 
 ## Objetivo y resultado esperado
 
@@ -806,3 +807,34 @@ ante ACK perdido/cleanup/deadline. Ambos JAR auditados con siete clases nuevas e
 bytecode limitados a fuentes nominales y V27/V28/V29 congeladas. El plan registra comando y hashes.
 Commit atómico `feat(legal): conecta aceptacion al contexto web`, sin push. Sigue 15J3 para publicar
 el POST, conectar el protocolo/captura y ejecutar el gate HTTP/seguridad integral; 15K–Q pendientes.
+
+## Ejecución 15J3
+
+Se implementa el POST autenticado conforme al alcance y lista nominal del plan. Actor persistido antes
+de transporte/JSON; apertura lazy, checkpoints cooperativos sin preempción, errores neutralizados sólo
+tras rollback acreditado y metadata capturada del peer original. Se concreta application/json con
+charset UTF-8 opcional y query vacía, sin validación MVC anticipada. El guard de Tomcat rechaza los
+reescritores conocidos antes de servir. SecurityConfig, JWT, CORS, flags reales y migraciones no
+cambian. El entry point conserva GET y amplía 401 sólo al POST exacto habilitado. Se exige clean verify.
+
+El gate HTTP J3 detectó una carrera entre espera idempotente de 5 s y timeout de socket de 5 s. Se
+ratifica un margen de transporte de 1 s exclusivamente para aceptación, siempre acotado al remanente
+global de 15 s. SQL/lock conservan 5 s; los lectores existentes conservan su red de 5 s. El ajuste
+nominal y sus cuatro archivos adicionales están documentados antes del código en el plan. Una
+conexión perdida o rollback incierto nunca se reclasifica como IN_PROGRESS.
+
+## Cierre 15J3
+
+POST autenticado implementado bajo flag exacto, apagado por defecto, con rol ADMIN/USER propio,
+actor persistido anterior al transporte, captura del peer original y respuesta posterior a la
+frontera transaccional. El advice conserva 204/400/401/403/404/409/503, no-store y Retry-After sólo
+para IN_PROGRESS, sin exponer el receipt ni metadata. El ajuste de red de aceptación a un máximo
+de 6 s preserva SQL de 5 s y presupuesto global de 15 s; los lectores permanecen sin cambio.
+
+Gate focal final de 920 aprobado; clean verify fresco de **7488** (6465 Surefire + 1023 Failsafe),
+263 suites, cero fallos/errores/omitidas/flakes. Terminó el 2026-09-07 a las 17:23:20 -03:00 en
+23:46 min. Inventarios de fuentes, bytecode, XML y ambos JAR auditados; evidencia completa y hashes
+en el plan compañero. V27/V28/V29, frontend y archivos ajenos preservados. Un commit local de 22
+archivos, sin push. No se activó un entorno real ni se completa sesión, registro o enforcement;
+sigue **15K**. Las limitaciones de captura conocida, checkpoints cooperativos y simulación JWT de
+los IT nuevos permanecen documentadas, sin atribuir SLA ni criptografía end to end a esas pruebas.

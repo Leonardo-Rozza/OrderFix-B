@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Controller;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -162,8 +163,9 @@ class LegalAcceptanceDatabaseConfigurationTest {
             assertThat(pool.getMaximumPoolSize()).isEqualTo(2);
             assertThat(pool.getMinimumIdle()).isZero();
             assertThat(pool.getConnectionTimeout()).isEqualTo(1000);
-            assertThat(pool.getDataSourceProperties()).containsEntry("socketTimeout", "5")
+            assertThat(pool.getDataSourceProperties()).containsEntry("socketTimeout", "6")
                     .containsEntry("connectTimeout", "1").containsEntry("cancelSignalTimeout", "1");
+            assertThat(ReflectionTestUtils.getField(bounded, "networkTimeoutMillis")).isEqualTo(6_000);
             assertThat(pool.getHikariPoolMXBean().getTotalConnections()).isZero();
         }
         assertThat(pool.isClosed()).isTrue();

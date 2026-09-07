@@ -241,7 +241,7 @@ Errores: `401` (email o contraseña incorrectos).
 | POST | `/api/aceptaciones-legales` | ADMIN/USER | Registra evidencia propia; `204` |
 
 Las dos primeras filas están implementadas en 13C, la tercera en 14D, la cuarta en 15D y la quinta
-en 15E. El POST de aceptaciones sigue pendiente. El flag
+en 15E. El POST de aceptaciones está implementado en 15J3 bajo su flag propio, apagado por defecto. El flag
 `ordenfix.legal.public-documents.enabled` vale `false` por defecto: apagado no registra mappings
 documentales ni excepciones de autenticación. Sólo `true` (sin distinguir mayúsculas) activa las
 tres políticas y los mappings; aliases como `yes`, `on` o `1` no habilitan lectura pública.
@@ -657,6 +657,28 @@ estas reglas; 15D expone el resultado completo del lector en esta ruta.
 
 #### Registrar aceptación autenticada
 
+Implementado en 15J3 bajo `ordenfix.legal.account-acceptance.enabled=true` exacto; requiere también
+`ordenfix.legal.account-read.enabled=true`. Ausente/false no registra el POST ni su advice. La
+configuración inválida impide iniciar. No se habilita ningún entorno mediante este cambio.
+ADMIN y USER sólo registran sus propios actos; el actor se contrasta en PostgreSQL antes de leer
+headers/cuerpo y nuevamente bajo locks antes de escribir. El POST no requiere estar al día con
+los consentimientos que permite satisfacer.
+
+La escritura usa `ordenfix.legal.account-acceptance.jdbc-url`, `.username` y `.password`, con contexto,
+pool y rol restringidos propios, separados del lector privado y de `spring.datasource.*`. Requiere
+keyrings completos y versiones activas de `ordenfix.legal.idempotency.*` y
+`ordenfix.legal.account-metadata.*`, retención explícita de metadata y claves independientes de JWT y
+del cifrado de equipos. No ejecuta Flyway ni provisiona roles durante el arranque web. SQL y espera idempotente tienen un
+presupuesto de 5 s; el transporte de aceptación permite hasta 6 s para recibir la respuesta de
+PostgreSQL, siempre acotado al remanente de la operación de 15 s. Los lectores conservan sus límites.
+
+La captura exige `server.forward-headers-strategy=none` explícito; rechaza propiedades remoteip de
+Tomcat que activen reescritura y registros conocidos de ForwardedHeaderFilter, RemoteIpFilter o
+RemoteIpValve, incluidas subclases, antes de servir. Los proxies confiables se configuran sólo en
+`ordenfix.legal.account-metadata.trusted-proxy-cidrs`, CSV de CIDR canónicos (máximo 64 y 4096
+caracteres ASCII). Ausente/vacío no confía en headers de proxy. El flag de confianza del rate limit
+no se reutiliza. Un fallo de captura responde 503 y revierte la operación; no se inventa metadata.
+
 ```http
 POST /api/aceptaciones-legales
 Authorization: Bearer <token>
@@ -689,6 +711,23 @@ Request:
 Éxito: `204 No Content`, sin body. Un replay con la misma clave y el mismo fingerprint también
 devuelve `204` y no crea otra evidencia.
 
+El POST admite una única cabecera Content-Type de hasta 256 caracteres, `application/json`, con
+charset ausente o que represente `UTF-8` (incluido el alias `UTF8` y el valor entre comillas);
+no admite otros parámetros, MIME ni charset.
+Tipo/subtipo no distinguen mayúsculas. La query debe estar ausente o vacía. El cuerpo debe ser UTF-8
+estricto y cumplir el DTO exacto, sin propiedades extra ni selectores de usuario, taller o rol.
+Estos rechazos usan 400 `ACEPTACION_LEGAL_INVALIDA` / `PAYLOAD_LEGAL_INCOMPLETO`.
+La prioridad es actor válido → header Idempotency-Key presente con formato válido → transporte y
+JSON/DTO → header requerido. Por eso una clave presente inválida vence un cuerpo inválido, mientras
+que la ausencia de clave se reclama sólo después de validar el cuerpo. El parseo preserva arrays
+vacíos, duplicados y `confirmado:false` para las decisiones semánticas posteriores.
+
+Toda respuesta del POST usa `Cache-Control: no-store`, sin ETag ni 304. `Retry-After: 1` aparece sólo
+en 409 `IDEMPOTENCY_EN_PROGRESO`; no indica que un error 503 sea seguro para reintentar con otra clave.
+Un resultado de commit incierto responde 503 sin afirmar rollback. El reintento explícito conserva
+la misma clave y cuerpo para consultar el resultado durable. El endpoint no devuelve IDs internos,
+metadata ni el receipt de persistencia.
+
 La lista debe incluir todos los requisitos `requerido=true` todavía pendientes del actor, evaluados
 en la misma transacción, y puede incluir cualquier subconjunto de opcionales conocidos y confirmados.
 En registro, sin evidencia previa, se exigen todos los obligatorios vigentes de `REGISTRO`.
@@ -698,7 +737,7 @@ omitidos, extra o duplicados. Tampoco admite requisitos desconocidos o duplicado
 digests y `confirmado` son pruebas de qué presentó el front, no una fuente confiable: el backend
 persiste sus propios textos, tipos y digests canónicos con hora del servidor.
 
-Precisiones ratificadas en 15A para el POST aún pendiente de implementación:
+Precisiones ratificadas en 15A e implementadas en el POST de 15J3:
 
 | Caso con clave nueva | Resultado después de acreditar disponibilidad |
 | --- | --- |

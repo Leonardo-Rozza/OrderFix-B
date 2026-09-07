@@ -52,6 +52,11 @@ final class LegalAcceptanceHttpException extends RuntimeException {
                 Map.of("motivos", motivos.stream().map(Enum::name).toList()), null, cause);
     }
 
+    static LegalAcceptanceHttpException notFound() {
+        return new LegalAcceptanceHttpException(HttpStatus.NOT_FOUND, "Recurso no encontrado",
+                "El recurso solicitado no existe.", null, null, null, null);
+    }
+
     static LegalAcceptanceHttpException unauthorized(Throwable cause) {
         return new LegalAcceptanceHttpException(HttpStatus.UNAUTHORIZED, "No autorizado",
                 "La identidad legal no está disponible.", null, null, null, cause);

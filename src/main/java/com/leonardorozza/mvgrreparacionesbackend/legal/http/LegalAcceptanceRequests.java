@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommand.Acceptance;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommand.Document;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommandValidator;
@@ -18,6 +19,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -33,30 +35,85 @@ final class LegalAcceptanceRequests {
     private LegalAcceptanceRequests() { }
 
     static Parsed read(List<String> idempotencyHeaderValues, InputStream body) {
+        return read(idempotencyHeaderValues, body, () -> { });
+    }
+
+    /** A checkpoint failure remains operational; it must never become a payload rejection. */
+    static Parsed read(List<String> idempotencyHeaderValues, InputStream body, Runnable checkpoint) {
+        Objects.requireNonNull(checkpoint, "checkpoint");
+        Runnable guarded = () -> {
+            try { checkpoint.run(); }
+            catch (RuntimeException failure) { throw new CheckpointFailure(failure); }
+        };
+        try {
+            return readChecked(idempotencyHeaderValues, body, guarded);
+        } catch (CheckpointFailure interrupted) {
+            throw interrupted.original;
+        }
+    }
+
+    private static Parsed readChecked(List<String> idempotencyHeaderValues, InputStream body, Runnable checkpoint) {
+        checkpoint.run();
         String key = presentKey(idempotencyHeaderValues);
+        checkpoint.run();
         final String text;
         try {
             if (body == null) throw LegalAcceptanceHttpException.invalidPayload();
             // The servlet retains ownership. Bound actual bytes, including trailing whitespace.
-            byte[] bytes = body.readNBytes(MAX_BYTES + 1);
+            byte[] bytes = checkedBody(body, checkpoint).readNBytes(MAX_BYTES + 1);
             if (bytes.length == 0 || bytes.length > MAX_BYTES || hasBom(bytes)) {
                 throw LegalAcceptanceHttpException.invalidPayload();
             }
+            checkpoint.run();
             text = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString();
             // Validate every supplied field and cardinality before allocating DTO lists.
-            document(text, key, false);
+            checkpoint.run();
+            document(text, key, false, checkpoint);
+            checkpoint.run();
+        } catch (CheckpointFailure interrupted) {
+            throw interrupted;
         } catch (IOException | RuntimeException failure) {
             throw LegalAcceptanceHttpException.invalidPayload();
         }
         if (key == null) throw LegalAcceptanceHttpException.requiredKey();
         try {
-            return document(text, key, true);
+            Parsed result = document(text, key, true, checkpoint);
+            checkpoint.run();
+            return result;
+        } catch (CheckpointFailure interrupted) {
+            throw interrupted;
         } catch (IOException | RuntimeException failure) {
             // Parser/input diagnostics must never become response text or exception causes.
             throw LegalAcceptanceHttpException.invalidPayload();
+        }
+    }
+
+    private static InputStream checkedBody(InputStream body, Runnable checkpoint) {
+        return new InputStream() {
+            @Override public int read() throws IOException {
+                checkpoint.run();
+                int value = body.read();
+                checkpoint.run();
+                return value;
+            }
+            @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                checkpoint.run();
+                int count = body.read(bytes, offset, Math.min(length, 8_192));
+                checkpoint.run();
+                return count;
+            }
+            // This wrapper and the parser never close the caller-owned servlet stream.
+        };
+    }
+
+    private static final class CheckpointFailure extends RuntimeException {
+        private final RuntimeException original;
+        private CheckpointFailure(RuntimeException original) {
+            super("La lectura legal fue interrumpida.", null, false, false);
+            this.original = original;
         }
     }
 
@@ -69,8 +126,15 @@ final class LegalAcceptanceRequests {
         return value;
     }
 
-    private static Parsed document(String text, String key, boolean materialize) throws IOException {
-        try (JsonParser parser = JSON.createParser(text)) {
+    private static Parsed document(String text, String key, boolean materialize, Runnable checkpoint) throws IOException {
+        try (JsonParser parser = new JsonParserDelegate(JSON.createParser(text)) {
+            @Override public JsonToken nextToken() throws IOException {
+                checkpoint.run();
+                JsonToken token = super.nextToken();
+                checkpoint.run();
+                return token;
+            }
+        }) {
             expect(parser.nextToken(), JsonToken.START_OBJECT);
             String revision = null;
             List<Acceptance> acceptances = null;

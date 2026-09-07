@@ -38,6 +38,7 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
     private final DataSource pool;
     private final Duration operationBudget;
     private final LongSupplier clock;
+    private final int networkTimeoutMillis;
     private final ThreadLocal<LegalPrivateRequirementsDeadline> current = new ThreadLocal<>();
     private final Set<Lease> leases = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
@@ -53,9 +54,19 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
 
     /** Package-private clock seam for deterministic phase/commit boundary tests. */
     LegalPrivateRequirementsDataSource(DataSource pool, Duration operationBudget, LongSupplier clock) {
+        this(pool, operationBudget, clock, 0);
+    }
+
+    /** Optional bounded transport margin lets PostgreSQL deliver its SQL timeout before the socket closes. */
+    LegalPrivateRequirementsDataSource(DataSource pool, Duration operationBudget, LongSupplier clock,
+                                       int networkTimeoutGraceMillis) {
+        if (networkTimeoutGraceMillis < 0 || networkTimeoutGraceMillis > 1_000) {
+            throw new IllegalArgumentException("El margen de transporte legal debe estar entre 0 y 1000 ms");
+        }
         this.pool = Objects.requireNonNull(pool, "pool");
         this.operationBudget = Objects.requireNonNull(operationBudget, "operationBudget");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.networkTimeoutMillis = STATEMENT_TIMEOUT_MILLIS + networkTimeoutGraceMillis;
         new LegalPrivateRequirementsDeadline(operationBudget, clock);
         watchdog.setRemoveOnCancelPolicy(true);
     }
@@ -145,7 +156,7 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
             this.connection = connection;
             this.deadline = deadline;
             connection.setNetworkTimeout(Runnable::run,
-                    Math.min(STATEMENT_TIMEOUT_MILLIS, deadline.remainingMillis()));
+                    Math.min(networkTimeoutMillis, deadline.remainingMillis()));
             expiration = watchdog.schedule(this::expire, deadline.remainingMillis(), TimeUnit.MILLISECONDS);
         }
 
@@ -306,7 +317,7 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
                     throw new LegalPrivateRequirementsReadException();
                 }
                 connection.setNetworkTimeout(Runnable::run,
-                        Math.min(STATEMENT_TIMEOUT_MILLIS, deadline.remainingMillis()));
+                        Math.min(networkTimeoutMillis, deadline.remainingMillis()));
             }
         }
 

@@ -306,6 +306,55 @@ class LegalAcceptanceRequestsTest {
         assertThat(parsed.acceptances().getFirst().documentos().getFirst().toString()).isEqualTo("Document[redacted]");
     }
 
+    @Test void checkpointsInterruptBetweenBoundedReadsWithoutClosingTheBodyOrBecomingPayloadErrors() {
+        byte[] bytes = (request("") + " ".repeat(20_000)).getBytes(StandardCharsets.UTF_8);
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger closed = new AtomicInteger();
+        var delegate = new ByteArrayInputStream(bytes);
+        var body = new InputStream() {
+            @Override public int read() { throw new AssertionError("Expected bounded bulk input"); }
+            @Override public int read(byte[] target, int offset, int length) {
+                assertThat(length).isLessThanOrEqualTo(8_192);
+                reads.incrementAndGet();
+                return delegate.read(target, offset, Math.min(length, 1_024));
+            }
+            @Override public void close() { closed.incrementAndGet(); }
+        };
+        var operational = new IllegalStateException("synthetic deadline-private-value");
+        Throwable failure = catchThrowable(() -> LegalAcceptanceRequests.read(List.of(KEY), body, () -> {
+            if (reads.get() == 2) throw operational;
+        }));
+        assertThat(failure).isSameAs(operational);
+        assertThat(reads).hasValue(2); assertThat(closed).hasValue(0);
+        assertThat(delegate.available()).isEqualTo(bytes.length - 2_048);
+    }
+
+    @Test void checkpointsCoverBothValidationAndMaterializationWithoutChangingHeaderPrecedence() {
+        String payload = request(act(REQUIREMENT, "ACEPTACION", documents(2), true));
+        AtomicInteger validationChecks = new AtomicInteger();
+        error(catchThrowable(() -> LegalAcceptanceRequests.read(List.of(), stream(payload),
+                validationChecks::incrementAndGet)), "IDEMPOTENCY_KEY_REQUERIDA");
+        AtomicInteger allChecks = new AtomicInteger();
+        var parsed = LegalAcceptanceRequests.read(List.of(KEY), stream(payload), allChecks::incrementAndGet);
+        assertThat(parsed.acceptances()).hasSize(1);
+        assertThat(allChecks.get()).isGreaterThan(validationChecks.get());
+        AtomicInteger interruptedChecks = new AtomicInteger();
+        var operational = new IllegalStateException("synthetic second-pass interruption");
+        Throwable failure = catchThrowable(() -> LegalAcceptanceRequests.read(List.of(KEY), stream(payload), () -> {
+            if (interruptedChecks.incrementAndGet() > validationChecks.get()) throw operational;
+        }));
+        assertThat(failure).isSameAs(operational);
+    }
+
+    @Test void checkpointExceptionIsNotReclassifiedEvenWhenItsTypeResemblesAParserRejection() {
+        var operational = LegalAcceptanceHttpException.invalidKey();
+        AtomicInteger checks = new AtomicInteger();
+        Throwable failure = catchThrowable(() -> LegalAcceptanceRequests.read(List.of(KEY), stream(request("")), () -> {
+            if (checks.incrementAndGet() > 4) throw operational;
+        }));
+        assertThat(failure).isSameAs(operational);
+    }
+
     private static LegalAcceptanceRequests.Parsed read(String input) {
         return LegalAcceptanceRequests.read(List.of(KEY), stream(input));
     }
