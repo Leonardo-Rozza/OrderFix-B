@@ -12,7 +12,7 @@ y regresiones aprobadas. El escritor de registro de cuenta sigue pendiente; no c
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
 15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
-pruebas focales; sigue 15J2 y el POST queda pendiente de 15J3.
+pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). Sigue 15J3.
 
 ## Objetivo y resultado esperado
 
@@ -781,3 +781,28 @@ sin fallos/errores/omitidas/flaky. La primera ejecución detectó 11 errores de 
 fixture; se corrigieron y la repetición completa pasó sin cambios productivos. JAR web/CLI auditados
 con cuatro clases nuevas exactas, todas las entradas previas intactas y migraciones congeladas.
 Comando, desglose y hashes en el plan. Sigue 15J2; todavía sin endpoint de aceptación ni activación.
+
+## Cierre 15J2 — composición aislada y actor antes de la entrada
+
+La configuración web selecciona credenciales/flags/keyrings legales en un snapshot propio, valida
+separación de todas las claves frente a JWT y cifrado de equipos y crea el grafo JDBC en un contexto
+sin parent, fuentes ambientales ni perfiles. Sólo exporta servicio de aceptación y resolver de
+metadata; mantiene pool propio, cero conexiones al iniciar y cierre incluso ante fallo posterior web.
+La captura exige configuración explícita del peer original y CSV de proxies de hasta 4096 caracteres /
+64 CIDR, sin confianza heredada del rate limit. El servidor/reescritores reales se acreditarán en J3.
+
+El overload con LegalAcceptanceInput.Reader comprueba primero al actor persistido dentro de
+REQUIRES_NEW/READ_COMMITTED. Lee una vez antes de idempotencia; conserva el API anterior y vuelve a
+comprobar actor bajo locks antes de escribir/replay. Una clasificación neutral y cerrada conserva
+los códigos de entrada de J1 sólo después de rollback acreditado, sin dependencia HTTP en persistence.
+El deadline se comprueba también después de rollback/cierre al salir por excepción: expiración,
+cleanup fallido o finalización incierta no quedan ocultos detrás de un 400. Los checkpoints son
+cooperativos y no interrumpen I/O servlet bloqueado; no se declara un SLA con esta prueba.
+
+Cierre 2026-09-07: gate focal aprobado al primer intento, 628 casos (550 Surefire + 78 Failsafe),
+179 nuevos y 449 regresiones; cero fallos/errores/omitidos/flaky en catorce XML frescos. PostgreSQL16.14
+acredita actor antes del reader, revocación durante lectura, rechazo sin DML, replay y estados físicos
+ante ACK perdido/cleanup/deadline. Ambos JAR auditados con siete clases nuevas exactas, cambios de
+bytecode limitados a fuentes nominales y V27/V28/V29 congeladas. El plan registra comando y hashes.
+Commit atómico `feat(legal): conecta aceptacion al contexto web`, sin push. Sigue 15J3 para publicar
+el POST, conectar el protocolo/captura y ejecutar el gate HTTP/seguridad integral; 15K–Q pendientes.

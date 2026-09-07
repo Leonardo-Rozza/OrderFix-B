@@ -58,21 +58,33 @@ final class LegalAcceptanceTransactionBoundary {
         Objects.requireNonNull(callback);
         requireExactBoundary();
         return dataSource.withinDeadline(deadline -> {
-            T receipt = transaction.execute(status -> {
-                state.callbackStarted();
-                budget(deadline);
-                requireEffectiveTransaction();
-                schema.verify();
-                deadline.check();
-                privileges.verify();
-                deadline.check();
-                T tentative = callback.run(status, deadline);
-                deadline.check();
-                state.receiptDelivered(tentative);
-                return tentative;
-            });
-            state.transactionReturnedNormally();
-            return receipt;
+            try {
+                T receipt = transaction.execute(status -> {
+                    state.callbackStarted();
+                    budget(deadline);
+                    requireEffectiveTransaction();
+                    schema.verify();
+                    deadline.check();
+                    privileges.verify();
+                    deadline.check();
+                    T tentative = callback.run(status, deadline);
+                    deadline.check();
+                    state.receiptDelivered(tentative);
+                    return tentative;
+                });
+                state.transactionReturnedNormally();
+                return receipt;
+            } catch (RuntimeException failure) {
+                // execute has completed rollback and release. Their recorded failures and an expired
+                // budget must prevail over a payload rejection even when Spring absorbed cleanup.
+                try {
+                    deadline.check();
+                } catch (RuntimeException boundaryFailure) {
+                    if (boundaryFailure != failure) boundaryFailure.addSuppressed(failure);
+                    throw boundaryFailure;
+                }
+                throw failure;
+            }
         });
     }
 

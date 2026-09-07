@@ -3,6 +3,8 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommand.Acceptance;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommandValidator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceInput;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceInputException;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalActorSnapshot;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalApplicableScopeResolver;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequestMetadata;
@@ -53,21 +55,42 @@ public final class LegalAcceptanceService {
     public LegalAcceptanceReceipt accept(AuthenticatedUserPrincipal principal, String idempotencyKey,
                                           String requiredSetRevision, List<Acceptance> acceptances,
                                           LegalRequestMetadata metadata) {
+        return accept(principal, checkpoint -> new LegalAcceptanceInput(idempotencyKey,
+                requiredSetRevision, acceptances, metadata), () -> {
+            // Preserve the existing API's early server-capture check, after identifying the principal.
+            if (metadata == null) throw new IllegalStateException("La captura legal requerida no está disponible");
+        });
+    }
+
+    /** Reads browser input once, only after the persisted actor is observed within the own transaction. */
+    public LegalAcceptanceReceipt accept(AuthenticatedUserPrincipal principal, LegalAcceptanceInput.Reader reader) {
+        return accept(principal, reader, () -> { });
+    }
+
+    private LegalAcceptanceReceipt accept(AuthenticatedUserPrincipal principal, LegalAcceptanceInput.Reader reader,
+                                           Runnable beforeTransaction) {
         var completion = new LegalTransactionCompletionState<LegalAcceptanceReceipt>();
         try {
             LegalActorSnapshot identity = identify(principal);
-            if (metadata == null) throw new IllegalStateException("La captura legal requerida no está disponible");
+            beforeTransaction.run();
             return boundary.execute(completion, (status, deadline) -> {
                 observeActor(identity);
+                deadline.check();
+                LegalAcceptanceInput input = readInput(reader, deadline);
+                deadline.check();
+                if (input == null || input.metadata() == null) {
+                    throw new IllegalStateException("La captura legal requerida no está disponible");
+                }
                 final com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommand command;
                 try {
-                    LegalAcceptanceCommandValidator.requireIdempotencyKey(idempotencyKey);
-                    command = LegalAcceptanceCommandValidator.authenticated(identity, requiredSetRevision, acceptances);
+                    LegalAcceptanceCommandValidator.requireIdempotencyKey(input.idempotencyKey());
+                    command = LegalAcceptanceCommandValidator.authenticated(identity,
+                            input.requiredSetRevision(), input.acceptances());
                 } catch (IllegalArgumentException invalidShape) {
                     throw new LegalAcceptanceFailure(LegalAcceptanceFailure.Reason.INVALID_PAYLOAD,
                             completion.snapshot(), invalidShape);
                 }
-                var reservation = coordinator.reserve(command, idempotencyKey, deadline::remainingMillis);
+                var reservation = coordinator.reserve(command, input.idempotencyKey(), deadline::remainingMillis);
                 var replay = reservation.replay();
                 if (replay.isPresent()) {
                     var result = replay.get();
@@ -93,7 +116,7 @@ public final class LegalAcceptanceService {
                 var existing = evidence.read(reservation, identity);
                 deadline.check();
                 var chosen = selection.select(command, current, existing);
-                var result = writer.write(reservation, identity, aggregate, chosen, metadata);
+                var result = writer.write(reservation, identity, aggregate, chosen, input.metadata());
                 reservation.readBudget();
                 // Accredit deferred graph constraints while rollback remains an observable outcome.
                 jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
@@ -106,6 +129,20 @@ public final class LegalAcceptanceService {
                     && typed.getCause() instanceof RuntimeException inner ? inner : failure;
             // A late cleanup/deadline failure retains COMMITTED; an invoked but failed COMMIT stays UNKNOWN.
             throw new LegalAcceptanceFailure(reason, completion.snapshot(), cause);
+        }
+    }
+
+    private static LegalAcceptanceInput readInput(LegalAcceptanceInput.Reader reader,
+                                                   LegalPrivateRequirementsDeadline deadline) {
+        try {
+            if (reader == null) throw new IllegalStateException("La entrada legal requerida no está disponible");
+            return reader.read(deadline::check);
+        } catch (LegalAcceptanceInputException rejected) {
+            throw rejected;
+        } catch (RuntimeException unexpected) {
+            // Only the neutral marker is an expected input rejection. A callback cannot introduce
+            // actor, validation or idempotency classifications through an unrelated exception.
+            throw new IllegalStateException("No se pudo leer la entrada de aceptación legal", unexpected);
         }
     }
 
@@ -140,6 +177,7 @@ public final class LegalAcceptanceService {
 
     private static LegalAcceptanceFailure.Reason classify(RuntimeException failure) {
         if (failure instanceof LegalAcceptanceFailure typed) return typed.reason();
+        if (failure instanceof LegalAcceptanceInputException) return LegalAcceptanceFailure.Reason.INVALID_PAYLOAD;
         if (failure instanceof LegalActorSnapshotException) return LegalAcceptanceFailure.Reason.INVALID_ACTOR;
         if (failure instanceof LegalAcceptanceValidationException typed) return typed.reason()
                 == LegalAcceptanceValidationException.Reason.STALE

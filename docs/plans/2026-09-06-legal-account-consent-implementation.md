@@ -5,8 +5,8 @@ Fecha: 2026-09-06
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
 15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I cerrado en I1/I2/I3,
-con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; sigue 15J2
-(composición aislada y actor antes del payload); el POST queda pendiente de 15J3.
+con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
+628 pruebas focales (550 unitarias y 78 PostgreSQL). Sigue 15J3: publicación del POST y gate HTTP.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -47,7 +47,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
 | 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
-| 15J | POST de aceptaciones y errores contractuales; J1 cerrado, J2/J3 pendientes | D, E, I |
+| 15J | POST de aceptaciones y errores contractuales; J1/J2 cerrados, J3 pendiente | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
 | 15L | Escritor interno de registro atómico | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
@@ -1211,6 +1211,136 @@ Cierre mediante commit atómico `feat(legal): valida solicitudes de aceptacion`,
 **15J2**, para conectar configuración aislada y observar actor persistido antes de consumir header/JSON.
 J3 conserva la publicación, metadata HTTP, errores/envelopes/headers reales y gate PostgreSQL/seguridad;
 15K–Q siguen pendientes. El clean verify de 6959 casos es baseline de 15I, no evidencia nueva de J1.
+
+### Ejecución 15J2 — composición y entrada diferida
+
+Baseline `63ba195`, backend limpio en `codex/lanzamiento-publico-backend`; frontend `7545201`,
+rama y dos rutas no versionadas preservados. Se confirman antes de editar estos **14 archivos**:
+
+- Nuevos de producción: `core/LegalAcceptanceInput.java`, `core/LegalAcceptanceInputException.java`,
+  `http/LegalAcceptanceHttpSettings.java`, `http/LegalAcceptanceHttpConfiguration.java`.
+- Existentes de producción: `db/LegalAcceptanceService.java` (overload diferido conservando API y
+  rechazo temprano de metadata nula), `db/LegalAcceptanceFailure.java` (clasificación neutral de
+  entrada), `db/LegalAcceptanceTransactionBoundary.java` (deadline/cleanup también tras excepción),
+  `http/LegalAcceptanceHttpException.java` (recuperar sólo códigos de entrada acreditados).
+- Nuevos tests: `http/LegalAcceptanceHttpSettingsTest.java`, `http/LegalAcceptanceHttpConfigurationTest.java`,
+  `db/LegalAcceptanceDeferredPayloadIT.java`; existente `http/LegalAcceptanceHttpExceptionTest.java`.
+  Paquetes equivalentes bajo src/test/java; se reutiliza sin modificar LegalAcceptanceServiceITSupport.
+- Este plan y el diseño compañero para decisiones/evidencia. Sin otros archivos autorizados ni
+  modificación de fixtures históricos, pools compartidos, JWT global o migraciones congeladas.
+
+API neutral: LegalAcceptanceInput contiene clave/revisión/actos/metadata, copia defensiva acotada y
+redacción; su Reader.read(Runnable checkpoint) se ejecuta una vez después de observeActor dentro de
+REQUIRES_NEW/READ_COMMITTED, antes de comando/reserva. Principal inválido no invoca callback; reader
+nulo/retorno nulo/fallo inesperado fallan cerrado. El API actual conserva firma y garantías previas.
+LegalAcceptanceInputException sólo admite REQUIRED_KEY, INVALID_KEY e INVALID_PAYLOAD, sin causa ni
+texto externo. El adaptador futuro convierte sólo esos errores de J1; los fallos de captura siguen
+operativos. Failure conserva Optional<inputReason>; HTTP sólo recupera el 400 tras rollback acreditado,
+NOT_PERSISTED y sin recibo/validación contradictoria. No se busca una excepción HTTP en cadenas arbitrarias.
+Se comprueba deadline antes/después del reader y después de rollback/cierre aun si hubo rechazo: un
+vencimiento o fallo de cleanup prevalece como UNAVAILABLE. Se conserva la segunda observación de actor
+bajo locks. El checkpoint es cooperativo: no interrumpe una lectura servlet bloqueada ni acredita SLA;
+J3 integra el stream/servidor y 15P verifica capacidad HTTP.
+
+Settings valida flags exactos (aceptación requiere lectura), selecciona sólo tres credenciales de
+aceptación, ambos flags legales, versiones/keyrings completos, TTL y retención. Sin fallback a JDBC
+web/read ni copia de JWT, clave de equipos, fuentes/perfiles ambientales o propiedades de proxy.
+Compara todas las versiones retenidas AES/HMAC con bytes efectivos del JWT (UTF-8 original) y equipos
+(Base64 después de trim, incluida representación sin padding); también rechaza la misma cadena de
+configuración del JWT y una clave legal. No se usan ni registran secretos reales para las pruebas.
+El contexto existente I2 conserva la validación criptográfica completa antes de crear el pool.
+
+Propiedad nueva de captura: `ordenfix.legal.account-metadata.trusted-proxy-cidrs`, CSV de hasta 4096
+caracteres y 64 CIDR. Ausente/vacío significa ninguna confianza; permite sólo espacios/tabs ASCII
+alrededor de cada CIDR, rechaza elementos vacíos y formato indexado. No usa el flag de rate limit. El bridge exige `server.forward-headers-strategy=none` explícito cuando está habilitado
+para evitar defaults cloud y rechaza remote-ip-header/protocol-header de Tomcat con texto, que podrían
+activar RemoteIpValve incluso bajo none. No cambia configuración real ni habilita flags. No existen
+reescritores de peer propios en el runtime actual; J3 deberá acreditar peer original con el servidor
+real, y rechazar configuraciones incompatibles antes de publicar la captura.
+
+El bridge web sólo exporta el servicio de aceptación y su resolver de metadata; administra un contexto
+sin parent, fuentes por defecto ni perfiles, con pool restringido propio. Cierra al fallar refresh,
+al destruirse o fallar el contexto web posterior; no reabre después de destroy. J2 no registra controller,
+advice ni escritura HTTP. Gate focal: suites nuevas, servicio/commit/configuración/metadata/J1 afectados,
+PostgreSQL16 real y auditoría de ambos JAR. El cierre integral de seguridad compartida permanece en J3.
+Commit: `feat(legal): conecta aceptacion al contexto web`.
+
+### Cierre 15J2 — 2026-09-07
+
+Completados los 14 archivos nominales sobre `63ba195`. El contexto web sólo recibe el servicio y el
+resolver de metadata; el contexto JDBC independiente conserva rol restringido, pool propio,
+REQUIRES_NEW/READ_COMMITTED, preflight V29 y presupuesto de 15 s. La entrada diferida no elige actor,
+no abre conexiones paralelas ni altera la reserva/replay de 15I. Se preserva el API anterior, incluido
+su rechazo de metadata nula antes de DB. Ningún controller/advice ni flag de producción habilitado.
+
+Gate final aprobado en el primer intento con Java 21.0.10, Maven 3.9.11 y PostgreSQL 16.14
+(`postgres:16-alpine`, cuatro bases efímeras). Comando ejecutado secuencialmente, sin otro Maven:
+
+```sh
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B \
+  -Dtest=LegalAcceptanceHttpConfigurationTest,LegalAcceptanceHttpSettingsTest,LegalAcceptanceHttpExceptionTest,LegalAcceptanceRequestsTest,LegalAcceptanceServiceTest,LegalAcceptanceDatabaseConfigurationTest,LegalAcceptanceTransactionBoundaryTest,LegalPrivateRequirementsHttpConfigurationTest,LegalRequestMetadataResolverTest,LegalAcceptanceCommandValidatorTest \
+  -Dit.test=LegalAcceptanceDeferredPayloadIT,LegalAcceptanceServiceIT,LegalAcceptanceCommitIT,LegalAcceptanceDatabaseIsolationIT \
+  package failsafe:integration-test failsafe:verify
+```
+
+| Suite final | Motor | Casos | Fallos / errores / omitidos |
+| --- | --- | ---: | --- |
+| LegalAcceptanceHttpConfigurationTest | surefire | 28 | 0 / 0 / 0 |
+| LegalAcceptanceHttpSettingsTest | surefire | 114 | 0 / 0 / 0 |
+| LegalAcceptanceHttpExceptionTest | surefire | 59 | 0 / 0 / 0 |
+| LegalAcceptanceRequestsTest | surefire | 128 | 0 / 0 / 0 |
+| LegalAcceptanceServiceTest | surefire | 10 | 0 / 0 / 0 |
+| LegalAcceptanceDatabaseConfigurationTest | surefire | 36 | 0 / 0 / 0 |
+| LegalAcceptanceTransactionBoundaryTest | surefire | 17 | 0 / 0 / 0 |
+| LegalPrivateRequirementsHttpConfigurationTest | surefire | 35 | 0 / 0 / 0 |
+| LegalRequestMetadataResolverTest | surefire | 67 | 0 / 0 / 0 |
+| LegalAcceptanceCommandValidatorTest | surefire | 56 | 0 / 0 / 0 |
+| LegalAcceptanceDeferredPayloadIT | failsafe | 28 | 0 / 0 / 0 |
+| LegalAcceptanceServiceIT | failsafe | 35 | 0 / 0 / 0 |
+| LegalAcceptanceCommitIT | failsafe | 10 | 0 / 0 / 0 |
+| LegalAcceptanceDatabaseIsolationIT | failsafe | 5 | 0 / 0 / 0 |
+| **Total** | **550 Surefire + 78 Failsafe** | **628** | **0 / 0 / 0** |
+
+Son 179 casos nuevos (114 settings, 28 composición, 28 diferimiento PostgreSQL y nueve extensiones
+del traductor) y 449 regresiones. Los catorce XML son frescos y corresponden a las doce fuentes Java
+finales registradas; sin flaky/rerun ni reportes anteriores sumados. Maven terminó a las
+14:26:02 -03:00 en 01:51 min. No hubo fallos de compilación, tests ni correcciones posgate.
+
+Evidencia nueva: cero callbacks para principal/actor rechazados, un callback dentro de la transacción
+restringida por invocación incluso replay, copia independiente del borrador, cero DML antes de input
+válido y ante rechazo. Usuario/taller/token/rol/pertenencia revocados durante la lectura vuelven a
+fallar bajo locks antes de escribir. Una excepción ajena al marcador no puede fabricar rechazo de
+actor ni validación legal. Expiración durante el reader (con retorno, checkpoint o rechazo) y error
+de cierre prevalecen como UNAVAILABLE; rollback con ACK perdido permanece UNKNOWN. Commit con ACK
+perdido conserva UNKNOWN sin rollback inventado; un reintento explícito posterior lee el resultado
+confirmado con DML cero. Los fallos físicos inyectados son casos de prueba esperados, no fallos del gate.
+
+Composición: las claves activas/históricas y su representación efectiva se contrastan con
+la política completa de settings; las versiones retenidas se enumeran por sus nombres canónicos
+punteados. Valores sólo disponibles en fuentes no enumerables no constituyen un keyring completo.
+El CSV limita bytes ASCII antes de dividir y no acepta confianza parcial ni configuración indexada.
+Los tests prueban aislamiento de fuentes/perfiles/beans, ausencia de fallback, dos pools privados
+separados del web, cero conexiones al inicializar, cierre tras fallos de refresh/web/destroy y
+prohibición de reabrir. La validación de retención/keyrings de I2 sigue anterior a la creación del pool.
+
+Auditoría final de ambos JAR: 994 clases y 32 recursos con bytes idénticos a target, siete clases
+nuevas exactas y nueve clases existentes modificadas desde los archivos nominales; las restantes
+1010 entradas del baseline conservan sus hashes. Sin controller/mapping nuevo. Start-Class web/CLI
+correctos, 122 bibliotecas idénticas, sin clases/dependencias/agentes de tests, propiedades secretas,
+ZIP duplicados ni agentes inesperados. El AspectJ weaver de runtime conserva su procedencia JPA.
+V27/V28/V29 mantienen sus hashes congelados en fuente y JAR. SHA-256 finales:
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: `dfce658ee4d58625329edc93237fb8323b11507639253fcedecf9e9c28551701`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: `1007542dd6ac5086158e06be2bee7cb92fdfa26cc3a697cb2518fbbeb835c20c`.
+
+Cierre mediante commit atómico `feat(legal): conecta aceptacion al contexto web`, sin push. Frontend,
+archivos no versionados y fixtures históricos preservados. **Sigue 15J3**: convertir los rechazos
+conocidos de J1 al marcador neutral, conectar captura/stream con checkpoints y acreditar peer original
+frente al servidor/reescritores, publicar POST y advice con 204/400/401/409/503, no-store/Retry-After,
+replay/errores reales y clean verify por el cambio de seguridad compartida. J2 no acredita preempción
+sobre una lectura servlet bloqueada, endpoint desplegado ni disponibilidad de producción. 15K–Q
+siguen pendientes; el clean verify de 6959 casos sigue siendo baseline de 15I.
 
 ## 15K — Política compartida de sesión
 

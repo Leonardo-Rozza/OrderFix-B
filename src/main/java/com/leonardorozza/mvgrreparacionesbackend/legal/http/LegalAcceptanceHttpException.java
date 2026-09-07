@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.http;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceInputException;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalAcceptanceFailure;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalAcceptanceValidationException;
 import org.springframework.http.HttpStatus;
@@ -81,6 +82,8 @@ final class LegalAcceptanceHttpException extends RuntimeException {
         // Only identity rejection can precede the transaction. Business rejections require observed rollback.
         if (failure.completion() == LegalAcceptanceFailure.Completion.NONE
                 && failure.reason() != LegalAcceptanceFailure.Reason.INVALID_ACTOR) return unavailable(failure);
+        if (failure.inputReason().isPresent()
+                && failure.reason() != LegalAcceptanceFailure.Reason.INVALID_PAYLOAD) return unavailable(failure);
         if (failure.reason() == LegalAcceptanceFailure.Reason.STALE
                 || failure.reason() == LegalAcceptanceFailure.Reason.INVALID) {
             return validation(failure);
@@ -88,7 +91,12 @@ final class LegalAcceptanceHttpException extends RuntimeException {
         if (failure.validation().isPresent()) return unavailable(failure);
         return switch (failure.reason()) {
             case INVALID_ACTOR -> unauthorized(failure);
-            case INVALID_PAYLOAD -> invalidPayload();
+            case INVALID_PAYLOAD -> switch (failure.inputReason().orElse(
+                    LegalAcceptanceInputException.Reason.INVALID_PAYLOAD)) {
+                case REQUIRED_KEY -> requiredKey();
+                case INVALID_KEY -> invalidKey();
+                case INVALID_PAYLOAD -> invalidPayload();
+            };
             case KEY_REUSED -> conflict("IDEMPOTENCY_KEY_REUTILIZADA",
                     "La clave de idempotencia ya corresponde a otra solicitud.", null, failure);
             case IN_PROGRESS -> conflict("IDEMPOTENCY_EN_PROGRESO",

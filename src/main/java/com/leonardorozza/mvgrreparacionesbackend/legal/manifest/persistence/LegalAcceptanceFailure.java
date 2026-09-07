@@ -1,5 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceInputException;
+
 import java.util.Objects;
 import java.util.Optional;
 
@@ -14,6 +16,7 @@ public final class LegalAcceptanceFailure extends RuntimeException {
     private final Persistence persistence;
     private final Optional<LegalAcceptanceReceipt> confirmedReceipt;
     private final Optional<LegalAcceptanceValidationException> validation;
+    private final Optional<LegalAcceptanceInputException.Reason> inputReason;
 
     LegalAcceptanceFailure(Reason reason, LegalTransactionCompletionState.Snapshot<LegalAcceptanceReceipt> state,
                            RuntimeException cause) {
@@ -23,6 +26,8 @@ public final class LegalAcceptanceFailure extends RuntimeException {
         this.persistence = Persistence.valueOf(state.persistence().name());
         this.confirmedReceipt = state.receipt();
         this.validation = cause instanceof LegalAcceptanceValidationException typed ? Optional.of(typed) : Optional.empty();
+        this.inputReason = cause instanceof LegalAcceptanceInputException typed
+                ? Optional.of(typed.reason()) : Optional.empty();
     }
 
     public Reason reason() { return reason; }
@@ -30,4 +35,5 @@ public final class LegalAcceptanceFailure extends RuntimeException {
     public Persistence persistence() { return persistence; }
     public Optional<LegalAcceptanceReceipt> confirmedReceipt() { return confirmedReceipt; }
     public Optional<LegalAcceptanceValidationException> validation() { return validation; }
+    public Optional<LegalAcceptanceInputException.Reason> inputReason() { return inputReason; }
 }

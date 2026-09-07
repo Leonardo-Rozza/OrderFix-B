@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.http;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalActorSnapshot;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceInputException;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalApplicableScopeResolver;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAuthenticatedRequirements;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAuthenticatedRequirements.Membership;
@@ -284,6 +285,45 @@ class LegalAcceptanceHttpExceptionTest {
     void nonSemanticReasonCannotCarryAnUnrelatedValidation(LegalAcceptanceFailure.Reason reason) throws Exception {
         var failure = failure(reason);
         doReturn(Optional.of(invalidValidation(List.of(Motivo.DOCUMENTO_FALTANTE)))).when(failure).validation();
+        unavailable(LegalAcceptanceHttpException.from(failure));
+    }
+
+    @ParameterizedTest @EnumSource(LegalAcceptanceInputException.Reason.class)
+    void neutralInputCodesRequireConclusiveRollbackAndNoValidation(LegalAcceptanceInputException.Reason input)
+            throws Exception {
+        var failure = failure(LegalAcceptanceFailure.Reason.INVALID_PAYLOAD);
+        when(failure.inputReason()).thenReturn(Optional.of(input));
+        var rejected = LegalAcceptanceHttpException.from(failure);
+        switch (input) {
+            case REQUIRED_KEY -> fields(rejected, HttpStatus.BAD_REQUEST, "Solicitud inválida",
+                    "IDEMPOTENCY_KEY_REQUERIDA", Map.of("header", "Idempotency-Key"), null);
+            case INVALID_KEY -> fields(rejected, HttpStatus.BAD_REQUEST, "Solicitud inválida",
+                    "IDEMPOTENCY_KEY_INVALIDA", Map.of("header", "Idempotency-Key"), null);
+            case INVALID_PAYLOAD -> fields(rejected, HttpStatus.BAD_REQUEST, "Solicitud inválida",
+                    "ACEPTACION_LEGAL_INVALIDA", Map.of("motivos", List.of("PAYLOAD_LEGAL_INCOMPLETO")), null);
+        }
+        for (var completion : List.of(LegalAcceptanceFailure.Completion.NONE,
+                LegalAcceptanceFailure.Completion.COMMITTED, LegalAcceptanceFailure.Completion.UNKNOWN)) {
+            when(failure.completion()).thenReturn(completion);
+            unavailable(LegalAcceptanceHttpException.from(failure));
+        }
+        when(failure.completion()).thenReturn(LegalAcceptanceFailure.Completion.ROLLED_BACK);
+        for (var persistence : List.of(LegalAcceptanceFailure.Persistence.PERSISTED,
+                LegalAcceptanceFailure.Persistence.UNKNOWN)) {
+            when(failure.persistence()).thenReturn(persistence);
+            unavailable(LegalAcceptanceHttpException.from(failure));
+        }
+        when(failure.persistence()).thenReturn(LegalAcceptanceFailure.Persistence.NOT_PERSISTED);
+        var validation = invalidValidation(List.of(Motivo.CONFIRMACION_REQUERIDA));
+        when(failure.validation()).thenReturn(Optional.of(validation));
+        unavailable(LegalAcceptanceHttpException.from(failure));
+    }
+
+    @ParameterizedTest @EnumSource(value = LegalAcceptanceFailure.Reason.class,
+            names = "INVALID_PAYLOAD", mode = EnumSource.Mode.EXCLUDE)
+    void neutralInputCannotOverrideAnotherServiceDecision(LegalAcceptanceFailure.Reason reason) throws Exception {
+        var failure = coherentFailure(reason);
+        when(failure.inputReason()).thenReturn(Optional.of(LegalAcceptanceInputException.Reason.INVALID_KEY));
         unavailable(LegalAcceptanceHttpException.from(failure));
     }
 
