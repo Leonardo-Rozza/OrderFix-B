@@ -76,4 +76,24 @@ class LegalDatabaseBoundaryMarkerTest {
                     .isInstanceOf(IllegalStateException.class);
         }
     }
+    @Test
+    void registrationRejectsEveryMixedOrForeignBoundary() {
+        var registration = new LegalDatabaseBoundaryMarker(LegalDatabaseBoundaryMarker.Kind.REGISTRATION);
+        assertThatCode(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(registration),
+                LegalDatabaseBoundaryMarker.Kind.REGISTRATION)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(),
+                LegalDatabaseBoundaryMarker.Kind.REGISTRATION)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(registration, registration),
+                LegalDatabaseBoundaryMarker.Kind.REGISTRATION)).isInstanceOf(IllegalStateException.class);
+        for (var kind : LegalDatabaseBoundaryMarker.Kind.values()) {
+            if (kind == LegalDatabaseBoundaryMarker.Kind.REGISTRATION) continue;
+            var other = new LegalDatabaseBoundaryMarker(kind);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(other),
+                    LegalDatabaseBoundaryMarker.Kind.REGISTRATION)).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(registration), kind))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new LegalDatabaseBoundaryMarker.Guard(List.of(other, registration), kind))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
 }

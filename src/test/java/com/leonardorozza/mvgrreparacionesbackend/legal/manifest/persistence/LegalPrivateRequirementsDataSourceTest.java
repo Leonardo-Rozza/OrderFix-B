@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,6 +42,138 @@ import static org.mockito.Mockito.when;
 class LegalPrivateRequirementsDataSourceTest {
 
     private static final Duration BUDGET = Duration.ofSeconds(2);
+
+    @Test
+    void historicalConstructorsCannotClaimRegistrationOrAcceptItsLargerBudget() {
+        DataSource pool = mock(DataSource.class);
+        AtomicLong clock = new AtomicLong();
+        for (Duration excessive : List.of(Duration.ofSeconds(15).plusNanos(1), Duration.ofSeconds(30), Duration.ofSeconds(35))) {
+            assertThatThrownBy(() -> new LegalPrivateRequirementsDataSource(pool, excessive))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new LegalPrivateRequirementsDataSource(pool, excessive, clock::get))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new LegalPrivateRequirementsDataSource(pool, excessive, clock::get, 1_000))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        try (var historical = new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15));
+             var acceptance = new LegalPrivateRequirementsDataSource(pool, Duration.ofSeconds(15), clock::get, 1_000);
+             var registration = LegalPrivateRequirementsDataSource.registration(pool)) {
+            assertThat(historical.isRegistrationBoundary()).isFalse();
+            assertThat(acceptance.isRegistrationBoundary()).isFalse();
+            assertThat(registration.isRegistrationBoundary()).isTrue();
+        }
+        verifyNoInteractions(pool);
+    }
+
+    @Test
+    void registrationStartsOnOperationEntryBeforeBorrowAndNestedPhasesKeepTheSameThirtySecondDeadline() throws SQLException {
+        DataSource pool = mock(DataSource.class);
+        Connection driver = mock(Connection.class);
+        AtomicLong clock = new AtomicLong();
+        AtomicInteger clockReads = new AtomicInteger();
+        when(pool.getConnection()).thenReturn(driver);
+        try (var source = LegalPrivateRequirementsDataSource.registration(pool, () -> {
+            clockReads.incrementAndGet(); return clock.get();
+        })) {
+            assertThat(clockReads).hasValue(0);
+            clock.set(50_000_000_000L);
+            String result = source.withinDeadline(outer -> {
+                assertThat(outer.remainingMillis()).isEqualTo(30_000);
+                clock.addAndGet(11_000_000_000L);
+                source.withinDeadline(inner -> {
+                    assertThat(inner).isSameAs(outer);
+                    assertThat(inner.remainingMillis()).isEqualTo(19_000);
+                    clock.addAndGet(5_000_000_000L);
+                    return null;
+                });
+                assertThat(outer.remainingMillis()).isEqualTo(14_000);
+                try (Connection lease = source.getConnection()) {
+                    verify(driver).setNetworkTimeout(any(), eq(6_000));
+                    clock.addAndGet(13_000_000_000L);
+                    lease.rollback();
+                    assertThat(outer.remainingMillis()).isEqualTo(1_000);
+                    return "within the original registration operation";
+                } catch (SQLException failure) { throw new AssertionError(failure); }
+            });
+            assertThat(result).isEqualTo("within the original registration operation");
+            assertThat(source.withinDeadline(LegalPrivateRequirementsDeadline::remainingMillis)).isEqualTo(30_000);
+            assertThatThrownBy(source::getConnection).isInstanceOf(SQLException.class);
+        }
+        verify(pool).getConnection(); verify(driver).rollback(); verify(driver).close();
+    }
+
+    @Test
+    void registrationChargesPreBorrowWorkAndDoesNotStartABorrowAfterThirtySeconds() {
+        DataSource pool = mock(DataSource.class);
+        AtomicLong clock = new AtomicLong();
+        try (var source = LegalPrivateRequirementsDataSource.registration(pool, clock::get)) {
+            assertThatThrownBy(() -> source.withinDeadline(deadline -> {
+                clock.set(30_000_000_000L);
+                assertThatThrownBy(source::getConnection).isInstanceOf(LegalPrivateRequirementsReadException.class);
+                source.withinDeadline(inner -> "cannot reset the expired operation");
+                return "must not escape";
+            })).isInstanceOf(LegalPrivateRequirementsReadException.class);
+        }
+        verifyNoInteractions(pool);
+    }
+
+    @Test
+    void registrationTransportMarginLeavesSqlAtFiveSecondsAndShrinksForFetchAndCommit() throws SQLException {
+        DataSource pool = mock(DataSource.class);
+        Connection driver = mock(Connection.class);
+        Statement query = mock(Statement.class);
+        Statement settings = mock(Statement.class);
+        ResultSet rows = mock(ResultSet.class);
+        AtomicLong clock = new AtomicLong();
+        when(pool.getConnection()).thenReturn(driver);
+        when(driver.createStatement()).thenReturn(query, settings);
+        when(query.executeQuery("SELECT registration fixture")).thenReturn(rows);
+        try (var source = LegalPrivateRequirementsDataSource.registration(pool, clock::get)) {
+            source.withinDeadline(deadline -> {
+                try (Connection lease = source.getConnection(); Statement statement = lease.createStatement()) {
+                    try (ResultSet result = statement.executeQuery("SELECT registration fixture")) {
+                        verify(driver, atLeastOnce()).setNetworkTimeout(any(), eq(6_000));
+                        verify(query).setQueryTimeout(5);
+                        verify(settings).execute("SET LOCAL statement_timeout TO '5000ms'");
+                        clock.set(29_250_000_000L);
+                        assertThat(result.next()).isFalse();
+                        verify(driver).setNetworkTimeout(any(), eq(750));
+                        assertThat(deadline.remainingMillis()).isEqualTo(750);
+                    }
+                    clock.set(29_500_000_000L);
+                    lease.commit();
+                    verify(driver).setNetworkTimeout(any(), eq(500));
+                    assertThat(deadline.remainingMillis()).isEqualTo(500);
+                    return null;
+                } catch (SQLException failure) { throw new AssertionError(failure); }
+            });
+        }
+        verify(driver).commit(); verify(driver, never()).rollback(); verify(driver).close();
+        verify(rows).close(); verify(query).close(); verify(settings).close();
+    }
+
+    @Test
+    void registrationCleanupFailureNearThirtySecondsRejectsDeliveryAfterCommittedNotification() throws SQLException {
+        DataSource pool = mock(DataSource.class);
+        Connection driver = mock(Connection.class);
+        AtomicLong clock = new AtomicLong();
+        when(pool.getConnection()).thenReturn(driver);
+        mutableDriver(driver);
+        SQLException failure = new SQLException("synthetic registration release failed", "08006");
+        doAnswer(invocation -> { clock.set(29_500_000_000L); throw failure; }).when(driver).close();
+        Notifications notifications = new Notifications();
+        try (var source = LegalPrivateRequirementsDataSource.registration(pool, clock::get)) {
+            TransactionTemplate transaction = mutableTransaction(source);
+            assertThatThrownBy(() -> source.withinDeadline(deadline -> transaction.execute(status -> {
+                TransactionSynchronizationManager.registerSynchronization(notifications);
+                return "cannot deliver after failed cleanup";
+            }))).isInstanceOf(LegalPrivateRequirementsReadException.class).hasCause(failure);
+            assertThat(notifications.afterCommits).isEqualTo(1);
+            assertThat(notifications.completions).containsExactly(TransactionSynchronization.STATUS_COMMITTED);
+            assertTransactionReleased(source);
+        }
+        verify(driver).commit(); verify(driver, never()).rollback(); verify(driver).close();
+    }
 
     @ParameterizedTest @ValueSource(ints = {-1, 1_001})
     void rejectsAnUnboundedTransportMarginBeforeBorrowing(int grace) {
@@ -460,8 +593,8 @@ class LegalPrivateRequirementsDataSourceTest {
         verify(driver).close();
     }
 
-    @Test
-    void anExpiredPreCommitCheckPreventsDelegateCommitAndSpringReportsRolledBack() throws SQLException {
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void anExpiredPreCommitCheckPreventsDelegateCommitAndSpringReportsRolledBack(boolean registration) throws SQLException {
         DataSource pool = mock(DataSource.class);
         Connection driver = mock(Connection.class);
         when(pool.getConnection()).thenReturn(driver);
@@ -469,8 +602,7 @@ class LegalPrivateRequirementsDataSourceTest {
         AtomicLong clock = new AtomicLong();
         Notifications notifications = new Notifications();
 
-        try (LegalPrivateRequirementsDataSource source = new LegalPrivateRequirementsDataSource(
-                pool, BUDGET, clock::get)) {
+        try (LegalPrivateRequirementsDataSource source = clockedSource(pool, clock, registration)) {
             TransactionTemplate transaction = mutableTransaction(source);
             assertThatThrownBy(() -> source.withinDeadline(deadline -> transaction.execute(status -> {
                 TransactionSynchronizationManager.registerSynchronization(notifications);
@@ -478,7 +610,7 @@ class LegalPrivateRequirementsDataSourceTest {
                 // specifically exercising the proxy precheck rather than callback rollback.
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override public void beforeCompletion() {
-                        clock.set(BUDGET.toNanos());
+                        clock.set(registration ? 30_000_000_000L : BUDGET.toNanos());
                     }
                 });
                 return "complete requirements";
@@ -548,21 +680,20 @@ class LegalPrivateRequirementsDataSourceTest {
         verify(driver).close();
     }
 
-    @Test
-    void expiryDuringSuccessfulCommitRejectsTheResultAfterCommittedNotificationAndCleanup() throws SQLException {
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void expiryDuringSuccessfulCommitRejectsTheResultAfterCommittedNotificationAndCleanup(boolean registration) throws SQLException {
         DataSource pool = mock(DataSource.class);
         Connection driver = mock(Connection.class);
         when(pool.getConnection()).thenReturn(driver);
         mutableDriver(driver);
         AtomicLong clock = new AtomicLong();
         doAnswer(invocation -> {
-            clock.set(BUDGET.toNanos());
+            clock.set(registration ? 30_000_000_000L : BUDGET.toNanos());
             return null;
         }).when(driver).commit();
         Notifications notifications = new Notifications();
 
-        try (LegalPrivateRequirementsDataSource source = new LegalPrivateRequirementsDataSource(
-                pool, BUDGET, clock::get)) {
+        try (LegalPrivateRequirementsDataSource source = clockedSource(pool, clock, registration)) {
             TransactionTemplate transaction = mutableTransaction(source);
             assertThatThrownBy(() -> source.withinDeadline(deadline -> transaction.execute(status -> {
                 TransactionSynchronizationManager.registerSynchronization(notifications);
@@ -579,21 +710,20 @@ class LegalPrivateRequirementsDataSourceTest {
         verify(driver, never()).abort(any());
     }
 
-    @Test
-    void expiryDuringConnectionReturnDoesNotRewriteTheCommittedTransactionOutcome() throws SQLException {
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void expiryDuringConnectionReturnDoesNotRewriteTheCommittedTransactionOutcome(boolean registration) throws SQLException {
         DataSource pool = mock(DataSource.class);
         Connection driver = mock(Connection.class);
         when(pool.getConnection()).thenReturn(driver);
         mutableDriver(driver);
         AtomicLong clock = new AtomicLong();
         doAnswer(invocation -> {
-            clock.set(BUDGET.toNanos());
+            clock.set(registration ? 30_000_000_000L : BUDGET.toNanos());
             return null;
         }).when(driver).close();
         Notifications notifications = new Notifications();
 
-        try (LegalPrivateRequirementsDataSource source = new LegalPrivateRequirementsDataSource(
-                pool, BUDGET, clock::get)) {
+        try (LegalPrivateRequirementsDataSource source = clockedSource(pool, clock, registration)) {
             TransactionTemplate transaction = mutableTransaction(source);
             assertThatThrownBy(() -> source.withinDeadline(deadline -> transaction.execute(status -> {
                 TransactionSynchronizationManager.registerSynchronization(notifications);
@@ -708,6 +838,11 @@ class LegalPrivateRequirementsDataSourceTest {
         when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
     }
 
+    private static LegalPrivateRequirementsDataSource clockedSource(DataSource pool, AtomicLong clock, boolean registration) {
+        return registration ? LegalPrivateRequirementsDataSource.registration(pool, clock::get)
+                : new LegalPrivateRequirementsDataSource(pool, BUDGET, clock::get);
+    }
+
     private static TransactionTemplate mutableTransaction(LegalPrivateRequirementsDataSource source) {
         DataSourceTransactionManager manager = new DataSourceTransactionManager(source);
         manager.setRollbackOnCommitFailure(false);
@@ -715,7 +850,7 @@ class LegalPrivateRequirementsDataSourceTest {
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         template.setReadOnly(false);
-        template.setTimeout(15);
+        template.setTimeout(source.isRegistrationBoundary() ? 25 : 15);
         return template;
     }
 

@@ -39,6 +39,7 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
     private final Duration operationBudget;
     private final LongSupplier clock;
     private final int networkTimeoutMillis;
+    private final boolean registrationBoundary;
     private final ThreadLocal<LegalPrivateRequirementsDeadline> current = new ThreadLocal<>();
     private final Set<Lease> leases = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
@@ -67,14 +68,40 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
         this.operationBudget = Objects.requireNonNull(operationBudget, "operationBudget");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.networkTimeoutMillis = STATEMENT_TIMEOUT_MILLIS + networkTimeoutGraceMillis;
+        this.registrationBoundary = false;
         new LegalPrivateRequirementsDeadline(operationBudget, clock);
         watchdog.setRemoveOnCancelPolicy(true);
     }
 
+    /** Fixed registration capability; callers cannot supply a different outer budget or margin. */
+    static LegalPrivateRequirementsDataSource registration(DataSource pool) {
+        return registration(pool, System::nanoTime);
+    }
+
+    static LegalPrivateRequirementsDataSource registration(DataSource pool, LongSupplier clock) {
+        return new LegalPrivateRequirementsDataSource(pool, clock);
+    }
+
+    private LegalPrivateRequirementsDataSource(DataSource pool, LongSupplier clock) {
+        this.pool = Objects.requireNonNull(pool, "pool");
+        this.operationBudget = Duration.ofSeconds(30);
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.networkTimeoutMillis = STATEMENT_TIMEOUT_MILLIS + 1_000;
+        this.registrationBoundary = true;
+        // Construction does not start the clock; the owning operation opens its one deadline.
+        watchdog.setRemoveOnCancelPolicy(true);
+    }
+
+    boolean isRegistrationBoundary() { return registrationBoundary; }
+
+    private LegalPrivateRequirementsDeadline newDeadline() {
+        return registrationBoundary ? LegalPrivateRequirementsDeadline.registration(clock)
+                : new LegalPrivateRequirementsDeadline(operationBudget, clock);
+    }
+
     <T> T withinDeadline(Function<LegalPrivateRequirementsDeadline, T> operation) {
         LegalPrivateRequirementsDeadline previous = current.get();
-        LegalPrivateRequirementsDeadline deadline = previous == null
-                ? new LegalPrivateRequirementsDeadline(operationBudget, clock) : previous;
+        LegalPrivateRequirementsDeadline deadline = previous == null ? newDeadline() : previous;
         current.set(deadline);
         try {
             requireOpen();

@@ -20,13 +20,26 @@ final class LegalPrivateRequirementsDeadline {
     }
 
     LegalPrivateRequirementsDeadline(Duration budget, LongSupplier clock) {
+        this(historicalBudgetNanos(budget), clock);
+    }
+
+    /** Only the nominal registration path can open a thirty-second operation. */
+    static LegalPrivateRequirementsDeadline registration(LongSupplier clock) {
+        return new LegalPrivateRequirementsDeadline(30_000_000_000L, clock);
+    }
+
+    private LegalPrivateRequirementsDeadline(long budgetNanos, LongSupplier clock) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.budgetNanos = budgetNanos;
+        this.startedAt = clock.getAsLong();
+    }
+
+    private static long historicalBudgetNanos(Duration budget) {
         Objects.requireNonNull(budget, "budget");
         if (budget.isNegative() || budget.isZero() || budget.compareTo(Duration.ofSeconds(15)) > 0) {
             throw new IllegalArgumentException("El presupuesto de requisitos debe ser positivo y hasta 15 s");
         }
-        this.clock = Objects.requireNonNull(clock, "clock");
-        this.budgetNanos = budget.toNanos();
-        this.startedAt = clock.getAsLong();
+        return budget.toNanos();
     }
 
     void check() {

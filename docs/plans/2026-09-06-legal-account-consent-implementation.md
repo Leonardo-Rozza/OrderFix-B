@@ -8,7 +8,8 @@ Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecuci�
 con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
-fresco de 7567 pruebas; sigue 15L, escritor interno de registro atómico.
+fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; sigue 15L2, writer de cuenta y evidencia.
+15L permanece abierto hasta completar L2/L3.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -51,7 +52,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión — cerrado | A |
-| 15L | Escritor interno de registro atómico | F, G, H, I, K |
+| 15L | Escritor interno de registro atómico — L1 cerrado; L2/L3 pendientes | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
 | 15O | Mantenimiento de resultados vencidos y metadata | F, G, H, I |
@@ -1681,6 +1682,150 @@ Gate focal: columnas/defaults/Clock/trialDias, ADMIN único, constraints, secuen
 exactos y fallo después de cada INSERT. Dos claves mismo email: una cuenta sin huérfanos. Una clave
 mismo payload: IDs idénticos; password/payload distinto: conflicto. Ningún JWT/email antes de commit
 ni lectura JPA de filas no confirmadas. Commit: `feat(legal): crea cuenta y evidencia en una transaccion`.
+
+### División de 15L — 2026-09-07
+
+La revisión sobre `f81a6b6`, backend limpio, separa tres responsabilidades antes de editar código:
+
+- **15L1 — Frontera y preflight de registro.** Contexto JDBC explícito aislado, rol de registro
+  con INSERT de negocio sólo por columnas, acreditación adicional de suscripciones y presupuesto
+  contractual de registro. Sin writer de cuenta, servicio de alta ni HTTP. Commit
+  `feat(legal): prepara frontera aislada de registro`.
+- **15L2 — Writer de cuenta y evidencia.** Preparación con BCrypt/Clock/auditoría local, inserts
+  taller→FREE/TRIAL→ADMIN y grafo legal/metadata/ledger de REGISTRATION en la misma reserva/conexión.
+  Fixtures propios para paridad, constraints y rollback por etapa, sin completar el adaptador HTTP.
+  Confirmar lista nominal antes de editar. Commit `feat(legal): escribe cuenta y evidencia de registro`.
+- **15L3 — Orquestación y gate del servicio.** Servicio interno que coordina validación/replay,
+  disponibilidad/revisión/selección y writer, commit/cierre/deadline con resultado durable honesto;
+  carreras de email/idempotencia y fallos después de cada escritura. Confirmar lista antes de editar.
+  Commit final previsto para 15L: `feat(legal): crea cuenta y evidencia en una transaccion`.
+
+Cada subcorte termina compilable, con gate focal y commit propio sin push. No dar 15L por cerrado
+con L1 ni L2; sesión/email poscommit e integración HTTP permanecen en 15M. Los nombres propuestos
+para L2/L3 se ratificarán al abrirlos; no reutilizar selección/writer de aceptación autenticada
+simulando un actor, porque rechazan REGISTRATION explícitamente.
+
+### Apertura 15L1 — 2026-09-07
+
+Baseline `f81a6b6`, rama backend ratificada y limpia. Frontend `7545201` y rutas no versionadas
+preservados. Sin AGENTS.md aplicable en padres/src/docs. Lista nominal de 18 archivos fijada antes
+del código:
+
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfiguration.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationTransactionBoundary.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationPrivilegeVerifier.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationSchemaVerifier.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalDatabaseBoundaryMarker.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPrivateRequirementsDataSource.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPrivateRequirementsDeadline.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfigurationTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationTransactionBoundaryTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseIsolationIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationPrivilegeVerifierIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationSchemaVerifierIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRestrictedRegistrationRoleFixture.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalDatabaseBoundaryMarkerTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPrivateRequirementsDataSourceTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPrivateRequirementsDeadlineTest.java`
+- `docs/plans/2026-09-06-legal-account-consent-implementation.md`
+- `docs/plans/2026-09-06-legal-account-consent-design.md`
+
+Decisiones de L1:
+
+- Contexto no escaneable, registrado explícitamente; flag `registration-consent.enabled` ausente o
+  false no crea beans. Sólo true/false exactos. Las tres credenciales tienen el prefijo dedicado
+  registration-consent; no se heredan las del datasource principal ni se exige account-read.
+  Keyrings y retención usan la configuración de escritura ya validada, sin copiar todo Environment.
+- Pool máximo 2, adquisición/conexión 1 s; SQL 5 s, locks editoriales/grafo 1 s y espera idempotente
+  acumulada 5 s. Registro mantiene 30 s exteriores y transacción REQUIRES_NEW/READ_COMMITTED mutable
+  de 25 s. Se añade una fábrica nominal de registro al datasource/deadline existentes: constructores
+  históricos conservan techo 15 s, y sólo la fábrica nueva fija 30 s. Red/socket 6 s conserva el
+  margen J3 para recibir el timeout SQL; todo I/O sigue limitado por el remanente exterior.
+- Frontera propia con schema/privilegios antes del callback; no abre gate editorial para replay.
+  Entrada editorial sólo con reserva REGISTRATION/MISS de la misma conexión/transacción. Estado
+  de commit/cierre usa el mecanismo existente, sin reinterpretar UNKNOWN como rollback confirmado.
+- Verificador de privilegios propio; aceptación conserva su allowlist intacta. INSERT de negocio
+  sólo en columnas nominales: taller(nombre,email_contacto,telefono,activo,created_at,updated_at),
+  suscripción(taller_id,plan,estado,fecha_inicio,fecha_fin_trial,created_at,updated_at) y
+  usuario(username,password,email,role,taller_id,active,email_verificado,token_version).
+  SELECT de actor sigue mínimo; sin lectura de email/password, auth_tokens, ciphertext ni secuencias,
+  sin permisos de secuencias/DDL/DELETE ni UPDATE de atributos de negocio o privilegios delegables
+  (se conserva UPDATE(id) protegido para locks). No hace falta
+  RETURNING del id de suscripción; IDs de taller/usuario ya tienen SELECT nominal.
+- Preflight de esquema adicional compone V29 congelada con la forma/defaults/constraints/índices,
+  identidad y topología de suscripciones/suscripciones_id_seq, que V29 no inventaría. Rechaza drift
+  antes del callback. No modifica V27/V28/V29, inventarios históricos ni una base compartida.
+
+Gate focal: configuración exacta/inactiva/aislada, presupuestos nuevos y techos históricos,
+transacción efectiva PostgreSQL 16, suspensión/restauración de contexto exterior, rechazo de reserva
+ajena/replay/autenticada y de drift de schema/privilegios antes de DML; errores de commit/cierre sin
+falso éxito. Regresión focal del datasource/deadline, marker y contextos consumidores existentes.
+El cambio es aditivo y no altera presupuestos de consumidores actuales; se acredita esa paridad
+con pruebas focales. El clean verify de 7567 pertenece a 15K, no es evidencia nueva de L1.
+
+### Cierre 15L1 — 2026-09-07T20:44:05-03:00
+
+Corte cerrado sobre `f81a6b6`, con los 18 archivos nominales. Contexto explícito de registro,
+credenciales propias, preflight de schema/privilegios y frontera REQUIRES_NEW/READ_COMMITTED mutable
+implementados. La fábrica nominal conserva 30 s exteriores, 25 s transaccionales, pool 2, SQL 5 s,
+locks 1 s y red 6 s limitada por el remanente. Constructores anteriores conservan su techo de 15 s.
+
+El rol agrega exactamente 21 INSERT por columna para taller/suscripción/usuario; los permisos de
+aceptación existentes y V27/V28/V29 permanecen intactos. UPDATE(id) protegido sigue destinado a locks
+de filas; no autoriza cambiar atributos de negocio. El preflight adicional fija la forma de
+suscripciones con 19 columnas, 3 constraints, 4 índices, 6 triggers y su secuencia identity. El probe
+se hizo sobre PostgreSQL 16 limpio; los valores corrientes de secuencia no se consideran schema drift.
+
+Gate focal `verify` con Java 21/PostgreSQL 16: **436 pruebas** (310 Surefire en 13 suites y
+126 Failsafe en 6 suites), cero fallos/errores/omitidas/reintentos, 135.459 s.
+Los informes XML se contrastaron con los métodos compilados y la frescura de esta ejecución.
+El primer intento se detuvo en testCompile por dos inferencias ambiguas de AssertJ. El segundo
+acreditó 310 unitarias y las otras cinco suites PostgreSQL, pero un REVOKE de tabla del test retiró
+también sus INSERT por columna: falló su restauración y produjo 46 errores en cascada en esa suite.
+Se corrigió el fixture de esa prueba y se repitió el gate focal completo. Ninguna corrección cambió
+producción ni el contrato compartido; por eso se mantuvo el alcance focal documentado.
+
+| Suite focal | Pruebas |
+| --- | ---: |
+| LegalRegistrationDatabaseConfigurationTest | 34 |
+| LegalRegistrationTransactionBoundaryTest | 21 |
+| LegalDatabaseBoundaryMarkerTest | 4 |
+| LegalPrivateRequirementsDataSourceTest | 34 |
+| LegalPrivateRequirementsDeadlineTest | 11 |
+| LegalAcceptanceDatabaseConfigurationTest | 36 |
+| LegalAcceptanceTransactionBoundaryTest | 17 |
+| LegalPrivateRequirementsDatabaseConfigurationTest | 47 |
+| LegalRequiredSetAggregateDatabaseConfigurationTest | 4 |
+| LegalPublicDocumentReadDatabaseConfigurationTest | 38 |
+| LegalPublicRequirementsDatabaseConfigurationTest | 60 |
+| LegalEditorialTransactionBoundaryTest | 2 |
+| LegalImportTransactionBoundaryTest | 2 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+| LegalRegistrationPrivilegeVerifierIT | 49 |
+| LegalRegistrationSchemaVerifierIT | 38 |
+| LegalAcceptanceDatabaseIsolationIT | 5 |
+| LegalAcceptancePrivilegeVerifierIT | 26 |
+| LegalRequiredSetAggregateDatabaseIsolationIT | 2 |
+
+PostgreSQL acredita usuario restringido efectivo, commit y rollback de inserciones de fixture,
+suspensión/restauración de transacciones exteriores propias/ajenas y deadline compartido sin reinicio.
+Una reserva real REGISTRATION/MISS precede al gate editorial compartido y no genera ledger. Las
+reservas ajenas/replay/autenticadas se rechazan antes del lock en las pruebas unitarias de frontera;
+no se presenta eso como replay durable de un alta completa. Las mutaciones de schema se revierten
+con rollback y los grants alterados se restauran; ambos rechazan antes de la primera escritura.
+Los SQL de fixture con fecha/hash sintéticos acreditan permisos, no BCrypt/Clock/auditoría del writer.
+
+Auditoría de artefactos: clases/recursos cotejados contra target; sin clases de tests ni archivos
+`*secret*.properties` empaquetados, V27/V28/V29 con SHA congelado. No se amplían las excepciones
+runtime existentes de dependencias.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `12520c2aae5b4d492f64f867c653f3c08ee68d9c5374fd7bab769d18ae2b0bf5`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `4a826ac6221c69f2396466091e7adfe51332c2a1e3a186c1928c6eb3b5e6a1a5`.
+
+Sin cambios de frontend runtime ni FRONTEND_INTEGRATION; sus dos rutas no versionadas preservadas.
+Un commit atómico `feat(legal): prepara frontera aislada de registro`, sin push.
+**15L permanece abierto: sigue 15L2**, writer de cuenta/evidencia; después L3 orquestará el servicio.
+15M mantiene la integración HTTP y sesión/email poscommit. No se publicó ni activó este contexto.
 
 ## 15M — Integración de registro compatible y replay
 

@@ -14,7 +14,8 @@ legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focale
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
 pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). 15J3 cerrado con
 920 focales y clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 pruebas
-focales y clean verify fresco de 7567; sigue 15L.
+focales y clean verify fresco de 7567. 15L1 cerrado con 436 focales; sigue 15L2.
+15L permanece abierto: todavía faltan writer y orquestación del registro.
 
 ## Objetivo y resultado esperado
 
@@ -866,3 +867,36 @@ suspensión/restauración real, datos confirmados y frescura frente a entidades 
 con xmin cubren users/talleres/suscripciones/auth_tokens. La auditoría final confirmó los 14 archivos
 nominales, V27/V28/V29 congeladas, ambos artefactos sin archivos `*secret*.properties` ni componentes de test y el contrato JWT intacto.
 El siguiente corte es 15L; no se completan todavía registro poscommit, replay HTTP ni enforcement.
+
+
+### Apertura 15L1 — frontera de registro — 2026-09-07
+
+15L se divide documentalmente en L1 (frontera/preflight), L2 (writer de cuenta/evidencia) y L3
+(servicio/replay/commit). L1 prepara una conexión y transacción JDBC propias sin publicar alta.
+La credencial de registro agrega sólo INSERT nominal de columnas de negocio; no permite leer
+email/hash ni administrar usuarios, y no amplía el rol de aceptación existente. El preflight propio
+acredita suscripciones y su identidad, además de la superficie V29 congelada.
+
+Registro conserva los 30 s exteriores/25 s transaccionales de la decisión 15A. Los constructores
+históricos de deadline/datasource mantienen techo 15 s; una fábrica explícita y fija habilita el
+presupuesto de registro. El pool/SQL/locks siguen acotados y el margen de transporte se limita al
+remanente, sin atribuir SLA a cancelación/cierre. Se registra sólo contexto explícito, con flags
+apagados por defecto; todavía no hay writer de negocio, servicio, JWT/email ni ruta HTTP nueva.
+
+La auditoría de aplicación conserva el comportamiento acordado para L2: LocalDate.now(Clock de
+aplicación UTC) para trial y LocalDateTime en zona JVM para created_at/updated_at, que no tienen
+default SQL. No se da esa paridad por acreditada por los fixtures SQL sintéticos de 15A/V29.
+
+### Cierre 15L1 — 2026-09-07T20:44:05-03:00
+
+Frontera, rol restringido, schema de suscripciones y presupuesto de registro implementados en los
+18 archivos nominales, con **436 pruebas focales aprobadas** (310 Surefire + 126 PostgreSQL),
+19 suites sin fallos/errores/omitidas/reintentos. Gate verify y auditoría de ambos artefactos frescos;
+V27/V28/V29 intactas. Los constructores históricos mantienen máximo 15 s; sólo la fábrica nominal
+de registro establece 30 s y la frontera exige REQUIRES_NEW/READ_COMMITTED mutable de 25 s.
+
+PostgreSQL acredita identidad restringida, restauración de transacción exterior, rollback y reserva
+REGISTRATION/MISS antes del gate compartido. La evidencia de permisos usa SQL sintético; la paridad
+BCrypt/Clock/auditoría y la escritura completa de cuenta/evidencia siguen en **15L2**. L3 compondrá
+replay y servicio; 15L no queda cerrado por esta frontera. Sin activación HTTP ni cambios frontend.
+Commit atómico previsto `feat(legal): prepara frontera aislada de registro`, sin push.

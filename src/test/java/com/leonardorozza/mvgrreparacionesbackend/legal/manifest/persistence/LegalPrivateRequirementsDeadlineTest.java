@@ -33,10 +33,44 @@ class LegalPrivateRequirementsDeadlineTest {
         assertThatThrownBy(() -> new LegalPrivateRequirementsDeadline(Duration.ofSeconds(2), null))
                 .isInstanceOf(NullPointerException.class);
         for (Duration invalid : List.of(Duration.ZERO, Duration.ofNanos(-1),
-                Duration.ofSeconds(15).plusNanos(1), Duration.ofSeconds(Long.MAX_VALUE))) {
+                Duration.ofSeconds(15).plusNanos(1), Duration.ofSeconds(30), Duration.ofSeconds(35),
+                Duration.ofSeconds(Long.MAX_VALUE))) {
             assertThatThrownBy(() -> new LegalPrivateRequirementsDeadline(invalid, () -> 0L))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    @Test
+    void onlyTheRegistrationFactoryOpensThirtySecondsAndNeverResetsAcrossPhasesOrSignedOverflow() {
+        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 10_000_000_000L);
+        LegalPrivateRequirementsDeadline deadline = LegalPrivateRequirementsDeadline.registration(clock::get);
+        assertThat(deadline.remainingMillis()).isEqualTo(30_000);
+        clock.addAndGet(16_000_000_000L);
+        assertThat(clock.get()).isNegative();
+        deadline.check();
+        assertThat(deadline.remainingMillis()).isEqualTo(14_000);
+        clock.addAndGet(13_999_999_999L);
+        assertThat(deadline.remainingMillis()).isEqualTo(1);
+        clock.incrementAndGet();
+        assertThatThrownBy(deadline::check).isInstanceOf(LegalPrivateRequirementsReadException.class);
+        clock.addAndGet(5_000_000_000L);
+        assertThatThrownBy(deadline::remainingMillis).isInstanceOf(LegalPrivateRequirementsReadException.class);
+    }
+
+    @Test
+    void registrationRequiresItsClockAndRetainsCleanupFailureInsteadOfGrantingRemainingTime() {
+        assertThatThrownBy(() -> LegalPrivateRequirementsDeadline.registration(null))
+                .isInstanceOf(NullPointerException.class);
+        AtomicLong clock = new AtomicLong();
+        LegalPrivateRequirementsDeadline deadline = LegalPrivateRequirementsDeadline.registration(clock::get);
+        clock.set(29_000_000_000L);
+        assertThat(deadline.remainingMillis()).isEqualTo(1_000);
+        var cleanup = new SQLException("synthetic cleanup failure");
+        deadline.recordCleanupFailure(cleanup);
+        assertThatThrownBy(deadline::remainingMillis).isInstanceOf(LegalPrivateRequirementsReadException.class)
+                .hasCause(cleanup);
+        clock.set(35_000_000_000L);
+        assertThatThrownBy(deadline::check).isInstanceOf(LegalPrivateRequirementsReadException.class).hasCause(cleanup);
     }
 
     @Test
