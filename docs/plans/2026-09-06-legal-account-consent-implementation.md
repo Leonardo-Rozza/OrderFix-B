@@ -3,7 +3,7 @@
 Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-15G1 cerrado el 2026-09-06; 15G queda abierto hasta completar 15G2. Sigue 15G2 (coordinación SQL y replay).
+15G1 y 15G2 cerrados el 2026-09-06; 15G completo. Sigue 15H (metadata protegida).
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -40,7 +40,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15E | Historial propio paginado | C |
 | 15F | V29 y compatibilidad estricta del esquema | A; regresión 12–14 y 15A |
 | 15G1 | Comando canónico y HMAC/keyring — cerrado | A, F |
-| 15G2 | Coordinación SQL y replay durable — pendiente | G1 |
+| 15G2 | Coordinación SQL y replay durable — cerrado | G1 |
 | 15H | IP confiable, metadata cifrada y retención declarada | A, F |
 | 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales | D, E, I |
@@ -537,6 +537,56 @@ keyring/TTL inválidos y ausencia de secretos en diagnóstico. Commit 15G1:
 `feat(legal): canonicaliza comandos de aceptacion`. El commit original de 15G queda para 15G2.
 
 
+### Ejecución nominal 15G2
+
+Baseline `3d133a4`, backend limpio en la rama autorizada; frontend `7545201` y sus rutas no
+versionadas preservados. Antes de editar producción se confirma esta lista nominal:
+
+- Nuevos `db/LegalIdempotencyCoordinator.java`, `db/LegalIdempotencyResultStore.java` y
+  `db/LegalIdempotencyException.java`. Reserva ligada a conexión/transacción, errores tipados y
+  recibos etiquetados por origen se encapsulan en estas clases.
+- Nuevos tests `db/LegalIdempotencyCoordinatorTest.java`, `db/LegalIdempotencyResultStoreTest.java`,
+  `db/LegalIdempotencyCoordinatorIT.java` y fixture `db/LegalIdempotencyCoordinatorITSupport.java`.
+- Este plan y el diseño compañero. No se modifican V27/V28/V29, consumidores/ACL históricos,
+  core 15G1, DTOs, auth, flags, HTTP ni frontend. Helpers previos sólo se reutilizan sin cambios.
+
+Coordinador y store son componentes internos que participan en la transacción del caller. No
+abren una REQUIRES_NEW anidada ni hacen commit/rollback propios. Exigen JDBC/DataSource ligados a
+una transacción Spring activa, mutable READ_COMMITTED y conexión sin autocommit; la reserva queda
+atada al recurso y xid de esa transacción y no puede reutilizarse en otra. Las futuras fronteras
+15I/15L acreditarán REQUIRES_NEW exterior, presupuesto de operación, privilegios propios y commit.
+15G2 usa preflight V29 exacto sobre su mismo JDBC antes de reservar. El fixture acredita los grants
+restringidos V29 (más lectura nominal de historia Flyway para preflight), sin atribuirle el verifier
+productivo de privilegios de 15I aún pendiente.
+
+La reserva toma candidatos de todas las claves retenidas, deriva BIGINT físicos en PostgreSQL,
+ordena unsigned y deduplica sólo locks. Cada espera usa el remanente de un único reloj monotónico
+máximo de cinco segundos y del presupuesto exterior suministrado; no se reinicia por versión.
+Después del último lock relee ambos ledgers por tupla completa, sin filtrar versión ni expiración.
+Colisiones sólo serializan; más de un resultado lógico, versión incoherente o identidad ajena
+fallan cerrado. Una huella distinta es conflicto tipado, jamás un resultado exitoso.
+
+MISS no toma locks de actor ni editoriales: el futuro escritor continúa idempotencia→editorial→
+actor→filas. REPLAY estabiliza actor y taller sin adquirir después el gate editorial; contrasta
+identidad actual con el resultado original y valida estructura histórica, referencias y tiempos.
+El recibo de registro devuelve IDs durables; contraseña actual y emisión de sesión siguen en
+15K/15L/15M y no se reconstruyen por email. Ningún recibo previo al commit declara éxito HTTP.
+
+El store inserta sólo el resultado técnico y referencias: WITH_ACTS sobre lote de la transacción
+actual (aceptación/registro, incluida mezcla con evidencia previa), o EMPTY/DEDUP V29 sobre la
+observación acreditada por el escritor. No crea lotes, actos, documentos ni metadata. Completed_at
+se obtiene del servidor/lote conforme a cada guarda; expires_at se deriva de ese mismo valor,
+con TTL mínimo 24 h. Las guardas diferidas siguen decidiendo la completitud al commit del caller.
+Un fallo marca rollback-only y conserva la causa interna; no continúa una transacción abortada.
+
+La primera ejecución focal (199 unitarias, 55 de integración) detectó un fallo nuevo y localizado:
+el lock de una subtransacción desaparece al liberar SAVEPOINT aunque su padre siga sin commit.
+Los otros 34 casos nuevos PostgreSQL y las 20 regresiones V29 aprobaron; esa ejecución no acredita
+el cierre. Se reemplaza la comprobación de pg_locks por pg_xact_status sobre el xid completo
+reconstruido desde el padre y la distancia unsigned de xmin. Se amplían ambos ledgers, hijos
+liberados, fronteras aritméticas y digest real de afirmación dentro de los mismos archivos nominales.
+No se corrige ni relaja ninguna migración o helper compartido.
+
 Resultado: entrada de negocio validada, fingerprint/keyring protegido y coordinación/replay durable
 para registro y aceptación. Todavía no expone HTTP de escritura.
 
@@ -556,6 +606,50 @@ Tests puros correspondientes y `LegalIdempotencyCoordinatorIT`.
 Gate focal: permutaciones equivalentes, password distinto, multi-réplica/keyring, timeout único,
 replay posterior a REPLACE/RETIRE, distinto fingerprint, expirados no purgados, rollback de reserva.
 Commit: `feat(legal): coordina idempotencia de aceptaciones`.
+
+### Cierre 15G2
+
+Gate final fresco aprobado el 2026-09-06T23:29:59-03:00 con Java 21 y PostgreSQL 16.14.
+Ejecución focal, sin Maven paralelo ni cambios en los siete archivos Java durante la prueba:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalIdempotencyCoordinatorTest,LegalIdempotencyResultStoreTest,LegalAcceptanceCommandTest,LegalAcceptanceCommandValidatorTest,LegalIdempotencyFingerprintTest,LegalIdempotencyKeyringTest \
+  -Dit.test=LegalIdempotencyCoordinatorIT,LegalV29AcceptancePersistenceIT \
+  package failsafe:integration-test failsafe:verify \
+  antrun:run@verify-no-secret-properties-in-jar
+```
+
+199 pruebas Surefire en seis XML y 61 Failsafe en dos XML frescos: **260 aprobadas**, cero fallos,
+errores u omitidas. Son 104 nuevas (38 del coordinador, 25 del recibo/store y 41 PostgreSQL) y
+156 regresiones (136 de 15G1 y 20 de persistencia V29). No se suman reportes viejos de target.
+
+El gate acredita ambos ledgers bajo roles restringidos, comandos mixtos, EMPTY/DEDUP, rotación
+retenida entre réplicas, commit/rollback del ganador y espera acumulada real entre dos claves.
+Replay conserva IDs/fechas sin DML después de expiración sin purga, REPLACE o RETIRE; conflictos,
+actor inválido, snapshots/digests incoherentes, referencias incompletas y multiplicidad fallan cerrado.
+Registro recupera IDs originales aunque cambien email/password/tokenVersion, y rechaza cuenta o
+taller deshabilitados. Esto no implementa comprobación de contraseña ni emisión de sesión futura.
+
+La corrección de durabilidad se acreditó en ambos ledgers antes/después del commit exterior,
+con 70 hijos liberados y con aritmética SQL de límites unsigned, epoch y valores mayores a Long.MAX_VALUE.
+El SHA real de afirmación rechaza corrupción concordante del texto en snapshot y fuente. Las lecturas
+siguen acotadas, sin traer Markdown, contraseña ni metadata; TTL se redondea hacia arriba a microsegundos.
+
+Auditoría independiente: las 15 clases nuevas, incluidas internas, son idénticas a target/classes
+en ambos JAR. Entradas web/CLI correctas; sin tests, duplicados ni propiedades secretas. V27/V28/V29
+conservan sus hashes congelados en fuentes, target y artefactos. SHA-256 de este empaquetado:
+
+| Artefacto | SHA-256 |
+| --- | --- |
+| Aplicación | `cc85949156720656dacbda6d0151d8b4bd1e79517ac4bfde8e1fa31a368b010e` |
+| CLI legal | `cc82255907fcfbc24f898bbafb43ef1c9e01299c2867070c7e9a5653eee57ad5` |
+
+Se cierra 15G2 y con él 15G. Son los nueve archivos nominales; sin cambios de consumidor,
+configuración runtime, HTTP, SQL congelado o frontend. Un commit atómico:
+`feat(legal): coordina idempotencia de aceptaciones`, sin push. Sigue **15H: metadata protegida**.
+El servicio escritor completo y sus fronteras REQUIRES_NEW/privilegios siguen en 15I/15L.
 
 ## 15H — Metadata protegida
 

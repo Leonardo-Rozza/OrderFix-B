@@ -9,7 +9,8 @@ acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el
 acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al lector, con 209
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
-legales del contrato. 15G1 cerrado con 294 pruebas; 15G continúa abierto y sigue 15G2 (SQL y replay).
+legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
+Sigue 15H (metadata protegida).
 
 ## Objetivo y resultado esperado
 
@@ -539,3 +540,74 @@ PostgreSQL; el corte puro no declara resultado durable ni rotación de réplicas
 
 Ambos JAR auditados: diez clases nuevas idénticas a target/classes, entradas web/CLI correctas,
 sin tests/propiedades secretas/duplicados y V27/V28/V29 con hashes congelados.
+
+
+## Implementación 15G2 — coordinación y resultados en la transacción del escritor
+
+El coordinador es un participante interno sobre JDBC; no crea transacciones ni administra el
+commit del negocio. Acredita preflight V29 exacto, binding Spring y modo efectivo mutable
+READ_COMMITTED. Su reserva captura holder, conexión y xid; el store vuelve a comprobar esa
+identidad y los locks de todas las tuplas antes de leer/escribir. Un token no sirve en otra
+transacción ni después de rollback; el resultado sólo puede completarse una vez. Las fronteras
+15I/15L mantendrán REQUIRES_NEW exterior, credenciales, verificador de privilegios y presupuesto
+desde antes de pool/BCrypt. Este corte no amplía el gate editorial existente ni invierte sus locks.
+
+Todos los candidatos del keyring pasan a PostgreSQL con bindings para derivar las claves físicas
+V29. Se ordenan como BIGINT unsigned y sólo se deduplican locks físicos; el lookup conserva cada
+tupla lógica. Un reloj monotónico único de cinco segundos acota la espera acumulada. Cada lock
+recibe lock_timeout en milisegundos enteros redondeados hacia abajo, nunca cero; se comprueba el
+remanente después de cada espera. La indisponibilidad del presupuesto exterior o una interrupción
+no se informa como contención. Una cancelación administrativa tampoco se interpreta como éxito
+ni como replay. El SQLSTATE/causa quedan internos y un fallo marca rollback-only sin reintentos
+ni más SQL sobre una transacción abortada.
+
+Después de adquirir todos los locks, el store lee cabeceras crudas de ambos ledgers por sus cuatro
+campos de tupla. No usa versión HMAC ni expires_at como filtros. Comprueba multiplicidad, versión,
+fingerprint completo e identidad, conservando BIGINT y UUID en orígenes distintos. Un MISS no
+retiene locks de actor ni editoriales; el futuro escritor puede seguir el orden idempotencia,
+editorial compartido, actor exclusivo y filas. Un replay estabiliza actor/taller con advisory
+compartido y FOR SHARE, sin adquirir después el gate editorial. No consulta punteros actuales,
+contraseña, email, Markdown ni metadata personal para recuperar el resultado durable.
+
+El scope por usuario se mantiene aunque cambie rol/tokenVersion; esos valores actuales se
+contrastan con el actor autenticado. El taller del resultado también debe coincidir. Para registro,
+los IDs provienen exclusivamente del resultado persistido y su lote; la contraseña actual y la
+sesión poscommit siguen siendo responsabilidad de 15K/15L/15M. Un recibo interno no equivale a una
+respuesta HTTP ni autoriza omitir esos pasos.
+
+WITH_ACTS preserva la identidad del lote nuevo y permite que parte de los actos enviados ya exista
+en otros lotes. EMPTY/DEDUP usan el ledger suplementario y referencias exactas a actos confirmados;
+no fabrican lotes, actos o fechas de evidencia. Los checks de snapshots, documentos, referencias,
+pertenencia y tiempos históricos no dependen de que el catálogo editorial siga vigente. La fecha
+de expiración parte del completed_at que fija la guarda: aceptado_en del lote histórico o
+statement_timestamp del mismo INSERT suplementario. La validación semántica de pendientes y el
+commit del flujo completo siguen en el escritor 15I/15L.
+
+
+Durabilidad de filas visibles: liberar SAVEPOINT no confirma el resultado. La prueba PostgreSQL
+mostró que pg_locks ya no conserva el lock del hijo liberado, por lo que se consulta
+pg_xact_status. La distancia unsigned de 32 bits desde el xid del padre reconstruye los candidatos
+posteriores, incluido el cruce de epoch; los anteriores no pueden ser hijos propios. No se usa
+age(), cuyo ancla puede haberse fijado antes de asignar el xid del padre, ni visibilidad de snapshots
+que omite subxids. Estados no confirmados, desconocidos o errores fallan cerrado.
+
+Límite conservador: una fila histórica congelada puede conservar un xmin de 32 bits que, después
+de wrap, coincida con el intervalo actual. Si la durabilidad queda ambigua se devuelve UNAVAILABLE;
+no se inventa un commit ni se abre otra conexión. Una prueba adicional para eliminar esa ambigüedad
+exigiría otro alcance. Esta decisión conserva las migraciones congeladas y la conexión única.
+Base técnica: [subtransacciones PostgreSQL 16](https://www.postgresql.org/docs/16/subxacts.html),
+[estado de transacciones](https://www.postgresql.org/docs/16/functions-info.html#FUNCTIONS-PG-SNAPSHOT)
+y [congelación de xmin](https://www.postgresql.org/docs/16/routine-vacuuming.html#VACUUM-FOR-WRAPAROUND).
+
+
+Cierre 15G2: gate final fresco aprobado el 2026-09-06T23:29:59-03:00. Son 260 pruebas
+(199 unitarias, 61 PostgreSQL), incluidas 104 nuevas y 156 regresiones; sin fallos, errores u omitidas.
+Ambos ledgers rechazan resultados de subtransacciones aún sin commit y los recuperan después del
+commit exterior; 70 hijos liberados y límites de aritmética XID están cubiertos. La corrupción
+concordante de afirmación en fuente/snapshot se contrasta con SHA-256 real sin hidratar el texto.
+TTL se redondea hacia arriba a microsegundos para conservar su mínimo contractual.
+
+Los siete archivos Java permanecieron idénticos durante el gate. Ambos JAR fueron auditados:
+15 clases nuevas exactas, entrypoints correctos, sin tests, duplicados ni propiedades secretas;
+V27/V28/V29 intactas. Se cierra 15G; sigue 15H. El registro/escritor completo, credenciales y política
+de sesión permanecen en sus cortes previstos, sin activar endpoints ni flags de escritura.
