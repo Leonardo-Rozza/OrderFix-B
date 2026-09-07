@@ -10,7 +10,8 @@ acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al 
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
-15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo. Sigue 15I.
+15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo.
+15I1 cerrado con 304 pruebas; siguen I2/I3 para completar la aceptación atómica interna.
 
 ## Objetivo y resultado esperado
 
@@ -688,3 +689,24 @@ duplicados ni propiedades secretas. Comando focal, desglose y hashes constan en 
 Se cierra 15H con dos commits atómicos, sin push. Siguen pendientes en 15I/15L la composición del
 servicio completo, REQUIRES_NEW exterior, verificador de privilegios y configuración operativa;
 este corte no habilita endpoints de escritura ni configura secretos/retenciones reales.
+
+
+## Implementación 15I — aceptación autenticada atómica
+
+Baseline `9100522`, backend limpio. Se subdivide en I1 (selección y evidencia exacta por IDs),
+I2 (frontera/configuración y permisos propios) e I3 (servicio/writer y commit), con listas nominales
+registradas en el plan antes de editar. El usuario autorizó continuar el diseño ya ratificado.
+El lookup histórico específico evita depender del filtro de líneas vigentes para dedup total.
+La frontera propia permite reservar/replay antes del gate editorial sin modificar el gate global;
+reutiliza las clases de presupuesto existentes con pool/instancias independientes y observa
+COMMITTED/ROLLED_BACK/UNKNOWN mediante el estado transaccional común. No se conectan todavía
+endpoints de escritura ni se configuran credenciales, claves o retenciones de un entorno real.
+
+15I1 cerrado el 2026-09-07 con 304 pruebas focales frescas (200 unitarias + 104 PostgreSQL), sin
+fallos/errores/omitidas en el gate final. La primera corrida detectó seis SELECT faltantes del
+fixture, corregidos exclusivamente en el helper nuevo; cada caso negativo parte de una lectura
+válida. El reader comprueba fuentes y evidencia histórica fuera del catálogo vigente sin DML ni
+metadata, con límites y verificación agregada en batches. Preserva SCOPE_V1 genuino y la causalidad
+editorial cuando una transacción anterior publica después de aceptar. Selección pura y errores
+contractuales tipados no crean una ruta HTTP. Auditoría de ambos JAR, fuentes y V27/V28/V29 aprobada;
+evidencia y hashes en el plan. Commit atómico I1, sin push; frontend preservado.

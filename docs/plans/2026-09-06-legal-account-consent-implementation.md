@@ -4,7 +4,7 @@ Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
-15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. Sigue 15I (aceptación interna y atómica).
+15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. 15I1 cerrado con 304 pruebas; siguen I2/I3.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -800,6 +800,120 @@ escritura HTTP ni configura secretos o retenciones de un entorno real. Sigue **1
 interna y atómica**.
 
 ## 15I — Aceptación autenticada interna y atómica
+
+### Ejecución subdividida: 15I1, 15I2 y 15I3
+
+Baseline 15I: `9100522`, backend limpio en `codex/lanzamiento-publico-backend` el 2026-09-07.
+Frontend `7545201` conserva `.agents/` y `public/OrdenFix project naming/` sin cambios.
+Se divide antes de editar para separar selección/evidencia, infraestructura y operación completa.
+Los tres pasos completan 15I; cada uno tendrá baseline comprobado, gate y commit atómico sin push.
+
+Lista nominal 15I1:
+
+- Nuevos `db/LegalAcceptanceSelection.java`, `db/LegalAcceptanceValidationException.java` y
+  `db/LegalAcceptanceEvidenceReader.java`.
+- Nuevos tests `db/LegalAcceptanceSelectionTest.java`, `db/LegalAcceptanceEvidenceReaderIT.java`
+  y `db/LegalAcceptanceEvidenceITSupport.java`.
+- Este plan y el diseño compañero. No cambia G2 ni la lectura de requisitos/historial.
+
+El lookup específico es necesario porque la lectura de pendientes sólo hidrata líneas vigentes:
+la excepción de dedup total también admite actos confirmados que ya no integran el conjunto actual.
+Se acreditan por IDs enviados, actor estabilizado, contenido/documentos canónicos y pertenencia
+histórica, con batches y límites. Un acto propio ausente es normal; corrupción de evidencia no
+se convierte en un error semántico del request. El núcleo conserva duplicados y aplica dedup total
+no vacío antes de freshness; vacío/mixto/duplicados pasan por revisión y luego motivos congelados.
+La herencia permite omitir obligatorios satisfechos, pero no inventa actos exactos.
+El reader admite hasta 2048 IDs y 16 documentos por acto, consulta en batches de 32 y acredita
+un máximo de 128 MiB de fuentes distintas antes de hidratar TEXT. Reconstruye agregados históricos
+en batches con sus calculadores criptográficos; no introduce una consulta por agregado. Se exige
+coherencia temporal de la evidencia respecto de la publicación/activación de sus fuentes.
+La cota inferior de publicación/activación aplica a AGGREGATE_V1 (hora de sentencia), no
+retroactivamente a SCOPE_V1 (hora de inicio de transacción). Tampoco se infiere un límite superior
+desde cambiado_en terminal: una transacción editorial iniciada antes puede esperar el gate y
+retirar después. Ambos casos genuinos se acreditan en PostgreSQL con transacciones reales.
+El primer gate I1 aprobó 200 unitarias y detectó que el fixture G2 no concedía seis lecturas
+editoriales adicionales que este reader necesita. El helper nuevo I1 agregará SELECT exclusivamente
+sobre legal_publicaciones, legal_publicacion_requisitos, legal_publicacion_documentos,
+legal_documento_contextos, legal_requisito_transiciones y legal_documento_transiciones al rol de
+prueba efímero; son parte de la allowlist lectora de I2. No se modifica el fixture G2 ni un rol
+compartido. Cada caso de corrupción debe acreditar primero su lectura válida para impedir que
+un permiso faltante haga pasar una prueba negativa por una causa distinta de la prevista.
+
+### Cierre 15I1 — selección y evidencia histórica
+
+Gate focal final aprobado el 2026-09-07 a las 08:12:50 -03:00, Java 21 y PostgreSQL 16.14:
+**304 pruebas**, 200 Surefire y 104 Failsafe, cero fallos/errores/omitidas.
+Los ocho XML nominales de la corrida final acreditan CommandValidator (56), SatisfactionEvaluator
+(71), Selection (48), ResultStore (25), EvidenceReader (22), Coordinator (41), HistoryReader (18)
+y PrivateRequirementsReadService (23). Se ejecutó package + failsafe:integration-test +
+failsafe:verify + antrun:run@verify-no-secret-properties-in-jar con selectores exactos.
+
+La primera corrida tuvo ocho errores de permisos en el fixture de EvidenceReader, con las 200
+unitarias aprobadas. Se corrigieron sólo sus dos archivos de test nominales: el rol efímero recibe
+las seis lecturas de fuentes faltantes y los casos negativos prueban primero una lectura válida.
+La repetición completa del gate focal es la evidencia de cierre; no se suman ambas corridas.
+No cambió código productivo para resolver ese fallo ni se modificó el fixture G2.
+
+La selección distingue EMPTY, DEDUP y WITH_ACTS; preserva duplicados y el orden contractual de los
+motivos, dedup total antes de freshness y reglas de obligatorios/herencia. El reader acredita
+actos propios confirmados incluso fuera del catálogo vigente, con rechazo de snapshot/digest,
+pertenencia y corrupción agregada. Las pruebas incluyen 40 actos, dos sesiones con publicación
+posterior a la aceptación pese a timestamp editorial anterior y evidencia SCOPE_V1 genuina migrada.
+No hay DML ni lectura de metadata personal en este lookup. Revisión independiente sin hallazgos
+materiales; V27/V28/V29 congeladas, sin endpoints ni cambios frontend.
+
+Auditoría final: seis fuentes coinciden con el gate y las 16 clases productivas nuevas, incluidas
+las internas, son idénticas a target/classes dentro de los JAR web/CLI. Entrypoints correctos; sin
+entradas duplicadas, tests ni application-secret. Hashes SHA-256 de artefactos:
+
+- Web: `248abe5a0c2c9858b8bae6380aa270fb50ae781028eff9c6f1396468cc514f85`.
+- CLI: `422466a9045f352c7505acde2d5c3c951906001d7cec322089b08879dc0cc073`.
+
+Cierre con los ocho archivos nominales y commit `feat(legal): selecciona aceptaciones y acredita evidencia`,
+sin push. I1 implementa selección/lectura internas; la operación completa sigue en I2/I3.
+
+Lista nominal 15I2:
+
+- Nuevos `db/LegalAcceptancePrivilegeVerifier.java`, `db/LegalAcceptanceDatabaseConfiguration.java`,
+  `db/LegalAcceptanceTransactionBoundary.java` y `db/LegalAcceptanceKeyConfiguration.java`.
+- Existente `db/LegalDatabaseBoundaryMarker.java`: sólo nueva variante ACCEPTANCE para rechazar
+  mezcla de contextos durante refresh, sin cambiar guardas de consumidores existentes.
+- Nuevos tests `db/LegalAcceptancePrivilegeVerifierIT.java`,
+  `db/LegalAcceptanceDatabaseConfigurationTest.java`, `db/LegalAcceptanceTransactionBoundaryTest.java`,
+  `db/LegalAcceptanceDatabaseIsolationIT.java` y `db/LegalRestrictedAcceptanceRoleFixture.java`.
+- Este plan y el diseño compañero. Roles y secretos sintéticos sólo en PostgreSQL efímero.
+
+La nueva frontera respeta preflight → idempotencia → gate editorial shared → advisory de actor
+exclusivo → taller/usuario FOR SHARE. El gate actual entra en el editorial antes del callback, así
+que no sirve para replay temprano; se compone una frontera propia sin cambiar ese gate global.
+Se reutilizan las clases DataSource/Deadline de requisitos privados con instancias y pool propios;
+no se reutilizan sus credenciales ni su contexto. Se conserva su control de deadline/cleanup y
+LegalTransactionCompletionState para distinguir commit confirmado, rollback e incertidumbre.
+La configuración no escaneable permanece sin endpoints ni activación de entornos reales.
+I2 rechaza secretos AES/HMAC iguales y carece de fallback a otro subsistema. La futura frontera
+HTTP de 15J/15M, que dispone de la configuración web, debe verificar además la separación respecto
+de JWT/credenciales de equipos antes de crear el contexto aislado; no se atribuye esa comprobación
+a un contexto que no recibe tales secretos. La retención personal sigue explícita y sin default.
+
+Lista nominal 15I3:
+
+- Nuevos `db/LegalAcceptanceService.java`, `db/LegalAcceptanceWriter.java`,
+  `db/LegalAcceptanceReceipt.java` y `db/LegalAcceptanceFailure.java`.
+- Existente `db/LegalAcceptanceDatabaseConfiguration.java`: composición final del servicio completo.
+- Nuevos tests `db/LegalAcceptanceServiceTest.java`, `db/LegalAcceptanceServiceIT.java`,
+  `db/LegalAcceptanceCommitIT.java` y `db/LegalAcceptanceServiceITSupport.java`.
+- Este plan y el diseño compañero. Toda necesidad de otro archivo se justificará antes de editarlo.
+
+Una única REQUIRES_NEW/READ_COMMITTED acredita el principal servidor, reserva y replay, disponibilidad,
+selección, actos/documentos nuevos, metadata y ledger. El receipt se entrega sólo después de commit,
+liberación y deadline final; un fallo tardío conserva COMMITTED sin anunciar rollback, y una excepción
+al invocar COMMIT permanece UNKNOWN sin retry ni reconciliación automática. Exact dedup/EMPTY sólo
+guardan el resultado técnico. La frontera HTTP sigue en 15J.
+
+Commits: I1 `feat(legal): selecciona aceptaciones y acredita evidencia`; I2
+`feat(legal): aisla escritura de aceptaciones`; I3 `feat(legal): registra aceptaciones atomicas`.
+Gates focalizados por subcorte; la ampliación del marker compartido se acredita además mediante
+clean verify al cierre I3. V27/V28/V29 permanecen congeladas en todos los pasos.
 
 Resultado: un servicio que coordina actor, replay, disponibilidad, dedup, revisión, pendientes,
 validación semántica, lote, actos, documentos, metadata y resultado dentro de un único commit.
