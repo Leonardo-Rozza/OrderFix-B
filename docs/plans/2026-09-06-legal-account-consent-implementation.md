@@ -4,7 +4,7 @@ Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
 15G1 y 15G2 cerrados el 2026-09-06; 15G completo. 15H1 cerrado el 2026-09-07.
-Sigue 15H2 (persistencia de metadata protegida); 15H sigue abierto hasta completar ese paso.
+15H2 cerrado con 370 pruebas el 2026-09-07; 15H completo. Sigue 15I (aceptación interna y atómica).
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -43,7 +43,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15G1 | Comando canónico y HMAC/keyring — cerrado | A, F |
 | 15G2 | Coordinación SQL y replay durable — cerrado | G1 |
 | 15H1 | Captura, política explícita y cifrado puro — cerrado | A, F |
-| 15H2 | Persistencia de metadata en la transacción del escritor — pendiente | H1, G2 |
+| 15H2 | Persistencia de metadata en la transacción del escritor — cerrado | H1, G2 |
 | 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales | D, E, I |
 | 15K | Política compartida de emisión de sesión | A |
@@ -676,6 +676,10 @@ Lista nominal 15H2, después del commit 15H1:
 - Este plan y el diseño compañero. Reutiliza fixtures 15A/15G2 sin modificarlos. Sólo se provisionan
   roles y datos de prueba en PostgreSQL efímero; no se amplían ACL ni credenciales compartidas.
 
+Baseline 15H2: `91fc5c8` (`feat(legal): prepara captura y cifrado de metadata`), backend limpio
+el 2026-09-07. Se confirma la lista nominal anterior de cuatro Java y dos documentos antes de
+integrar JDBC. Frontend `7545201` y sus rutas no versionadas permanecen preservados.
+
 La captura admite sólo direcciones literales IPv4/IPv6 sin DNS, resuelve X-Forwarded-For desde el
 peer y de derecha a izquierda mediante CIDR explícitos; no confía en prefijos enviados por clientes.
 UA ausente/vacía se omite; presente conserva valores exactos, hasta 512 code points Unicode válidos
@@ -737,6 +741,63 @@ sin tests, dependencias de test, duplicados ni propiedades secretas. SHA-256:
 
 - Web: `d53e74778bdc432aedb4ba0b01f3fefd4c17ebc5759735ea72e6c12e17c14eb0`.
 - CLI: `37c24e26b0df945c58d56284933d0132c1b441ef264cded7a041d52298a93d4f`.
+
+### Cierre 15H2 y 15H
+
+15H2 implementa el writer interno de metadata, ligado a la reserva MISS y al mismo JDBC de 15G2.
+Exige actor estabilizado y lote del top XID actual, con actos, sin cabecera previa y con perfil y
+revisión del comando. El preparado debe pertenecer al codec del writer. Usa el aceptado_en del
+servidor como origen de captura y retención; redondea hacia arriba a microsegundos y rechaza una
+retención ya vencida antes de insertar. Verifica la cabecera devuelta por la guarda de V27.
+
+Persiste IP obligatoria y UA opcional sin leer ciphertext, nonce ni IDs generados con el rol
+restringido. Cada SQL respeta el presupuesto de la reserva. Un error o colisión marca rollback,
+sin retry ni recuperación en una transacción abortada. La metadata no completa la reserva: el
+store guarda después el resultado idempotente. No hay conexión/transacción interior ni commit
+propio; la prueba confirma invisibilidad de la metadata antes del único commit exterior.
+
+Gate fresco aprobado el 2026-09-07T07:09:58-03:00 con Java 21 y PostgreSQL 16.14 efímero:
+
+```bash
+env JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalRequestMetadataTest,LegalRequestMetadataResolverTest,LegalAcceptanceMetadataPolicyTest,LegalAcceptanceMetadataCodecTest,LegalAcceptanceMetadataWriterTest,LegalIdempotencyCoordinatorTest,LegalIdempotencyResultStoreTest \
+  -Dit.test=LegalAcceptanceMetadataIT,LegalIdempotencyCoordinatorIT,LegalV29AcceptancePersistenceIT \
+  package failsafe:integration-test failsafe:verify antrun:run@verify-no-secret-properties-in-jar
+```
+
+370 pruebas en diez XML frescos, sin fallos, errores u omitidas: 289 unitarias (219 H1, siete nuevas
+del writer, 38 del coordinador y 25 del store) y 81 PostgreSQL (20 nuevas de metadata, 41 del
+coordinador y 20 de persistencia V29). Los doce Java H1/H2 permanecieron idénticos durante el gate.
+Se ejecutó una sola corrida Maven, sin clean verify transversal: no hubo fallos ni cambios comunes.
+
+Las pruebas nuevas acreditan ambos roles restringidos, IP sola/UA de 512 code points y 2048 bytes,
+retención del servidor, descifrado JCE independiente del contenido persistido y replay sin DML.
+La colisión del segundo campo exige tres INSERT intentados, un fallo SQLSTATE 23505 y rollback
+completo del lote/actos/documentos/header/primer campo; la evidencia previa permanece idéntica.
+Se prueba tanto nonce activo como retenido tras tombstone. El helper de envejecimiento actúa sólo
+en PostgreSQL efímero; la transición de purga corre con las guardas reales de V27 activas.
+
+También fallan cerrado el actor/preparado ajenos, IP ausente, lote histórico/ajeno/vacío, cabecera
+repetida, reserva de otro JDBC/transacción, reserva consumida/replay y presupuesto o retención
+vencidos. Las pruebas observan rollbackOnly antes de propagar errores y el estado durable después
+del rollback, incluido un fallo del caller posterior a una inserción de metadata válida.
+Las revisiones independientes del writer y de esas assertions no identificaron hallazgos materiales.
+
+Auditoría independiente H2: ambos JAR contienen 940 clases, incluidas las diez de metadata
+idénticas a target/classes. V27/V28/V29 mantienen sus hashes congelados en fuente/target/artefactos;
+entrypoints correctos, sin tests, dependencias de test, duplicados ni propiedades secretas. SHA-256:
+
+- Web: `1a1af98015be863c322ef4f40b232bff99736174e12315f31e6ce7f24a92cc56`.
+- CLI: `3e67de3b7a562ddb1e7de0bd80f796b599b14506a7f5992c87d659c6e0ac205e`.
+
+Se cierra 15H2 con los seis archivos nominales y su commit atómico
+`feat(legal): protege metadata de aceptaciones`, sin push. 15H queda completo en dos commits;
+15H1 quedó en `91fc5c8`. Frontend y rutas no versionadas preservados; no se alteraron migraciones,
+ACL compartidas ni consumidores. La configuración operativa, validación integral de privilegios,
+frontera REQUIRES_NEW del servicio completo y activación siguen en 15I/15L; este corte no habilita
+escritura HTTP ni configura secretos o retenciones de un entorno real. Sigue **15I: aceptación
+interna y atómica**.
 
 ## 15I — Aceptación autenticada interna y atómica
 

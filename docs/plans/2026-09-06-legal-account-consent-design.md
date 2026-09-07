@@ -10,7 +10,7 @@ acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al 
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
 legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focales; 15G completo.
-15H1 cerrado con 259 pruebas el 2026-09-07; sigue 15H2 (persistencia de metadata).
+15H1 cerrado con 259 pruebas y 15H2 con 370 pruebas el 2026-09-07; 15H completo. Sigue 15I.
 
 ## Objetivo y resultado esperado
 
@@ -657,3 +657,34 @@ conserva esos requisitos pendientes y probará los tombstones y el rollback en P
 
 Auditoría H1: ocho clases nuevas exactas en ambos JAR, migraciones congeladas intactas, entrypoints
 correctos y ausencia de tests/duplicados/propiedades secretas. Hashes del empaquetado en el plan.
+
+
+Inicio 15H2: baseline `91fc5c8`, backend limpio; lista nominal confirmada antes de integrar el writer
+y sus tres archivos de pruebas. Se reutilizan los fixtures y roles restringidos de 15A/15G2 intactos.
+
+
+Cierre 15H2: 370 pruebas aprobadas el 2026-09-07T07:09:58-03:00 (289 unitarias y 81 PostgreSQL
+16.14), en diez XML frescos sin fallos, errores u omitidas. Incluye siete unitarias y 20 casos
+PostgreSQL nuevos, con 343 regresiones. Los doce Java H1/H2 se mantuvieron estables durante el gate.
+
+El writer exige reserva MISS propia, actor estabilizado y lote del top XID actual con actos,
+perfil/revisión coherentes y sin metadata previa. No completa el resultado idempotente ni abre
+otra transacción. La retención parte de aceptado_en impuesto por PostgreSQL, se redondea hacia
+arriba a microsegundos y se rechaza antes del INSERT si ya venció al observar el servidor.
+El único commit exterior confirma metadata y resultado; antes del commit la metadata es invisible
+a otra conexión. La prueba usa roles de aceptación y registro con las ACL nominales sin ampliarlas.
+
+Se acredita el contenido cifrado con JCE independiente, UA de 512 code points/2048 bytes y replay
+sin DML. La colisión del segundo nonce, activo o retenido después de tombstone, provoca SQLSTATE
+23505 tras insertar cabecera y primer campo, y revierte el grafo completo preservando toda evidencia
+anterior. La transición de purga del fixture efímero se ejecuta con las guardas reales de V27.
+Actor, preparado, lote, reserva, presupuesto o retención inválidos fallan cerrado. Un error del
+caller después de guardar metadata también revierte todo. No hay retry de nonce ni recuperación
+SQL después del fallo; se conserva la causa internamente en la excepción tipada existente.
+
+Auditoría H2 y revisiones independientes aprobadas: 940 clases por JAR, incluidas diez de metadata
+exactas, migraciones V27/V28/V29 congeladas y entrypoints correctos; sin tests, dependencias de test,
+duplicados ni propiedades secretas. Comando focal, desglose y hashes constan en el plan.
+Se cierra 15H con dos commits atómicos, sin push. Siguen pendientes en 15I/15L la composición del
+servicio completo, REQUIRES_NEW exterior, verificador de privilegios y configuración operativa;
+este corte no habilita endpoints de escritura ni configura secretos/retenciones reales.
