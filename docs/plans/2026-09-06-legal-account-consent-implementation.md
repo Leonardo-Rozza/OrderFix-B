@@ -3,7 +3,7 @@
 Fecha: 2026-09-06
 
 Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecución autorizados por el titular.
-Los cortes posteriores no están iniciados. Sigue 15G (15F ya está cerrado).
+15G1 cerrado el 2026-09-06; 15G queda abierto hasta completar 15G2. Sigue 15G2 (coordinación SQL y replay).
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -39,7 +39,8 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15D | GET de requisitos del usuario | C |
 | 15E | Historial propio paginado | C |
 | 15F | V29 y compatibilidad estricta del esquema | A; regresión 12–14 y 15A |
-| 15G | Comando canónico, HMAC y coordinación idempotente | A, F |
+| 15G1 | Comando canónico y HMAC/keyring — cerrado | A, F |
+| 15G2 | Coordinación SQL y replay durable — pendiente | G1 |
 | 15H | IP confiable, metadata cifrada y retención declarada | A, F |
 | 15I | Servicio interno de aceptación atómica | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales | D, E, I |
@@ -488,6 +489,53 @@ ni grants compartidos. Frontend preservado en 7545201 con sus dos rutas no versi
 Un único commit del corte, sin push. Al cerrar 15F siguió 15C, cuya ejecución se registra aquí.
 
 ## 15G — Comando canónico y protocolo idempotente
+
+### Subdivisión de ejecución: 15G1 y 15G2
+
+Antes de editar producción, 15G se divide por la regla de responsabilidades separables: la
+validación/canonicalización y criptografía no necesitan JDBC; los locks y resultados durables sí.
+15G1 prepara exclusivamente el comando inmutable y las huellas de todas las claves retenidas.
+15G2 implementará coordinador/store, espera acumulada de cinco segundos y replay de ambos ledgers,
+con el gate PostgreSQL previsto abajo. Cerrar 15G1 no cierra 15G ni acredita replay o rotación en réplicas.
+
+Baseline 15G1: `9c61dd7`, backend limpio en `codex/lanzamiento-publico-backend`; frontend `7545201`
+preservado con `.agents/` y `public/OrdenFix project naming/` no versionados. Lista nominal previa:
+
+- Nuevos `core/LegalAcceptanceCommand.java`, `core/LegalAcceptanceCommandValidator.java`,
+  `core/LegalIdempotencyFingerprint.java` y `db/LegalIdempotencyKeyring.java`.
+- Cuatro tests equivalentes: `LegalAcceptanceCommandTest`, `LegalAcceptanceCommandValidatorTest`,
+  `LegalIdempotencyFingerprintTest` y `LegalIdempotencyKeyringTest`.
+- Este plan y el diseño compañero. Sin cambios de DTO HTTP, parser editorial, SQL, flags, auth,
+  credenciales de entorno, dependencias, frontend ni consumidores actuales.
+
+El validador sólo acredita forma/límites del comando tipado; conserva duplicados, confirmado=false
+u omisiones semánticas para no anteponerlos a revisión/replay. No acredita identidad servidor,
+pertenencia, disponibilidad ni consentimiento. Ordena copias sin eliminar entradas; empates usan
+el contenido completo para que permutaciones equivalentes conserven huella sin ocultar duplicados.
+Registro conserva valores exactos y null opcional; no hace trim, case-fold ni normalización Unicode,
+ni sustituye la validación HTTP actual. Los límites del parser de 8 MiB/profundidad/tokens y la
+clasificación legacy/parcial se implementarán en la frontera HTTP correspondiente.
+
+Las huellas HMAC-SHA-256 separan dominios versionados de scope, clave y fingerprint. La proyección
+canónica incluye POST, plantilla fija, scope público de registro o userId servidor
+como string decimal exacto, y todo el negocio (incluida contraseña sólo dentro del HMAC).
+Se conserva el scope contractual por usuario; taller/rol/tokenVersion no cambian esa tupla. La
+revalidación de actor y pertenencia al taller del resultado durable compete al escritor; un traslado
+de taller no debe convertirse en un scope nuevo que permita consumir de nuevo la misma clave.
+Las huellas y sus diagnósticos no exportan JSON canónico, secreto, clave cruda, contraseña ni
+un hash auxiliar de contraseña.
+
+Keyring inmutable explícito: 1–8 versiones positivas con claves Base64 canónicas distintas de
+32 bytes, versión activa presente y TTL >=24 h sin overflow; valor técnico inicial 25 h al omitir
+sólo TTL. Calcula candidatos de todas las versiones con snapshot estable; no lee Environment ni
+se conecta automáticamente a Spring. Retirar claves requiere el protocolo coordinado 15A/15G2,
+no una operación local sobre este objeto. Errores y toString no revelan entradas sensibles.
+
+Gate 15G1: pruebas puras de forma, cardinalidad, Unicode, duplicados/permutaciones, valores exactos,
+separación de actores/rutas/claves/dominios, cambio de contraseña, vectores HMAC independientes,
+keyring/TTL inválidos y ausencia de secretos en diagnóstico. Commit 15G1:
+`feat(legal): canonicaliza comandos de aceptacion`. El commit original de 15G queda para 15G2.
+
 
 Resultado: entrada de negocio validada, fingerprint/keyring protegido y coordinación/replay durable
 para registro y aceptación. Todavía no expone HTTP de escritura.
@@ -1042,3 +1090,77 @@ Se preservan los archivos no versionados del frontend y el handoff global contin
 manejo global anterior para rutas/métodos sin mapping permanece documentado en 15D; no se amplía
 este corte para modificarlo. Commit: `feat(legal): consulta aceptaciones propias`.
 Sigue **15G — comando canónico, HMAC y coordinación idempotente**, dado que 15F ya está cerrado.
+
+
+## Ejecución 15G1 — 2026-09-06
+
+Cerrado desde `9c61dd7` con rama y árbol limpios verificados; frontend `7545201` y sus dos rutas
+no versionadas preservados. Diez archivos nominales: cuatro clases productivas nuevas, cuatro
+suites nuevas y dos documentos. La subdivisión 15G1/15G2 quedó registrada antes de editar código.
+Ninguna fuente existente, migración, dependencia, configuración, controller o DTO HTTP cambió.
+
+Comando inmutable, listas ordenadas por UUID unsigned y contenido completo de desempate, con
+multiplicidad conservada. El límite documental se comprueba antes de copiar la lista; el límite
+previo de email evita recorrer una entrada tipada excesiva. Ninguna validación de forma inventa
+consentimiento, omite duplicados o adelanta confirmado=false/listas vacías a la semántica futura.
+La revisión mantuvo el scope contractual de usuario: taller/rol/tokenVersion deben revalidarse
+contra la identidad durable al integrar los escritores, sin crear otra tupla para una misma clave.
+
+HMAC-SHA-256 en tres dominios v1 separados; proyección tipada RFC 8785 por streaming, sin JSON
+completo ni hash auxiliar de contraseña. El buffer temporal se borra al terminar o fallar.
+El keyring es un snapshot inmutable de todas las versiones retenidas; no elimina candidatos al
+cambiar la versión activa ni comparte Mac mutable entre llamadas. Los secretos retenidos no se
+exponen, las copias de derivación se borran y las excepciones no retienen entradas sensibles.
+TTL 25 h por defecto técnico, mínimo 24 h y aritmética de vencimiento comprobada antes del futuro DML.
+
+### Gate focal
+
+Primera compilación: producción aprobó; testCompile detectó que ThrowableAssertAlternative no
+admite hasNoCause/hasMessage en la versión local de AssertJ. Se corrigió sólo el test del keyring
+para usar assertThatThrownBy con comprobación explícita de IllegalArgumentException, mismo mensaje
+y ausencia de causa. No hubo fallo de producción ni regresión transversal; no se ejecutó clean verify.
+
+Gate final aprobado con Java 21.0.10 y Maven 3.9.11 el **2026-09-06T22:39:56-03:00**, en 16.075 s:
+**294 pruebas**, 136 nuevas y 158 regresiones, cero fallos/errores/omitidas. Siete XML inspeccionados,
+sin sumar reportes viejos ni ejecuciones repetidas. Todas las ocho fuentes Java conservaron sus
+hashes durante el gate.
+
+| Suite | Casos | Fallos / errores / omitidos |
+| --- | ---: | --- |
+| LegalAcceptanceCommandTest | 6 | 0 / 0 / 0 |
+| LegalAcceptanceCommandValidatorTest | 56 | 0 / 0 / 0 |
+| LegalIdempotencyFingerprintTest | 34 | 0 / 0 / 0 |
+| LegalIdempotencyKeyringTest | 40 | 0 / 0 / 0 |
+| Rfc8785CanonicalizerTest | 41 | 0 / 0 / 0 |
+| LegalAuthenticatedRequirementsTest | 46 | 0 / 0 / 0 |
+| LegalRequirementSatisfactionEvaluatorTest | 71 | 0 / 0 / 0 |
+
+Comando final, sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw \
+  -Dtest=LegalAcceptanceCommandTest,LegalAcceptanceCommandValidatorTest,LegalIdempotencyFingerprintTest,LegalIdempotencyKeyringTest,Rfc8785CanonicalizerTest,LegalAuthenticatedRequirementsTest,LegalRequirementSatisfactionEvaluatorTest \
+  package antrun:run@verify-no-secret-properties-in-jar
+```
+
+Evidencia relevante: vector fijo calculado independientemente con Python hmac/json para los tres
+HMAC; comparación con JsonCanonicalizer y Mac independientes para las categorías de escapes/control,
+astral, U+2028/U+2029, Unicode descompuesto y teléfono null. Un comando completo con
+2048 actos × 16 documentos atraviesa múltiples buffers y coincide con el JCS independiente.
+Permutar duplicados conserva huella; quitar una ocurrencia o cambiar cualquier campo de negocio,
+incluida contraseña, la cambia. UserId superior a 2^53 y Long.MAX_VALUE mantienen representación
+exacta. Cuarenta derivaciones concurrentes sobre tres versiones conservan todos los candidatos.
+Límites/Base64 no canónico/versiones/TTL/overflow inválidos fallan con diagnósticos sanitizados.
+
+No se ejecuta PostgreSQL en este corte puro; locks, espera acumulada, lectura de ambos ledgers,
+replay después de REPLACE/RETIRE, expiración no purgada, reserva/rollback y acreditación de identidad
+durable siguen siendo el gate obligatorio de **15G2**. 15G completo continúa abierto. No hay endpoint
+HTTP de escritura, beans ni flags activados, grants, push o cambios de frontend. Commit de 15G1:
+`feat(legal): canonicaliza comandos de aceptacion`.
+
+
+Auditoría final de artefactos aprobada: las diez clases compiladas de las cuatro fuentes nuevas,
+incluidas las internas, coinciden byte a byte con target/classes en ambos JAR. Start-Class web/CLI
+correctos, sin clases de tests, application-secret ni entradas duplicadas. V27/V28/V29 conservan
+sus hashes congelados en fuentes y en ambos artefactos. El gate de propiedades secretas pasó.

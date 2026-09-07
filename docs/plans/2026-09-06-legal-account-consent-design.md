@@ -9,7 +9,7 @@ acreditadas con un gate integral fresco de 5682 pruebas aprobadas. 15C agrega el
 acreditado con 430 pruebas focales y regresiones. 15D conecta el GET privado al lector, con 209
 pruebas focales y regresiones aprobadas. 15E implementa historial propio con 426 pruebas focales
 y regresiones aprobadas. Los escritores de cuenta siguen pendientes; no cambian campos ni códigos
-legales del contrato. Sigue 15G, dado que 15F ya está cerrado.
+legales del contrato. 15G1 cerrado con 294 pruebas; 15G continúa abierto y sigue 15G2 (SQL y replay).
 
 ## Objetivo y resultado esperado
 
@@ -485,3 +485,57 @@ El historial no convierte la herencia en evidencia ni completa POST/idempotencia
 
 Cierre 15E: 426 pruebas aprobadas el 2026-09-06T21:51:19-03:00, cero fallos/errores/omitidas.
 Ambos artefactos y migraciones congeladas auditados. Sigue 15G: comando canónico e idempotencia.
+
+
+## Implementación 15G1 — comando y huellas protegidas
+
+15G se divide antes de editar código: 15G1 entrega componentes puros; 15G2 mantiene pendiente la
+coordinación PostgreSQL, locks, ambos ledgers y replay durable. No se habilita una escritura HTTP.
+El comando sólo valida forma, copia y ordena aceptaciones/documentos por UUID unsigned con
+comparación completa de desempate. Conserva multiplicidad, listas vacías y confirmado=false;
+su construcción no acredita semántica, identidad persistida ni resultado confirmado.
+
+La entrada de registro conserva valores exactos: teléfono null/vacío/espacios distintos, case,
+Unicode y contraseña. Se respetan límites UTF-16 del DTO actual; email mantiene la validación
+sintáctica HTTP futura, con defensa de 1 MiB UTF-8 sin introducir aquí el límite físico de 120.
+UUID v4 lowercase/variante RFC se exige sólo a Idempotency-Key, no a UUID editoriales tipados.
+El adaptador HTTP futuro acreditará presencia/null, JSON estricto y los límites de cuerpo/tokens.
+
+El esquema HMAC se fija con arrays JSON canónicos RFC 8785 de dominio separado:
+
+- Scope: `["ordenfix:legal-idempotency:scope:v1", "POST", plantilla, scope]`.
+- Clave: `["ordenfix:legal-idempotency:key:v1", UUID_canónico]`.
+- Fingerprint: `["ordenfix:legal-idempotency:fingerprint:v1", "POST", plantilla, scope, negocio]`.
+
+Scope es `{"kind":"REGISTRATION"}` o `{"kind":"AUTHENTICATED","userId":"decimal"}`.
+UserId se representa como string para conservar Long.MAX_VALUE y valores superiores a 2^53.
+Las plantillas son exactamente /api/auth/register y /api/aceptaciones-legales; no se admiten rutas
+libres. El negocio contiene los campos wire españoles, sin renombrar ni omitir valores, ordenados
+canónicamente; registro incluye todos sus campos y contraseña. No se genera JSON completo ni hash
+auxiliar de contraseña: un buffer pequeño alimenta Mac y se borra tras uso, incluso ante error.
+
+Se mantiene el scope contractual por usuario. Taller/rol/tokenVersion no cambian esa tupla;
+el servicio posterior debe contrastar actor y pertenencia al taller del resultado durable. El
+cambio de taller no autoriza a reutilizar la clave mediante otro scope ni a devolver éxito ajeno.
+La versión de clave identifica el secreto retenido y no se incorpora a los bytes HMAC. Las tres
+huellas lowercase sólo salen como valores protegidos; toString omite body, clave, secreto y huellas.
+
+El keyring copia 1–8 claves Base64 canónicas distintas de 32 bytes, exige versión activa existente
+y deriva todos los candidatos en orden de versión. No expone secretos ni mutadores. Cada llamada
+usa copias temporales borradas y una instancia Mac propia; no comparte estado mutable entre hilos.
+La selección de versión activa no elimina candidatos viejos. Este orden no sustituye el orden
+unsigned de locks físicos que deberá calcular PostgreSQL en 15G2.
+
+TTL técnico por defecto 25 h, mínimo 24 h; se conserva precisión y se rechaza overflow de duración
+nanosegundos o de expiresAt antes del futuro INSERT. No hay defaults secretos, carga de Environment,
+beans, lectura de base ni retiro automático de claves. La coordinación entre réplicas y el drenaje
+continúan siendo requisitos operativos de 15A, pendientes de integrar con los escritores.
+
+
+Cierre 15G1: 294 pruebas aprobadas el 2026-09-06T22:39:56-03:00; 136 nuevas y 158 regresiones,
+sin fallos/errores/omitidas. Vectores independientes HMAC/JCS, límites, Unicode, campos exactos,
+duplicados y keyring concurrente acreditados. 15G2 conserva pendiente toda coordinación y replay
+PostgreSQL; el corte puro no declara resultado durable ni rotación de réplicas implementados.
+
+Ambos JAR auditados: diez clases nuevas idénticas a target/classes, entradas web/CLI correctas,
+sin tests/propiedades secretas/duplicados y V27/V28/V29 con hashes congelados.
