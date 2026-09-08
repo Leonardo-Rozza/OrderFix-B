@@ -958,3 +958,45 @@ sin reiniciarlo por fase, con transacción propia de 25 s.
 **15L cerrado en L1/L2/L3; sigue 15M.** El servicio aún no se registra en HTTP ni emite sesión/email.
 M aplicará K por IDs durables y acreditará el presupuesto incluyendo sesión. Frontend intacto.
 Commit atómico `feat(legal): crea cuenta y evidencia en una transaccion`, sin push.
+
+### Apertura 15M1 y división de 15M — 2026-09-08
+
+15M se divide en entrada/errores puros (M1), verificación de email poscommit (M2) e integración
+HTTP/sesión/replay con gate transversal (M3). El plan fija seis archivos nominales antes del código
+M1. El parser distingue ausencia real de parcial/completo antes de convertir el DTO; header presente
+inválido precede a JSON/DTO y un parcial nunca habilita legacy. Se conservan []/false/duplicados para
+semántica posterior y los valores de negocio exactos, con Validator sobre el DTO histórico.
+
+La raíz futura admite sólo cinco campos de negocio y dos legales, sin coerción ni unknown: se
+documenta este endurecimiento de tolerancias de Jackson. Errores de JSON/negocio usan 400 genérico
+sin valores; los legales conservan códigos/motivos. La ruta actual no se modifica en M1. Límites
+15A, UTF-8 estricto y checkpoints acotan la lectura sin cerrar el stream ni reclasificar fallos
+operativos. La traducción defensiva de L3 exige evidencia de rollback para rechazos; entrega con
+persistencia/commit inciertos o acreditados falla 503. 409/428 sólo usan el perfil público REGISTRO.
+
+M2 persistirá tokens en una transacción nueva real antes de enviar; M3 aplicará sesión K por IDs y
+el deadline exterior único de 30 s, sin bienvenida por replay. M1 sólo requiere foco y empaquetado;
+clean verify fresco queda en M3. V27/V28/V29, frontend y rollout permanecen intactos.
+
+Precisión M1 previa al gate: INVALID_ACTOR puede indicar cuenta/taller deshabilitado durante replay,
+antes de que el coordinador acredite un recibo. Con rollback concluyente y sin persistencia/recibo
+de esta entrega, usa el 401 genérico vigente de login, como exige el wire. No equivale a inexistencia
+histórica de cuenta. NONE/COMMITTED/UNKNOWN/PERSISTED siguen siendo 503. Se corrige la propuesta
+inicial de 503 universal sin cambiar L3 ni sus invariantes; K conserva la emisión de sesión M3.
+
+### Cierre 15M1 — 2026-09-08T14:19:51-03:00
+
+Parser y errores de registro implementados en seis archivos nominales, sin modificar la ruta
+HTTP ni habilitar capacidades. Ausencia/parcial/completo, forma y validación del DTO se resuelven
+antes de permitir una rama de alta; valores y duplicados se conservan, límites/checkpoints acotan
+la lectura. La traducción usa evidencia concluyente para rechazos y la proyección pública exacta
+para 409/428; cuenta deshabilitada con INVALID_ACTOR concluyente conserva el 401 genérico de login.
+
+**434 pruebas focales aprobadas**, 170 nuevas y 264 de regresión, siete suites frescas
+sin fallos/errores/omitidas/reintentos. verify focal empaquetó ambos artefactos; auditoría de XML,
+clases, recursos y V27/V28/V29 aprobada. El plan registra alcance, intentos y SHA de JAR; no se
+presenta un gate PostgreSQL ni clean verify anterior como evidencia nueva. Frontend intacto.
+
+**Sigue 15M2**, token de verificación en transacción propia confirmada antes de enviar. 15M permanece
+abierto: M3 integra HTTP/sesión/replay y acredita el plazo exterior más clean verify fresco.
+Commit atómico `feat(legal): prepara entrada compatible de registro`, sin push.

@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15L completo en L1/L2/L3. Sigue 15M, registro HTTP compatible y efectos poscommit.
+15L completo en L1/L2/L3. 15M1 cerrado con 434 pruebas focales; siguen M2 poscommit y M3 HTTP integral.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -53,7 +53,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión — cerrado | A |
 | 15L | Servicio interno de registro atómico — cerrado en L1/L2/L3 | F, G, H, I, K |
-| 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
+| 15M | Registro HTTP compatible, replay y efectos poscommit — M1/M2/M3 | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
 | 15O | Mantenimiento de resultados vencidos y metadata | F, G, H, I |
 | 15P | Concurrencia, capacidad y fallos del flujo completo | A–O |
@@ -2170,6 +2170,145 @@ sin envío por rollback o replay. Persistir/inutilizar auth_tokens en una transa
 y enviar sólo tras su commit; no reutilizar el EntityManager ya confirmado de afterCommit. Probar
 que el token existe y verificarEmail puede consumirlo; no se amplía aquí el transporte de email.
 Commit: `feat(legal): integra consentimiento en el registro`.
+
+### División ratificada de 15M — 2026-09-08
+
+Se divide antes de editar para conservar commits atómicos y no exponer una escritura incompleta:
+
+- **15M1 — Entrada y errores puros de registro.** Parser acotado que conserva presencia antes del
+  DTO, errores de forma y traducción defensiva del resultado L3. Sin controller, servlet reader,
+  flags, base de datos ni emisión de sesión/email. Gate focal y empaquetado; commit
+  `feat(legal): prepara entrada compatible de registro`.
+- **15M2 — Verificación de email poscommit.** Separar creación/inutilización de auth_tokens en un
+  bean con REQUIRES_NEW/READ_COMMITTED por IDs durables; enviar sólo tras confirmar esa transacción.
+  CuentaService agenda la bienvenida después de confirmar el alta y conserva el reenvío. No usar
+  una entidad gestionada ni el EntityManager de afterCommit para persistir el token. Probar que
+  verificarEmail consume el token real y que rollback no envía. No ampliar SMTP/transportes.
+  Confirmar archivos y pruebas nominales al abrir; commit propuesto
+  `fix(auth): confirma verificacion antes de enviar email`.
+- **15M3 — Integración HTTP, sesión y replay.** Adaptar la ruta existente, capacidades/dependencias,
+  reader de servlet y conexión con L3/K; sesión por IDs durables después del commit, JWT nuevo y
+  emailVerificado actual, sin bienvenida en replay. Acreditar el plazo exterior único de 30 s desde
+  antes de leer/parsing/pool/BCrypt hasta sesión y liberación, sin reiniciarlo por fase. Ratificar
+  transporte MIME/query y lista nominal antes de editar. Matriz de flags, prioridades y fallos
+  poscommit, PostgreSQL real y **clean verify fresco**; actualizar FRONTEND_INTEGRATION al publicar
+  el contrato efectivo. Commit de cierre `feat(legal): integra consentimiento en el registro`.
+
+M1/M2 son preparatorios; 15M permanece abierto hasta M3 y no activan rollout/enforcement.
+
+### Apertura 15M1 — 2026-09-08
+
+Baseline backend `d0d3dd6`, rama `codex/lanzamiento-publico-backend`, limpio. Frontend `7545201`
+conservado con sus dos rutas no versionadas. Lista nominal exacta de **seis archivos**, fijada
+antes de editar código:
+
+- Nuevos `http/LegalRegistrationRequests.java` y `http/LegalRegistrationHttpException.java`.
+- Nuevos tests homónimos en `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/http/`.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Decisiones de entrada para la integración posterior:
+
+- API pura read(headers, InputStream, Validator, checkpoint), sin flags ni request servlet. Devuelve
+  ABSENT o COMPLETE junto al RegisterRequestDto histórico; un parcial nunca es una entrada usable.
+  Sólo ausencia real de header/revisión/lista es ABSENT. Un null/string vacío/lista vacía cuenta
+  como presente, aunque null/formato inválido rechace antes de clasificar.
+- Header presente canónico UUID v4 antes del body; repetido/combinado/normalizado no se acepta.
+  JSON y DTO válidos preceden a reclamar header ausente o campo legal faltante. Si falta el header
+  en un parcial, IDEMPOTENCY_KEY_REQUERIDA; con header y campo legal faltante,
+  ACEPTACION_LEGAL_INVALIDA/PAYLOAD_LEGAL_INCOMPLETO. []/false/duplicados de arrays se preservan para
+  revisión/semántica, sin deduplicar ni fabricar consentimiento.
+- Raíz estricta de los cinco campos de negocio documentados y los dos legales; strings sin
+  coerción y sin campos extra. Se documenta el endurecimiento respecto de tolerancias accidentales
+  de Jackson (unknown/coerciones); preserva el request legacy documentado, no cambia aún su ruta.
+  Teléfono ausente/null se conserva null. @NotBlank/@Size/@Email se evalúan mediante Validator real
+  sobre el DTO actual, sin trim/case/normalización Unicode ni máximo nuevo de 120 para email.
+- JSON global/raíz/tipos de negocio inválidos: 400 genérico con mensaje histórico de cuerpo inválido.
+  DTO de negocio inválido: 400 Error de validación, mensaje fijo «Los datos de registro no son
+  válidos.», sin incluir valores ni ConstraintViolation. Forma/bloque legal inválido conserva su
+  código/motivo contractual. No cambia el handler global ni se incorporan causas del parser a la
+  respuesta. Esta clasificación de mensajes se publicará con la integración M3.
+- UTF-8 estricto sin BOM/surrogates sueltos; límite real 8 MiB + sentinela, profundidad 32, 300000
+  tokens, string 1 MiB/nombre 256, 2048 actos × 16 documentos. Dos pasadas para validar antes de
+  materializar listas, sin cerrar el stream ajeno. Checkpoints cooperativos acotados preservan
+  errores operativos originales del checkpoint y Validator; la lectura ilegible del body usa 400 genérico.
+- Traducir L3 sin confiar en causas: COMMITTED/UNKNOWN/PERSISTED/recibo confirmado son 503, nunca
+  rechazo o éxito. Rechazos semánticos/idempotentes requieren ROLLED_BACK y NOT_PERSISTED; la forma
+  INVALID_PAYLOAD anterior a transacción puede tener Completion.NONE. INVALID_ACTOR con rollback
+  concluyente devuelve el 401 genérico vigente de login («Usuario o contraseña incorrectos»),
+  sin código/detalles legales; NONE o entrega incierta siguen siendo 503. La revisión previa al gate
+  corrigió la propuesta inicial de 503 universal: el coordinador puede rechazar usuario/taller
+  deshabilitado antes de acreditar el recibo de replay, y el contrato exige el error actual de
+  cuenta/login. No se inspeccionan causas ni se relajan locks/validación del coordinador; K seguirá
+  validando password/estado actuales al emitir sesión en M3. 409/428 usan
+  siempre snapshot público REGISTRO/es-AR válido; inconsistencia falla 503. Retry-After: 1 sólo para
+  IDEMPOTENCY_EN_PROGRESO y operacion REGISTRO. Causas/identidades/body no alimentan campos públicos.
+
+Gate focal previsto: los dos tests nuevos más LegalAcceptanceRequestsTest,
+LegalAcceptanceHttpExceptionTest, LegalRegistrationServiceTest, LegalRegistrationFailureTest y
+LegalRegistrationSelectionTest. verify con selección Surefire y skipITs empaqueta ambos JAR y
+ejecuta su verificador de secretos; XML frescos cotejados con métodos compilados, clases nominales,
+recursos y V27/V28/V29 congeladas. Sin PostgreSQL nuevo porque M1 es puro y no modifica L3.
+No se repite clean verify en este corte aditivo: queda reservado al gate transversal M3; cualquier
+fallo se registra y resuelve antes del cierre. Sin push.
+
+### Cierre 15M1 — 2026-09-08T14:19:51-03:00
+
+Entrada pura y traducción de errores implementadas en los seis archivos nominales. El parser
+distingue ausencia real de bloque legal completo; los parciales rechazan antes de cualquier rama
+de alta. Valida el DTO histórico, conserva valores exactos y preserva []/false/multiplicidad para
+la semántica posterior. La forma se acota y valida antes de crear listas, con checkpoints que
+conservan la identidad de interrupciones operativas y sin cerrar el stream del llamador.
+
+Las decisiones públicas no exponen contraseña/body/causas ni identidad durable. El mapper exige
+rollback concluyente para rechazos de servicio, salvo forma previa a transacción, y conserva la
+precedencia de indisponibilidad si la entrega está confirmada o es incierta. El 401 genérico por
+INVALID_ACTOR concluyente permite respetar el contrato de replay de una cuenta deshabilitada;
+no se confunde con inexistencia histórica. 409/428 usan exclusivamente REGISTRO/es-AR público.
+
+Gate focal: **434 pruebas** (170 nuevas + 264 de regresión), siete suites Surefire
+frescas sin fallos/errores/omitidas/reintentos. verify focal con skipITs y empaquetado terminó con
+BUILD SUCCESS en 28.741 s. No se ejecutaron pruebas PostgreSQL en M1 ni
+clean verify; el código nuevo es puro y la integración efectiva queda para M3.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalRegistrationRequestsTest | 91 |
+| LegalRegistrationHttpExceptionTest | 79 |
+| LegalAcceptanceRequestsTest | 131 |
+| LegalAcceptanceHttpExceptionTest | 60 |
+| LegalRegistrationServiceTest | 32 |
+| LegalRegistrationFailureTest | 11 |
+| LegalRegistrationSelectionTest | 30 |
+
+
+Cobertura nueva: presencia ausente/parcial/completa, prioridades de header/JSON/DTO, validaciones
+reales y valores exactos, UTF-8/formato hostil, límites de lectura y listas, conservación de
+duplicados y semántica pendiente, propiedad del stream, checkpoints y fallo del Validator;
+errores contractuales y matriz de completion/persistence/receipt con proyección pública y ausencia
+de datos internos. Los límites defensivos de fábrica no acreditan que un payload con forma cerrada
+pueda alcanzar profundidad 32 o 300000 tokens antes de otros límites.
+
+La compilación aislada Java 21 de las cuatro fuentes aprobó y la revisión independiente cerró
+sin hallazgos pendientes. Antes del gate se precisó documentalmente el mapeo de INVALID_ACTOR y
+se ajustó el mapper/test nuevo; no fue una corrección motivada por un fallo de pruebas. El gate
+Maven aprobó en su primer intento, sin reejecuciones ni cambios de Java posteriores al inicio.
+Terminó el 2026-09-08T14:19:02-03:00. Las dos suites nuevas aportaron 91 casos de entrada y 79 de
+errores; las cinco restantes conservaron 264 casos de regresión. Los estados de completion del
+mapper se prueban con mocks para verificar traducción, sin atribuirles evidencia PostgreSQL real.
+
+Auditoría aprobada de XML contra métodos JUnit compilados, fuentes congeladas para el gate y clases
+limitadas a los Java nominales; ambos JAR cotejados contra target. V27/V28/V29 mantienen sus hashes
+en fuente/target/artefactos, sin nuevas anotaciones HTTP ni cambios de dependencias runtime.
+El verificador de empaquetado no encontró archivos *secret*.properties; no es una auditoría
+genérica de secretos. AuthController, RegisterRequestDto, handlers globales, settings, JDBC,
+inventarios, roles y frontend permanecen intactos. No hay cambio HTTP efectivo en M1.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `786f9c3cd9d1c58d2b4a520bdcde5acc6a967ec0bc98e200bd66e6f04691b00f`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `f2e7f1b1ff884a7406a75898cc2677b920725c92fc8a9a7ac1b2461ea7b7b475`.
+
+**15M1 cerrado; sigue 15M2**, verificación de email poscommit con token confirmado y consumible.
+15M sigue abierto hasta integrar HTTP/sesión/replay y aprobar clean verify fresco en M3.
+Commit atómico `feat(legal): prepara entrada compatible de registro`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 
