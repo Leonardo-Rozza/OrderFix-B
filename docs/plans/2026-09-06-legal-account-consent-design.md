@@ -1121,3 +1121,49 @@ Hibernate, y M3C conectará HTTP/replay y comprobación final. No se declara cer
 extremo a extremo ni una SLA física de cancelación. El último clean verify transversal sigue siendo
 M3A (8227 casos); este corte ejecutó sólo su gate focal. Commit
 `feat(legal): comparte plazo con el registro interno`, sin push.
+
+### Apertura 15M3B2 — 2026-09-08
+
+La lectura pública adopta explícitamente el mismo owner30 y mantiene su cap local configurado de
+hasta 15 s: restante efectivo = min(local, owner). Reemplazarlo por 30 s ampliaría el contrato
+público, y reiniciar el owner por fase ampliaría el total. Las firmas históricas permanecen; no
+hay nuevas credenciales, beans ni estado global. Se fijan tres fuentes productivas, tres tests
+nuevos y estos dos documentos en el plan antes de implementar.
+
+Cada scope exterior tiene cap local propio; los anidados con igual owner reutilizan exactamente
+el adapter. Null, owner ajeno o adopción sobre scope histórico activo se rechazan sin fallback y
+sin reemplazar el contexto. El adapter adoptado vuelve terminal su fallo local sin fingir expiry
+global; consulta owner primero para conservar causas de cleanup e interrupción. El cierre de
+conexión fallido se propaga al owner y bloquea fases posteriores aunque Spring lo absorba.
+
+Nuevo overload readRegistration(owner) usa el mismo flujo público y devuelve sólo tras commit,
+cleanup y comprobación final. La evidencia de COMMITTED/UNKNOWN y la materialización durable no
+se reinterpretan por una entrega fallida. Gate focal con PostgreSQL y auditoría de ambos JAR;
+último clean verify integral M3A, nuevos gates en B3/C. JPA, HTTP, rollout y la limpieza específica
+de Hibernate permanecen fuera. Commit `feat(legal): comparte plazo con lectura publica`, sin push.
+
+### Ajuste nominal 15M3B2 — 2026-09-08
+
+Se añade como noveno archivo el test existente de configuración pública: su inventario reflejado
+de una sola firma debe pasar a exigir exactamente la firma histórica y la sobrecarga owner aprobada.
+El primer foco falló únicamente en esa expectativa (295 unitarios, uno fallido); PostgreSQL todavía
+no corrió. Se conserva producción y se repite el foco, con evidencia del intento fallido preservada.
+El ajuste queda documentado antes del test; no requiere ampliar a JPA/HTTP ni un gate integral.
+
+### Cierre 15M3B2 — 2026-09-08T17:37:14-03:00
+
+La lectura pública adopta el owner30 conservando min(cap local configurado hasta15, restante global).
+Las llamadas anidadas no reinician el adapter; una nueva observación abre sólo su cap local.
+Null/owner ajeno no activa fallback y el ámbito se restaura. Cleanup se comparte con causa original,
+incluido cierre pre-Lease, conservando la preparación como excepción primaria. Reader/gate y firmas
+históricas mantienen su contrato; el agregado durable no se interpreta como rollback por entrega fallida.
+
+**410 pruebas focales aprobadas**, 69 nuevas (295 Surefire + 115 PostgreSQL en
+total), y auditoría de fuentes/reportes/ambos JAR aprobada. La evidencia distingue relojes y JDBC
+simulados de persistencia real, cubre el mínimo, rollback/commit/ACK/cleanup y reuso sin DML.
+GET público histórico y escritor L3 están en el foco. Migraciones congeladas y frontend preservados.
+
+**Sigue B3**, sesión JPA acotada y cleanup de Hibernate, luego M3C integra HTTP/replay y control
+final de respuesta. No se cierra aún el presupuesto extremo a extremo. Último clean verify integral
+M3A (8227 casos); este corte ejecutó sólo su gate focal. Commit
+`feat(legal): comparte plazo con lectura publica`, sin push.

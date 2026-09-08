@@ -64,6 +64,23 @@ final class LegalPublicRequirementsDataSource extends AbstractDataSource impleme
         LegalPublicRequirementsDeadline previous = current.get();
         LegalPublicRequirementsDeadline deadline = previous == null
                 ? new LegalPublicRequirementsDeadline(operationBudget, clock) : previous;
+        return withinScope(previous, deadline, operation);
+    }
+
+    /** Reuse an adopted local cap; an active historical scope cannot acquire an owner later. */
+    <T> T withinRegistrationBudget(LegalRegistrationBudget owner,
+            Function<LegalPublicRequirementsDeadline, T> operation) {
+        LegalPublicRequirementsDeadline previous = current.get();
+        if (owner == null || previous != null && !previous.usesRegistrationBudget(owner)) {
+            throw new LegalPublicRequirementsReadException();
+        }
+        LegalPublicRequirementsDeadline deadline = previous == null
+                ? LegalPublicRequirementsDeadline.adoptRegistrationBudget(owner, operationBudget, clock) : previous;
+        return withinScope(previous, deadline, operation);
+    }
+
+    private <T> T withinScope(LegalPublicRequirementsDeadline previous,
+            LegalPublicRequirementsDeadline deadline, Function<LegalPublicRequirementsDeadline, T> operation) {
         current.set(deadline);
         try {
             requireOpen();
@@ -93,10 +110,11 @@ final class LegalPublicRequirementsDataSource extends AbstractDataSource impleme
             throw new LegalPublicRequirementsReadException();
         }
         Connection connection = pool.getConnection();
+        Lease lease = null;
         try {
             deadline.check();
             requireOpen();
-            Lease lease = new Lease(connection, deadline);
+            lease = new Lease(connection, deadline);
             leases.add(lease);
             if (closed) {
                 lease.expire();
@@ -105,10 +123,32 @@ final class LegalPublicRequirementsDataSource extends AbstractDataSource impleme
             }
             return lease.proxy();
         } catch (RuntimeException | SQLException failure) {
-            try {
-                connection.close();
-            } catch (SQLException | RuntimeException closeFailure) {
-                failure.addSuppressed(closeFailure);
+            if (!deadline.hasRegistrationBudget()) {
+                // Preserve the historical return/error path for the existing public consumer.
+                try {
+                    connection.close();
+                } catch (SQLException | RuntimeException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            } else if (lease != null) {
+                // Release is idempotent, including when shutdown already tried to return it.
+                // The Lease records its own cleanup failure and is the sole connection owner.
+                try {
+                    lease.release();
+                } catch (SQLException | RuntimeException closeFailure) {
+                    if (failure != closeFailure) {
+                        failure.addSuppressed(closeFailure);
+                    }
+                }
+            } else {
+                try {
+                    connection.close();
+                } catch (SQLException | RuntimeException closeFailure) {
+                    deadline.recordCleanupFailure(closeFailure);
+                    if (failure != closeFailure) {
+                        failure.addSuppressed(closeFailure);
+                    }
+                }
             }
             throw failure;
         }

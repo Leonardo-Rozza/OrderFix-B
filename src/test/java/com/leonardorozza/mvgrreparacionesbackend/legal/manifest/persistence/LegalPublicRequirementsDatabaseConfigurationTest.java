@@ -363,20 +363,22 @@ class LegalPublicRequirementsDatabaseConfigurationTest {
     }
 
     @Test
-    void serviceExposesOnlyParameterlessRegistrationWithoutHttpOrPublicConstruction() {
+    void serviceExposesOnlyHistoricalAndBudgetedRegistrationWithoutHttpOrPublicConstruction() throws NoSuchMethodException {
         Class<?> type = LegalPublicRequirementsReadService.class;
         assertThat(Modifier.isPublic(type.getModifiers())).isTrue();
         assertThat(Modifier.isFinal(type.getModifiers())).isTrue();
         assertThat(type.getConstructors()).isEmpty();
         assertThat(type.getDeclaredAnnotations()).isEmpty();
-        assertThat(Arrays.stream(type.getDeclaredMethods())
-                .filter(method -> Modifier.isPublic(method.getModifiers())))
-                .singleElement().satisfies(method -> {
-                    assertThat(method.getName()).isEqualTo("readRegistration");
-                    assertThat(method.getParameterTypes()).isEmpty();
-                    assertThat(method.getReturnType()).isEqualTo(LegalPublicRegistrationRequirements.class);
-                    assertThat(method.getDeclaredAnnotations()).isEmpty();
-                });
+        var methods = Arrays.stream(type.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers())).toList();
+        assertThat(methods).containsExactlyInAnyOrder(
+                type.getDeclaredMethod("readRegistration"),
+                type.getDeclaredMethod("readRegistration", LegalRegistrationBudget.class));
+        assertThat(methods).allSatisfy(method -> {
+            assertThat(Modifier.isStatic(method.getModifiers())).isFalse();
+            assertThat(method.getReturnType()).isEqualTo(LegalPublicRegistrationRequirements.class);
+            assertThat(method.getDeclaredAnnotations()).isEmpty();
+        });
     }
 
     private static final class ServiceComposition implements AutoCloseable {

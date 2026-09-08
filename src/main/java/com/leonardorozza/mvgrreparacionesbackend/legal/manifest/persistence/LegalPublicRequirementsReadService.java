@@ -9,6 +9,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.Perfil
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.Objects;
+import java.util.function.Function;
 
 /** Complete registration requirements, accredited in the same transaction as their V28 aggregate. */
 public final class LegalPublicRequirementsReadService {
@@ -44,8 +45,17 @@ public final class LegalPublicRequirementsReadService {
 
     /** Returns a fully accredited observation only after commit, cleanup and the final deadline check. */
     public LegalPublicRegistrationRequirements readRegistration() {
+        return readRegistration(null, false);
+    }
+
+    /** Keep the public cap while charging this phase to the caller's original registration budget. */
+    public LegalPublicRegistrationRequirements readRegistration(LegalRegistrationBudget owner) {
+        return readRegistration(owner, true);
+    }
+
+    private LegalPublicRegistrationRequirements readRegistration(LegalRegistrationBudget owner, boolean suppliedOwner) {
         try {
-            return dataSource.withinDeadline(deadline -> {
+            Function<LegalPublicRequirementsDeadline, LegalPublicRegistrationRequirements> operation = deadline -> {
                 LegalApplicableScopeSet scopes = Objects.requireNonNull(resolver.resolve(
                         PerfilAgregadoLegal.REGISTRATION, LocaleLegal.ES_AR, AudienciaLegal.ADMIN_TITULAR),
                         "registration scopes");
@@ -60,7 +70,9 @@ public final class LegalPublicRequirementsReadService {
                     deadline.check();
                     return result;
                 }), "committed registration requirements");
-            });
+            };
+            return suppliedOwner ? dataSource.withinRegistrationBudget(owner, operation)
+                    : dataSource.withinDeadline(operation);
         } catch (LegalPublicRequirementsReadException failure) {
             throw failure;
         } catch (RuntimeException failure) {

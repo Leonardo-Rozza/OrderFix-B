@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales; sigue B2, luego B3 y M3C.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; sigue B3, luego M3C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -2769,6 +2769,182 @@ M3C conectará parser/HTTP/replay y control final de respuesta. B1 no acredita t
 ni una SLA física de cancelación. No se repitió clean verify completo: el último transversal es
 M3A (8227 casos) y los nuevos gates transversales quedan en B3/C. 15M3B y 15M continúan abiertos.
 Commit atómico `feat(legal): comparte plazo con el registro interno`, sin push.
+
+### Apertura 15M3B2 — 2026-09-08
+
+Se continúa la subdivisión aprobada de B con la adopción por lectura pública. Se elige componer el
+deadline local existente con el owner original mediante mínimo, en vez de sustituir el cap15 por
+30 s o reiniciar el plazo global. El propietario explícito conserva la separación de pools/roles
+y no requiere un contexto global ni cambios de configuración. B3/JPA y M3C/HTTP quedan pendientes.
+
+Baseline backend `4150573`, rama `codex/lanzamiento-publico-backend`, árbol limpio. B1 aprobó 433
+focales; último clean verify integral M3A: 8227 casos. Frontend `7545201` y sus dos rutas no
+versionadas preservados. Ocho archivos nominales fijados antes del código:
+
+- Existentes en `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/`:
+  `LegalPublicRequirementsDeadline.java`, `LegalPublicRequirementsDataSource.java` y
+  `LegalPublicRequirementsReadService.java`.
+- Nuevos tests en el paquete equivalente: `LegalPublicRequirementsBudgetTest.java`,
+  `LegalPublicRequirementsBudgetAdoptionTest.java` y `LegalPublicRequirementsSharedBudgetIT.java`.
+  El último contendrá su harness de observación y reutilizará fixtures públicos existentes sin editarlos.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Contrato:
+
+1. Nueva fábrica package-private `adoptRegistrationBudget(owner, localBudget, clock)` en Deadline.
+   Cada scope público exterior inicia su cap local configurado positivo de hasta 15 s y conserva
+   el owner30 ya iniciado. remainingMillis devuelve el mínimo de ambos restantes, redondeados hacia
+   arriba sólo si son positivos. No se deriva un nuevo plazo30 del valor redondeado ni se altera Budget.
+2. Primero observar owner, para conservar interrupción terminal y causa original de cleanup. El
+   adapter adoptado detecta expiración y regresión del reloj local contra la observación anterior,
+   soporta wrap corto y queda terminal ante fallo local; el camino histórico conserva su cálculo.
+   Un vencimiento local no inventa que transcurrieron 30 s ni se registra como cleanup. La futura
+   fachada debe detenerse ante fallo de lectura. Un scope exterior nuevo abre su cap local, pero
+   siempre comparte el restante del owner original; los anidados reutilizan exactamente el adapter.
+3. `withinRegistrationBudget(owner, work)` rechaza null, otro owner y adopción dentro de un scope
+   histórico activo antes de cambiar el ámbito o adquirir conexión. Same owner y withinDeadline
+   anidados reutilizan el adapter/cap; finally restaura/elimina el ámbito. No hay fallback por null.
+   El wrapper JDBC mantiene sus mecanismos de borrow, SQL, FETCH, watchdog y commit.
+4. En modo adoptado, recordCleanupFailure propaga al owner; conserva primera causa directa y
+   posteriores suprimidas, incluso después de vencimiento local/global. Un fallo de Connection.close
+   absorbido por Spring bloquea otras fases con ese owner. También registrar, sólo en modo adoptado,
+   un close fallido después de adquirir conexión si aún no se construyó Lease (por ejemplo, falla
+   setNetworkTimeout); evitar cierre/registro duplicado si el Lease ya tomó propiedad. Conservar
+   la excepción primaria y la causa de cierre suprimida, sin tratar un SQL de negocio como cleanup.
+   No se presenta esto como cobertura de
+   limpieza de Hibernate/Statement/ResultSet, que tiene su apertura específica en B3.
+5. `readRegistration(LegalRegistrationBudget owner)` mantiene el mismo flujo de resolución, preflight,
+   gate mutable compartido, materialización y acreditación. La firma sin argumentos sigue disponible.
+   Se mantiene REQUIRES_NEW/READ_COMMITTED, rol y pool públicos. Null/owner no disponible fallan con
+   LegalPublicRequirementsReadException, mensaje fijo y sin borrow; timeout conserva causa nula y
+   cleanup su causa original directa. Un fallo poscommit impide entregar la observación sin atribuir
+   rollback al agregado ya confirmado; ACK perdido conserva la cadena interna UNKNOWN existente.
+
+Gate focal, sin Maven concurrente: dos suites nuevas unitarias; regresiones PublicRequirements
+Deadline/DataSource/DatabaseConfiguration/HttpConfiguration/Controller/ReaderRegistration y
+RegistrationBudget/RegistrationBudgetAdoption. PostgreSQL16: nueva SharedBudgetIT con configuración
+pública real; regresiones PublicRequirementsReadServiceIT/CommitIT/DatabaseContextIT/HttpDeadlineIT/HttpIT
+y LegalRegistrationSharedBudgetIT. Acreditar mínimo de relojes independientes, caps configurados,
+anidamiento/restauración, rechazo preborrow, rol/SQL acotado, rollback, commit/ACK/close y reuso sin DML.
+Auditar XML frescos, fuentes congeladas y ambos artefactos. No repetir clean verify salvo fallo
+transversal; B3/C tendrán sus gates integrales. No cambian Reader, Gate, Budget, credenciales, flags,
+dependencias, frontend ni migraciones V27/V28/V29 congeladas. No conectar HTTP ni JPA y no prometer
+una SLA física de cancelación. Commit previsto `feat(legal): comparte plazo con lectura publica`, sin push.
+
+### Ajuste nominal 15M3B2 por contrato reflejado — 2026-09-08
+
+El primer verify focal terminó con 295 casos unitarios, un fallo y ningún error/omitido; Failsafe
+no llegó a ejecutarse. LegalPublicRequirementsDatabaseConfigurationTest exigía por reflexión una
+única firma pública sin parámetros. La sobrecarga con LegalRegistrationBudget es el cambio
+contractual deliberado de B2 y necesita actualizar esa expectativa; no se cambia producción para
+satisfacer la expectativa anterior. La compilación preliminar anterior sólo ajustó una aserción
+AssertJ ambigua sobre SQLException (implementa también Iterable), conservando el control SQLSTATE.
+
+Antes de editar ese test se añade el noveno archivo nominal:
+`src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPublicRequirementsDatabaseConfigurationTest.java`.
+La prueba seguirá exigiendo clase pública final, constructor no público y ausencia de anotaciones
+HTTP, pero enumerará exactamente readRegistration() y readRegistration(LegalRegistrationBudget),
+ambos con el retorno original y sin anotaciones. No se relaja a aceptar cualquier API adicional.
+Las tres fuentes productivas y los tres tests nuevos permanecen iguales desde el gate fallido.
+
+Resultado, log, hashes y los diez XML del intento se preservan antes de repetir el foco completo.
+No es un fallo transversal de comportamiento: la única discrepancia es el inventario intencional
+de métodos. Se mantiene el gate focal de 17 suites y la reserva de clean verify para B3/C.
+
+### Cierre 15M3B2 — 2026-09-08T17:37:14-03:00
+
+Implementados los nueve archivos nominales. La lectura pública puede adoptar el owner30 original
+mediante readRegistration(owner); el wrapper aplica min(restante local configurado, restante del
+owner) desde antes de adquirir conexión y durante SQL/FETCH/commit/cierre. El límite local sigue
+siendo positivo y de hasta 15 s. Las firmas históricas conservan el camino anterior. Reader,
+gate, Budget, configuración, roles y migraciones permanecen sin cambios.
+
+El adapter adoptado no permite aumentar el cap por regresión de reloj y vuelve terminal su fallo
+local; el owner continúa representando sus 30 s originales. Los anidados reutilizan exactamente
+el adapter; null, owner ajeno y adopción dentro de un scope histórico se rechazan sin fallback.
+El finally restaura/elimina el ámbito. Un cleanup se registra en el owner con causa original,
+también si falla el cierre tras adquirir conexión antes de construir el Lease. Ese caso conserva
+el fallo de preparación primario y el cierre suprimido; los checkpoints siguientes ven directamente
+el cleanup. Si ya existe Lease, su release idempotente evita cierre/registro duplicados.
+
+Gate focal aprobado: **410 pruebas** (295 Surefire + 115 PostgreSQL), 69 nuevas y
+341 de regresión. Diecisiete suites frescas, sin fallos/errores/omitidas/reintentos internos, y ambos
+artefactos empaquetados. verify focal terminó con BUILD SUCCESS en 147.202 s.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalPublicRequirementsBudgetTest | 23 |
+| LegalPublicRequirementsBudgetAdoptionTest | 30 |
+| LegalPublicRequirementsDeadlineTest | 9 |
+| LegalPublicRequirementsDataSourceTest | 19 |
+| LegalPublicRequirementsDatabaseConfigurationTest | 60 |
+| LegalPublicRequirementsHttpConfigurationTest | 32 |
+| LegalPublicRequirementsControllerTest | 64 |
+| LegalPublicRequirementsReaderRegistrationTest | 21 |
+| LegalRegistrationBudgetTest | 17 |
+| LegalRegistrationBudgetAdoptionTest | 20 |
+| LegalPublicRequirementsSharedBudgetIT | 16 |
+| LegalPublicRequirementsReadServiceIT | 34 |
+| LegalPublicRequirementsCommitIT | 10 |
+| LegalPublicRequirementsDatabaseContextIT | 7 |
+| LegalPublicRequirementsHttpDeadlineIT | 9 |
+| LegalRegistrationSharedBudgetIT | 12 |
+| LegalPublicRequirementsHttpIT | 27 |
+
+
+Las pruebas puras separan los epochs de los dos relojes y acreditan mínimo, redondeo, caps menores,
+vencimiento exacto, wrap corto y terminalidad local/global. La adopción acredita anidamientos,
+restauración, paso explícito público/privado, rechazo preborrow y cleanup incluido pre-Lease.
+Las notificaciones Spring sobre JDBC simulado no se presentan como persistencia PostgreSQL.
+
+La integración nueva usa la configuración pública real con rol restringido y dos relojes
+independientes. Observa el remanente local y el SQL de PostgreSQL acotado por el owner consumido,
+rechaza propietarios inválidos antes del pool y verifica rollback frente a vencimientos locales
+o globales durante lectura. Los fallos posteriores al commit no entregan observación ni inventan
+rollback del agregado confirmado; el ACK perdido sigue siendo UNKNOWN. Cleanup SQL/runtime
+bloquea fases posteriores del owner. Una operación nueva acredita el agregado mediante REUSED
+sin DML. Las regresiones incluyen el GET público, su deadline real y el escritor L3 de B1.
+
+La primera compilación preliminar detectó una aserción AssertJ ambigua sobre SQLException,
+que implementa también Iterable; se separó la comprobación de presencia y SQLSTATE22012.
+Después compiló. El primer verify focal falló únicamente en el inventario reflejado de una firma
+pública; el ajuste nominal anterior exige ahora exactamente las dos firmas aprobadas. El segundo
+verify focal aprobó completo. Los totales corresponden sólo a sus XML frescos, sin sumar el intento
+fallido ni reportes históricos. Las seis fuentes originales conservaron sus hashes entre ambos
+intentos; se añadió únicamente el test de inventario reflejado. El gate final no tuvo reintentos JUnit.
+
+La revisión detectó antes del código la limpieza parcial previa a Lease, incluida en el alcance y
+sus tests con preservación de la excepción primaria. Producción y las pruebas nuevas se revisaron
+independientemente sin hallazgos pendientes. La prueba SQL de 2 s observa la configuración efectiva;
+no fuerza una cancelación cronometrada. En el IT, Connection.close devuelve el préstamo Hikari y
+activeConnections=0 acredita su liberación; no equivale a terminar el socket físico. Los comentarios
+y diagnósticos sintéticos se precisaron antes del gate.
+
+Las notas de cierre se registraron después de BUILD SUCCESS y de la auditoría aprobada. La revisión
+automática había rechazado guardarlas anticipadamente para evitar confundir revisión estática con
+resultado de ejecución. No quedó ninguna acción bloqueada.
+
+Comando focal con Java 21.0.10 y sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never -Dtest=LegalPublicRequirementsBudgetTest,LegalPublicRequirementsBudgetAdoptionTest,LegalPublicRequirementsDeadlineTest,LegalPublicRequirementsDataSourceTest,LegalPublicRequirementsDatabaseConfigurationTest,LegalPublicRequirementsHttpConfigurationTest,LegalPublicRequirementsControllerTest,LegalPublicRequirementsReaderRegistrationTest,LegalRegistrationBudgetTest,LegalRegistrationBudgetAdoptionTest -Dit.test=LegalPublicRequirementsSharedBudgetIT,LegalPublicRequirementsReadServiceIT,LegalPublicRequirementsCommitIT,LegalPublicRequirementsDatabaseContextIT,LegalPublicRequirementsHttpDeadlineIT,LegalRegistrationSharedBudgetIT,LegalPublicRequirementsHttpIT verify
+```
+
+Auditoría aprobada de XML frescos contra métodos compilados, siete fuentes Java congeladas y ambos
+JAR: clases/recursos coinciden con target, Start-Class web/CLI correctos, sin tests, duplicados ni
+archivos *secret*.properties. Este último chequeo de nombres no es un análisis genérico de secretos.
+V27/V28/V29 conservan sus hashes en fuente/target/JAR; dependencias y frontend intactos, incluidas
+las rutas no versionadas. El código productivo cambió sólo en los tres archivos previstos.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `042a4af2ea32ab09dbdaaec6046e2bf788e6f315da0e5d0233f026adef09ff51`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `29eb7b65f974c30323b75f8478a2541f64641aa6dcb360faa92ca7eb93dac57a`.
+
+**15M3B2 cerrado; sigue B3**, sesión JPA acotada con pool privado/credenciales de aplicación y
+captura de limpieza absorbida por Hibernate. M3C conectará parser/HTTP/replay y el control final
+de respuesta. B2 no acredita todavía esos flujos ni una SLA física de cancelación. No se repitió
+clean verify completo: el último integral es M3A (8227 casos), con nuevos gates en B3/C. B y M
+siguen abiertos. Commit atómico `feat(legal): comparte plazo con lectura publica`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 
