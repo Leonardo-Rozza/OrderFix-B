@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; siguen B3B/B3C y M3C.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; B3B cerrado con 342 focales; siguen B3C y M3C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -3137,6 +3137,200 @@ emisión con checkpoints y gate transversal. M3C posterior conectará registro H
 final de respuesta. B3, M3B y M siguen abiertos. No se repitió clean verify completo en este corte
 inerte; el último integral continúa siendo M3A (8227 casos). Commit atómico
 `feat(legal): acota recursos JDBC de sesion`, sin push.
+
+### Apertura 15M3B3B — 2026-09-08
+
+B3B implementa el dueño de recursos y la composición Boot como módulo explícitamente importable,
+no escaneable, siguiendo las configuraciones legales existentes. No agrega un flag ni modifica el
+arranque actual: M3C incorporará el módulo a sus capacidades/configuración HTTP. Se elige este módulo
+frente a crear un segundo bean DataSource ordinario (altera el backoff/selección de Boot) o decorar
+por defecto toda la aplicación antes de que exista el consumidor legal. B3B queda completo con su
+composición importable y pruebas propias; B3C conserva emisión/checkpoints y M3C la activación.
+
+Baseline backend 009491b, limpio en codex/lanzamiento-publico-backend. B3A aprobó 222 focales; último
+clean verify integral M3A (8227 casos). Frontend 7545201 y .agents/ y public/OrdenFix project naming/ preservados.
+Nueve archivos nominales, registrados antes del código:
+
+- Nuevos en src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/:
+  LegalRegistrationSessionPoolFactory.java, LegalRegistrationSessionResources.java y
+  LegalRegistrationSessionDataSourceConfiguration.java.
+- Nuevos tests del paquete equivalente: LegalRegistrationSessionPoolFactoryTest.java,
+  LegalRegistrationSessionResourcesTest.java, LegalRegistrationSessionDataSourceConfigurationTest.java
+  y LegalRegistrationSessionDataSourceWiringIT.java.
+- Este plan y docs/plans/2026-09-06-legal-account-consent-design.md.
+
+Contrato de composición y recursos:
+
+1. Configuración sin @Configuration/@Component ni autoimport. Beans ordinarios para holder, BPP y
+   comprobación obligatoria de composición; ningún bean nuevo de tipo DataSource/Hikari ni segundo
+   candidato. BPP static, Ordered antes de los observadores sin Ordered, sólo nombre exacto dataSource
+   y después de initialization. El holder se resuelve gestionado antes de adquirir recursos propios,
+   sin inyectar DataSource en su constructor ni crear ciclos con EMF. Sólo Hikari directo es nominal.
+2. El BPP ve Hikari después del binding y JdbcConnectionDetails. No exige un pool ya arrancado ni
+   abre conexión histórica para copiarlo. El holder instala una sola identidad histórica; un intento
+   distinto/tras cierre falla cerrado. Publica el router sólo tras crear ambos recursos privados.
+   Su API pública permite adoptar el owner30; no expone pool/credenciales. Cierre idempotente del
+   router y después pool dedicado, intentando ambos aun ante fallo; nunca cierra el pool histórico.
+3. Spring registra destrucción del original después de completar los BPP. Por ello un fallo runtime
+   propio de composición se retiene en el holder y el BPP devuelve provisionalmente el original.
+   Un bean obligatorio @Lazy(false) y @DependsOn(dataSource) exige instalación correcta y falla el refresh una vez
+   registrado el cierre del original. No existe fallback operacional: el contexto no completa su
+   arranque y la API del holder rechaza cualquier ámbito mientras esté pendiente del gate/fallido/no instalado/cerrado.
+   Se conserva el fallo primario y se cierran recursos privados parciales. Probar rechazo en el BPP
+   y rechazo posterior; no atribuir al framework una propiedad de recursos todavía no registrada.
+4. Factory nominal para Hikari PostgreSQL por jdbcUrl, snapshot de URL/credenciales/Properties
+   efectivos en esa composición. No usa Environment/DB_*, copyStateTo, executors/hooks compartidos
+   ni seguimiento de mutaciones JMX/rotación posterior: esos cambios requieren recomposición.
+   Reproduce la precedencia real URL > credenciales de la ruta Hikari > propiedades del driver,
+   incluidos los casos de credenciales Hikari nulas. Usuario y contraseña efectivos explícitos;
+   no resolver identidad por user.name, .pgpass, service, provider dinámico ni DataSource/JNDI custom.
+5. URL nominal con host y base explícitos. Traslada query a copia de propiedades conservando la
+   semántica pgjdbc acreditada; rechaza parámetros de ubicación alternativos, service, opciones o
+   factories que alteren identidad/transporte fuera del contrato. No normaliza usuario/contraseña
+   ni toca URL/props originales. Valores URL de timeout no pueden anular los límites privados.
+   DataSource JDBC interno con loginTimeout local evita que Hikari invoque el setLoginTimeout global
+   de DriverDataSource. No importa pgjdbc en compile ni cambia dependencias. Validación con mensajes
+   fijos sin URL/credenciales/cause que incluya entradas; diagnósticos de los recursos redactados.
+6. Pool privado minIdle0/max2, borrow1000ms/validation1000ms/initFail-1; driver connect/login/cancel1s,
+   socket6s y query5s. Copiar autoCommit exacto y estado base readOnly/isolation/catalog/schema del
+   Hikari efectivo; no cambiar pool histórico. El router B3A limita cada IO al remanente del owner.
+   No prometer una SLA física de adquisición/cancelación/teardown; el pool limita la espera nominal.
+7. Boot/JPA bajo import explícito: misma referencia final para DataSource, EMF, JpaTM y JdbcTemplate;
+   bootstrap/legacy sigue histórico, ámbito legal va al dedicado con misma DB/rol de aplicación.
+   Probar autoCommit=false, REQUIRES_NEW/RC/readOnly y contextos independientes. Un observador sin
+   Ordered por fuera debe conservar su identidad/captura de commit. M2/M3A no se modifican ni relajan.
+
+Gate focal: cuatro suites nuevas; regresiones B3A, Budget, K, RegistroService/LegacyWriter, M2/M3A,
+auth/JWT/tenant y aislamiento de configuración legal/CLI. WiringIT usa Boot/JPA/PostgreSQL 16 reales,
+entidades productivas y configuración explícita; no agrega entidad/fixture escaneable global.
+Acreditar propiedades Hikari/JdbcConnectionDetails prevalentes, URL/credenciales conflictivas,
+timeouts acotados, DriverManager.loginTimeout intacto y cierre normal/refresh fallido. Auditoría de
+XML frescos contra clases y ambos JAR, con baseline productivo inalterado y V27/V28/V29 congeladas.
+No clean verify integral en este módulo inerte salvo fallo transversal; al modificar K/activar la
+composición corresponderá su gate transversal. No modificar B3A, K, HTTP, roles, migraciones,
+configuración activa ni frontend. Commit previsto feat(legal): compone recursos de sesion JPA.
+
+### Ajuste de inicialización 15M3B3B — 2026-09-08
+
+El primer foco falló al registrar una lista vacía de configuraciones en once casos del WiringIT;
+se corrigió esa preparación sin tocar producción. El segundo foco llegó a la primera conexión
+privada y detectó un defecto del factory con autoCommit=false y schema explícito: Hikari configura
+el schema después del aislamiento, y PgConnection.setSchema abre una transacción mediante SET.
+JpaTransactionManager no puede entonces pasar de REPEATABLE_READ a READ_COMMITTED.
+
+Decisión antes de corregir producción: con autoCommit=false, el pool privado usará
+isolateInternalQueries=true y connectionInitSql constante SELECT 1. Hikari confirma esa consulta y
+la configuración previa antes de entregar cada conexión física. Se conserva el schema y autoCommit
+false; no se confirma trabajo del consumidor porque la inicialización precede a su préstamo. Sólo
+isolateInternalQueries no basta con initSql nulo. Continúan rechazados los initSql arbitrarios del
+histórico. La prueba mantendrá el primer préstamo sin calentamiento y comprobará también una
+conexión física de reemplazo, con schema del driver distinto del schema Hikari.
+
+Los intentos fallidos quedan preservados. La corrección pertenece a la nueva factory importable;
+no afecta fuentes/configuración productivas preexistentes. Se repetirá el gate focal completo y
+la auditoría de baseline; no se sustituye por ello el clean verify transversal pendiente en B3C.
+
+### Cierre 15M3B3B — 2026-09-08T20:05:14-03:00
+
+Implementados los nueve archivos nominales: factory de pool, holder de recursos y configuración
+importable, cuatro suites nuevas y los dos documentos. No se modifica ninguna fuente productiva
+existente ni se activa la composición en el arranque actual. B3C integra la emisión con checkpoints;
+M3C conserva la importación del módulo y sus capacidades/configuración HTTP.
+
+El factory toma un snapshot del Hikari efectivo, preserva la precedencia de credenciales y estado
+base, y crea un pool privado con límites locales. El holder posee ese pool y el router B3A. Su API
+sólo permite trabajo después del gate; los estados pendiente, fallido y cerrado rechazan la adopción.
+El BPP Ordered decora el único dataSource después del binding/details. El gate obligatorio no-lazy
+rechaza una composición fallida después del registro de destrucción del original; Boot cierra el
+histórico y el holder cierra los recursos privados. No se agrega otro candidato DataSource.
+
+Gate focal aprobado: **342 pruebas** (259 Surefire + 83 Failsafe), 108 nuevas y
+234 de regresión. Veintiuna suites frescas sin fallos, errores, omitidas ni reintentos internos
+en la ejecución final. verify focal terminó con BUILD SUCCESS en 78.792 s.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalRegistrationSessionPoolFactoryTest | 68 |
+| LegalRegistrationSessionResourcesTest | 12 |
+| LegalRegistrationSessionDataSourceConfigurationTest | 12 |
+| LegalRegistrationSessionDataSourceTest | 25 |
+| LegalRegistrationSessionCleanupTest | 17 |
+| LegalRegistrationBudgetTest | 17 |
+| AccountSessionPolicyTest | 35 |
+| RegistroServiceTest | 10 |
+| LegacyRegistrationAccountWriterTest | 19 |
+| AccountVerificationTokenIssuerTest | 18 |
+| AccountVerificationNotifierTest | 7 |
+| AuthTests | 8 |
+| JwtSecurityIntegrationTests | 5 |
+| TenantIsolationTests | 6 |
+| LegalRegistrationSessionDataSourceWiringIT | 16 |
+| LegalRegistrationSessionDataSourceIT | 17 |
+| AccountSessionPolicyIT | 10 |
+| AccountVerificationPostCommitIT | 17 |
+| LegacyRegistrationPostCommitIT | 14 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+| LegalManifestCliIsolationIT | 3 |
+
+
+Alcance de la evidencia nueva:
+
+- FactoryTest (68) verifica copia defensiva, precedencia Hikari/URL/propiedades, parsing contrastado
+  con el driver instalado, límites privados, ausencia de préstamo al crear y diagnósticos de
+  configuración sin entradas sensibles. Las dos variantes de autoCommit verifican la inicialización
+  interna condicional sin alterar el histórico; esos asserts no sustituyen la evidencia PostgreSQL.
+- ResourcesTest (12) usa dobles para propiedad/cierre, estados, rechazo de reinstalación ajena y
+  fallo parcial. Acredita intentos de cierre de ambos recursos ante RuntimeException/Error, causa
+  primaria y supresión, así como abort/return antes de cerrar el pool; no mide latencia física.
+- ConfigurationTest (12) usa el ciclo real de Spring y el postprocesador real de lazy de Boot con
+  DataSources de prueba. Acredita orden after-initialization, observador exterior, gate obligatorio
+  aun con lazy global y destrucción del original después de un fallo propio retenido. No arranca
+  un servidor HTTP ni simula que Spring registra destrucción antes de terminar sus BPP.
+- WiringIT (16) usa Boot 4.0.6, Spring 7.0.7, Hibernate 7.2.12.Final, Hikari 7.0.2, pgjdbc 42.7.10 y
+  PostgreSQL 16, con entidades y UserRepository productivos. Comprueba identidad única del DataSource
+  en EMF/JpaTM/JdbcTemplate, selección de conexiones por ámbito, mismo rol/base, precedencia efectiva
+  de Hikari/JdbcConnectionDetails/URL, timeout local sin cambio global adicional, suspensión y
+  rollback de una transacción exterior, observador de commit y aislamiento entre contextos.
+  La configuración autoCommit=false/readOnly=true/REPEATABLE_READ conserva schema public frente a
+  currentSchema=pg_catalog del driver. Tanto el primer préstamo sin calentamiento como el reemplazo
+  de PID diferente admiten una nueva TX readOnly/READ_COMMITTED y mantienen filas/xmin sin DML.
+  El fallo tardío de refresh ocurre después del gate y bootstrap del EMF, con JDBC privado real;
+  no se atribuye a ese caso una consulta JPA que no ejecutó. Los otros ámbitos sí consultan con JPA.
+
+Hubo dos intentos fallidos conservados antes de la ejecución final: el primero tuvo once errores
+por registro de un array vacío en el fixture; el segundo tuvo un error real de inicialización del
+pool nuevo. El ajuste quedó documentado antes de modificar producción. El SELECT 1 interno y el
+commit de Hikari ocurren al crear la conexión física, antes de prestarla, y preservan el SET de
+schema; nunca confirman trabajo del consumidor ni aceptan initSql externo. La ejecución final no
+contiene fallos ni reintentos internos. No se presentan los intentos previos como evidencia aprobada.
+
+La revisión de composición, recursos y causa de inicialización no encontró pendientes dentro de
+este módulo importable. El gate no acredita todavía checkpoints productivos de BCrypt/JWT ni
+respuesta HTTP de extremo a extremo: corresponden a B3C/M3C. La corrección queda contenida en las
+fuentes nuevas; por eso se mantiene el gate focal previsto y el último clean verify integral M3A.
+
+Comando con Java 21.0.10 y sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never -Dtest=LegalRegistrationSessionPoolFactoryTest,LegalRegistrationSessionResourcesTest,LegalRegistrationSessionDataSourceConfigurationTest,LegalRegistrationSessionDataSourceTest,LegalRegistrationSessionCleanupTest,LegalRegistrationBudgetTest,AccountSessionPolicyTest,RegistroServiceTest,LegacyRegistrationAccountWriterTest,AccountVerificationTokenIssuerTest,AccountVerificationNotifierTest,AuthTests,JwtSecurityIntegrationTests,TenantIsolationTests -Dit.test=LegalRegistrationSessionDataSourceWiringIT,LegalRegistrationSessionDataSourceIT,AccountSessionPolicyIT,AccountVerificationPostCommitIT,LegacyRegistrationPostCommitIT,LegalRegistrationDatabaseIsolationIT,LegalManifestCliIsolationIT verify
+```
+
+Auditoría aprobada de XML frescos contra métodos compilados, siete fuentes Java congeladas y ambos
+JAR: clases/recursos coinciden con target, Start-Class web/CLI correctos, sin tests ni entradas
+duplicadas. El chequeo de nombres *secret*.properties no sustituye un análisis genérico de secretos.
+Todos los elementos productivos de B3A conservan sus bytes; se agregan sólo clases derivadas de las
+tres fuentes nuevas. V27/V28/V29 mantienen hashes en fuente/target/JAR. Dependencias, roles,
+configuración activa y frontend permanecen intactos, incluidas las rutas no versionadas del frontend.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `c201d120e05b1d9bea52f733dd3e64318a917f4a43497a6f43a296fc56cf4f3f`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `5a6c594e196ca03a963edc47038ee8396662473d5b8393050345cc93ab2dddcd`.
+
+**15M3B3B cerrado; sigue B3C**, emisión de sesión con checkpoints de consulta, BCrypt, JWT y salida
+transaccional, y su gate transversal. M3C posterior conecta registro HTTP/replay y activa el módulo
+bajo sus capacidades/configuración. B3, M3B y M siguen abiertos. El último clean verify integral
+continúa siendo M3A (8227 casos); este corte importable ejecutó su gate focal. Commit atómico
+`feat(legal): compone recursos de sesion JPA`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 

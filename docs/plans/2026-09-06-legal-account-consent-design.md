@@ -1208,3 +1208,44 @@ La notificación de finalización de JpaTM no determina por sí sola el resultad
 BCrypt, JWT y salida transaccional. Todavía no se acredita esa emisión ni HTTP/replay de M3C.
 No hay activación, cambios de K/login/configuración/roles/migraciones/frontend ni push. Último
 clean verify integral M3A (8227 casos). Commit `feat(legal): acota recursos JDBC de sesion`.
+
+### Apertura 15M3B3B — 2026-09-08
+
+Composición Boot/JPA explícitamente importable y no escaneable: holder dueño del pool privado/router,
+BPP post-init sobre el único dataSource y gate obligatorio @Lazy(false) de instalación. M3C conserva la activación;
+no hay nuevo flag ni segundo DataSource. La copia proviene del Hikari efectivo tras binding/details,
+reproduce precedencia de URL/credenciales/props y fija límites en una fuente JDBC privada cuyo
+loginTimeout es local. No copyStateTo ni cambio del DriverManager global; snapshots no siguen JMX.
+
+El rechazo runtime del BPP se difiere al bean obligatorio dependiente del dataSource, después del
+registro de su destrucción. El holder queda fallido y no admite trabajo: el contexto no arranca con
+fallback. El holder nunca cierra histórico; Boot conserva esa propiedad. Probar recursos parciales,
+refresh fallido y cierre normal, identidad JPA/JdbcTemplate y observador externo conservado.
+
+Nueve archivos nominales en el plan antes del código: tres main, cuatro tests y dos documentos.
+Gate focal y PostgreSQL 16 con Boot/JPA reales; última evidencia integral M3A (8227 casos). B3C integra los
+checkpoints de sesión y M3C HTTP/replay. No modificar B3A, K, roles, migraciones ni frontend; sin push.
+
+### Ajuste de inicialización 15M3B3B — 2026-09-08
+
+El foco PostgreSQL descubrió que setSchema con autoCommit=false deja la primera conexión nueva en
+transacción antes de JpaTransactionManager. Se decide finalizar la inicialización privada con
+SELECT 1 fijo e isolateInternalQueries=true sólo en ese modo; Hikari confirma el schema antes del
+préstamo, conservando autoCommit y sin ejecutar trabajo del consumidor. No se acepta initSql
+arbitrario ni se calienta el pool para ocultar el caso. Se repetirá el gate focal del módulo inerte.
+
+### Cierre 15M3B3B — 2026-09-08T20:05:14-03:00
+
+Módulo explícitamente importable con factory, holder y BPP sobre el único dataSource. La creación
+privada preserva identidad/configuración efectiva y aplica límites sin cambiar el pool histórico
+ni el timeout global JDBC. El gate obligatorio no-lazy rechaza composición fallida después del
+registro de destrucción; estados pendientes/fallidos/cerrados no autorizan trabajo del holder.
+
+**342 pruebas focales aprobadas**, 108 nuevas (259 Surefire + 83 Failsafe en
+total), y auditoría de fuentes/reportes/ambos JAR aprobada. El plan diferencia simulaciones de los
+casos Boot/JPA/PostgreSQL y documenta los resultados. No se modificaron B3A, K, HTTP, configuración
+activa, roles, migraciones ni frontend. No se activa el módulo ni se hizo push.
+
+**Sigue B3C**, emisión con checkpoints y gate transversal; M3C integra HTTP/replay e importa el
+módulo. Último clean verify integral M3A (8227 casos). Commit
+`feat(legal): compone recursos de sesion JPA`.
