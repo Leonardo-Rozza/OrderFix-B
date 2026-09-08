@@ -102,6 +102,24 @@ final class LegalPrivateRequirementsDataSource extends AbstractDataSource implem
     <T> T withinDeadline(Function<LegalPrivateRequirementsDeadline, T> operation) {
         LegalPrivateRequirementsDeadline previous = current.get();
         LegalPrivateRequirementsDeadline deadline = previous == null ? newDeadline() : previous;
+        return withinScope(previous, deadline, operation);
+    }
+
+    /** Only registration may adopt an explicit owner; a nested operation cannot replace it. */
+    <T> T withinRegistrationBudget(LegalRegistrationBudget owner,
+            Function<LegalPrivateRequirementsDeadline, T> operation) {
+        LegalPrivateRequirementsDeadline previous = current.get();
+        if (!registrationBoundary || owner == null
+                || previous != null && !previous.usesRegistrationBudget(owner)) {
+            throw new LegalPrivateRequirementsReadException();
+        }
+        LegalPrivateRequirementsDeadline deadline = previous == null
+                ? LegalPrivateRequirementsDeadline.adoptRegistrationBudget(owner) : previous;
+        return withinScope(previous, deadline, operation);
+    }
+
+    private <T> T withinScope(LegalPrivateRequirementsDeadline previous,
+            LegalPrivateRequirementsDeadline deadline, Function<LegalPrivateRequirementsDeadline, T> operation) {
         current.set(deadline);
         try {
             requireOpen();

@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15L completo en L1/L2/L3. 15M1/M2/15M3A cerrados; clean verify fresco con 8227 pruebas. Siguen M3B plazo/JPA y M3C HTTP/replay.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales; sigue B2, luego B3 y M3C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -2614,6 +2614,161 @@ de secretos. Sin cambios de permisos JDBC, migraciones, dependencias ni frontend
 M3 y 15M permanecen abiertos. A no acredita plazo de 30 s ni replay legal ni concurrencia de reenvíos;
 los flags/rollout siguen igual y 15P conserva su seguimiento. Commit atómico
 `refactor(auth): emite sesion despues de confirmar el alta`, sin push.
+
+### Subdivisión 15M3B y apertura 15M3B1 — 2026-09-08
+
+Se mantiene el diseño aprobado y se divide B antes del código para evitar un corte de dieciocho
+archivos que mezcle tres consumidores distintos:
+
+- **B1 — Propietario del presupuesto y adopción por el escritor legal.** Un objeto opaco con 30 s
+  fijos se inicia antes de la futura lectura HTTP y se pasa explícitamente a L3, que conserva el
+  tiempo consumido y su evidencia de commit. Se implementa ahora y se verifica con PostgreSQL.
+- **B2 — Adopción por lectura pública.** Su deadline será el mínimo entre el límite local original
+  de hasta 15 s y el restante de B1. Mantener rol/pool públicos y GET histórico; apertura nominal propia.
+- **B3 — Sesión JPA acotada.** Scope sobre un único DataSource de aplicación, pool dedicado privado
+  en un holder y credenciales de aplicación. Fuera del scope, delegación al pool histórico. No basta
+  el timeout de TX. Capturar cierres/limpieza de Statement/ResultSet que Hibernate puede absorber,
+  sin intoxicar el presupuesto por cualquier SQL de negocio como 55P03. Un segundo bean DataSource
+  ordinario podría alterar la autoconfiguración: el wiring tendrá evidencia propia y gate transversal.
+
+Se elige paso explícito de un presupuesto opaco sobre un owner global ThreadLocal: permite compartir
+el plazo entre contextos aislados sin depender de beans/credenciales, y hace visible su procedencia.
+Cada DataSource conserva su ámbito local para los colaboradores anidados. Se descarta reiniciar 30 s
+en cada consumidor, porque ampliaría el total. B1 no cierra B ni conecta aún HTTP, lectura pública o JPA.
+
+Baseline `8c58a34`, rama `codex/lanzamiento-publico-backend`, árbol limpio; último clean verify fresco
+aprobó 8227 casos. Frontend `7545201` y sus dos rutas no versionadas preservados. Nueve archivos nominales:
+
+- Nuevo `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationBudget.java`.
+- Existentes en el mismo paquete: `LegalPrivateRequirementsDeadline.java`,
+  `LegalPrivateRequirementsDataSource.java` y `LegalRegistrationService.java`.
+- Nuevos tests en el paquete equivalente: `LegalRegistrationBudgetTest.java`,
+  `LegalRegistrationBudgetAdoptionTest.java` y `LegalRegistrationSharedBudgetIT.java`.
+  El último reutiliza el fixture PostgreSQL L3 existente sin editarlo.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Contrato B1:
+
+1. LegalRegistrationBudget es final, sin Spring/JDBC/JPA/HTTP ni datos de cuenta. start() inicia
+   exactamente 30 s con System.nanoTime; el reloj inyectable sólo es accesible en paquete para tests.
+   Expone check(), remainingMillis() y recordCleanupFailure(Throwable), sin setter, reset ni Duration
+   público. Redondea fracciones positivas hacia arriba, rechaza el instante exacto del vencimiento
+   y conserva el wrap de nanoTime durante un intervalo corto. Expiración, reloj regresivo detectado
+   e interrupción invalidan el owner de forma terminal; no se limpia el flag de interrupción.
+   Excepción anidada fija y toString redactado, sin exponer reloj ni entradas. Un cleanup registrado
+   conserva la primera causa y las posteriores suprimidas, y bloquea cualquier fase posterior.
+2. La fábrica privada registration(clock) conserva 30 s propios para llamadores actuales y usa el
+   mismo mecanismo. Una fábrica nominal de adopción enlaza el owner suministrado sin iniciar reloj.
+   La frontera histórica privada de hasta 15 s permanece. La adaptación mantiene la excepción
+   privada y la causa original de cleanup para no cambiar la clasificación L3.
+3. Sólo el DataSource de registro admite withinRegistrationBudget(owner, work). Un owner null o
+   ajeno al activo se rechaza antes de borrow y sin fallback. Anidamientos con el mismo owner y los
+   colaboradores históricos withinDeadline reutilizan exactamente el deadline activo; finally
+   restaura/elimina el ámbito. El wrapper JDBC conserva sus límites de borrow/SQL/FETCH/connection
+   close y sus reglas de commit. No se declara acreditada la limpieza específica de Hibernate en B1.
+4. Nuevo overload register(registration, key, revision, acceptances, metadata, owner). La firma
+   anterior sigue disponible con presupuesto propio. Validación, reserva, replay, materialización,
+   preparación, DML, commit y cierre usan el owner original. Null/agotamiento previo implican
+   UNAVAILABLE/NONE sin borrow. Vencimiento tras commit no equivale a rollback: conservar
+   COMMITTED/PERSISTED/receipt o replay acreditado según L3. El owner nunca decide persistencia.
+5. Un objeto nuevo representa una nueva operación. Reutilizar un owner sólo puede reducir su tiempo;
+   no hay propagación automática entre requests ni estado global nuevo. B2/B3 deberán recibir ese
+   mismo owner. El inicio HTTP antes del parser y el control final de respuesta siguen en M3C;
+   email best effort queda fuera del plazo legal. No se promete una SLA física de cancelación:
+   driver/teardown pueden terminar después, pero un resultado vencido no puede entregarse con éxito.
+
+Gate focal: tres suites nuevas; regresión LegalPrivateRequirementsDeadlineTest,
+LegalPrivateRequirementsDataSourceTest, LegalRegistrationServiceTest, LegalRegistrationTransactionBoundaryTest,
+LegalRegistrationDatabaseConfigurationTest, LegalPublicRequirementsReaderRegistrationTest y parser M1.
+PostgreSQL 16: nueva LegalRegistrationSharedBudgetIT y regresiones LegalRegistrationServiceIT,
+LegalRegistrationCommitIT y LegalRegistrationDatabaseIsolationIT. Probar tiempo ya consumido, rechazo
+antes de borrow, clock wrap/interrupción/cleanup, anidamiento/restauración, rollback real, replay sin DML
+y commit/ACK/cierre tardíos con evidencia conservada. Auditar XML, fuentes, clases, recursos y ambos JAR.
+No repetir clean verify completo salvo fallo transversal; el último fresco es M3A y B3/C tienen sus
+gates transversales propios. No modificar roles, migraciones V27/V28/V29, configuración, HTTP, K,
+legacy, frontend ni dependencias. Commit previsto `feat(legal): comparte plazo con el registro interno`, sin push.
+
+### Cierre 15M3B1 — 2026-09-08T16:55:44-03:00
+
+Implementados los nueve archivos nominales. LegalRegistrationBudget fija 30 s desde su creación y
+L3 puede adoptar explícitamente el mismo objeto, sin reiniciar el tiempo consumido. El owner no
+depende de frameworks, datos de cuenta ni credenciales. Expiración, regresión del reloj e interrupción
+son terminales; el cleanup conserva su causa original y bloquea fases posteriores. La API histórica
+conserva su presupuesto propio y la frontera privada de hasta 15 s mantiene su camino original.
+
+El DataSource de registro rechaza owner null o incompatible antes de adquirir conexión y restaura
+el ámbito después de éxito o fallo. La transacción L3 sigue siendo REQUIRES_NEW/READ_COMMITTED con
+rol restringido. La extracción del callback mantiene validación, reserva, replay, materialización,
+preparación, escritura y evidencia de completion/persistencia/receipt existentes.
+
+Gate focal aprobado: **433 pruebas** (365 Surefire + 68 PostgreSQL), 49 nuevas y
+384 de regresión, catorce suites frescas sin fallos/errores/omitidas/reintentos. verify focal
+terminó con BUILD SUCCESS en 107.89 s y empaquetó ambos artefactos.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalRegistrationBudgetTest | 17 |
+| LegalRegistrationBudgetAdoptionTest | 20 |
+| LegalPrivateRequirementsDeadlineTest | 11 |
+| LegalPrivateRequirementsDataSourceTest | 34 |
+| LegalRegistrationServiceTest | 32 |
+| LegalRegistrationTransactionBoundaryTest | 21 |
+| LegalRegistrationDatabaseConfigurationTest | 39 |
+| LegalPublicRequirementsReaderRegistrationTest | 21 |
+| LegalRegistrationRequestsTest | 91 |
+| LegalRegistrationHttpExceptionTest | 79 |
+| LegalRegistrationSharedBudgetIT | 12 |
+| LegalRegistrationServiceIT | 31 |
+| LegalRegistrationCommitIT | 19 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+
+
+Los tests del owner acreditan redondeo, vencimiento exacto, wrap corto de nanoTime, reloj regresivo,
+interrupción conservada y causas de cleanup. La adopción prueba anidamiento por identidad, aislamiento
+entre hilos, paso explícito entre fronteras, restauración y callbacks reales de Spring sobre JDBC
+simulado. Estos últimos no se presentan como evidencia de persistencia PostgreSQL.
+
+La nueva integración ejecuta PostgreSQL16 con el fixture restringido L3. Un owner con 28 s ya
+consumidos limita statement_timeout a 2000 ms bajo el rol de registro; esta observación verifica
+la configuración real, sin forzar una cancelación de 2 s. Owner inválido/agotado o con menos del
+mínimo de préstamo no llega al pool. Expirar en lectura o hash revierte realmente y permite una
+operación posterior con la API histórica. Expirar después de afterCommit conserva el recibo nuevo
+o de replay; CLOSE_SQL/CLOSE_RUNTIME impiden usar el owner en otra fase aun con commit confirmado.
+Un ACK perdido sigue siendo UNKNOWN y una operación nueva acredita el replay sin DML. Las filas
+durables, incluido xmin, se contrastan desde una conexión independiente.
+
+La compilación preliminar de las siete fuentes en scratch detectó una ambigüedad de inferencia
+genérica en siete aserciones AssertJ del nuevo AdoptionTest. Se hicieron explícitos los tipos del
+deadline, conservando las mismas aserciones de identidad. No fue un fallo productivo ni transversal.
+
+La segunda compilación preliminar aprobó; el primer verify focal posterior aprobó completo, sin
+reintentos Maven ni cambios de código durante el gate. La revisión independiente de producción,
+tests unitarios y PostgreSQL cerró sin hallazgos accionables. El marcador de revisión se guardó
+sólo después del BUILD SUCCESS y de la auditoría: su escritura anticipada había sido rechazada
+por la revisión automática para impedir un cierre prematuro.
+
+Comando focal con Java 21.0.10, sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never -Dtest=LegalRegistrationBudgetTest,LegalRegistrationBudgetAdoptionTest,LegalPrivateRequirementsDeadlineTest,LegalPrivateRequirementsDataSourceTest,LegalRegistrationServiceTest,LegalRegistrationTransactionBoundaryTest,LegalRegistrationDatabaseConfigurationTest,LegalPublicRequirementsReaderRegistrationTest,LegalRegistrationRequestsTest,LegalRegistrationHttpExceptionTest -Dit.test=LegalRegistrationSharedBudgetIT,LegalRegistrationServiceIT,LegalRegistrationCommitIT,LegalRegistrationDatabaseIsolationIT verify
+```
+
+Auditoría aprobada de XML frescos contra métodos compilados, siete fuentes Java congeladas y ambos
+JAR: clases y recursos coinciden con target, Start-Class web/CLI correctos, sin clases de tests,
+entradas duplicadas ni archivos *secret*.properties. La comprobación de estos nombres no equivale
+a un análisis genérico de secretos. V27/V28/V29 conservan sus hashes en fuente/target/JAR; no cambian
+dependencias, roles, configuración, HTTP ni frontend. Los archivos no versionados se preservan.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `fce067febf930226850e52d1462ea165f2c5d636892000a2e9fb7e2b4ffbed62`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `a3f9c534398bf26100b6c4f1daa0115e3ed2cb74057a2b9f05c3f54451b01eff`.
+
+**15M3B1 cerrado; sigue B2**, adopción por lectura pública con mínimo entre su plazo local y el
+restante compartido. B3 queda para la sesión JPA y la captura de cleanup absorbido por Hibernate;
+M3C conectará parser/HTTP/replay y control final de respuesta. B1 no acredita todavía esos flujos
+ni una SLA física de cancelación. No se repitió clean verify completo: el último transversal es
+M3A (8227 casos) y los nuevos gates transversales quedan en B3/C. 15M3B y 15M continúan abiertos.
+Commit atómico `feat(legal): comparte plazo con el registro interno`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 

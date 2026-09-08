@@ -1082,3 +1082,42 @@ El plan registra comando, evidencia, ajustes, límites y hashes de los artefacto
 **Sigue 15M3B**, plazo compartido y frontera selectiva JPA; luego M3C integra HTTP/replay y el gate
 extremo a extremo. M3/15M siguen abiertos, sin activación ni promesas nuevas de plazo/replay en A.
 Commit `refactor(auth): emite sesion despues de confirmar el alta`, sin push.
+
+### Apertura 15M3B1 — 2026-09-08
+
+B se divide en propietario/adopción del escritor (B1), lectura pública con mínimo local15/restante30
+(B2) y sesión JPA selectiva con su wiring y cleanup (B3). Nueve archivos nominales fijados en el plan.
+B1 usa un objeto final opaco con 30 s fijos, sin beans ni credenciales, pasado explícitamente a L3.
+El inicio consume tiempo antes de adoptar; no hay reset por fase ni fallback por owner null/ajeno.
+El DataSource conserva su ámbito local y los colaboradores anidados reutilizan el mismo deadline.
+
+La firma L3 actual conserva presupuesto propio. La nueva sobrecarga mantiene evidencia de commit,
+rollback y replay: un owner agotado después de persistir no transforma ese resultado en rollback.
+Cleanup registrado invalida fases futuras, y la interrupción conserva su flag. Los límites privados
+históricos permanecen; las lecturas públicas, HTTP y K/JPA todavía no adoptan este owner.
+
+Antes de JPA se debe capturar cleanup de Statement/ResultSet absorbido por Hibernate y evitar un
+segundo bean DataSource que altere autoconfiguración. B3 tendrá holder/pool privado y routing selectivo
+con credenciales de aplicación; fuera del scope, pool histórico. No se confunde timeout de TX con
+adquisición/FETCH/cleanup acotados. B1 usa foco/PostgreSQL; clean verify de M3A sigue siendo la última
+evidencia integral, con nuevos gates transversales en B3/C. Sin cambios de migraciones, rollout ni push.
+
+### Cierre 15M3B1 — 2026-09-08T16:55:44-03:00
+
+Propietario neutral de 30 s y adopción explícita por L3 implementados en nueve archivos nominales.
+El tiempo previo se conserva; null/owner incompatible se rechazan sin reemplazar el scope, y el
+cleanup vuelve terminal el owner conservando su causa original. La API histórica y la transacción
+restringida mantienen sus contratos. Commit confirmado, ACK incierto y replay conservan su evidencia
+independientemente de que falle la entrega por plazo o cierre.
+
+**433 pruebas focales aprobadas**, 49 nuevas (365 Surefire + 68 PostgreSQL en
+total). PostgreSQL acredita remanente SQL, rechazo previo al préstamo, rollback, commit/cierre
+tardíos y recuperación por replay sin DML. Auditoría de reportes, fuentes y ambos JAR aprobada;
+migraciones congeladas y frontend preservados. El plan distingue callbacks sobre JDBC simulado de
+persistencia real y registra los ajustes de pruebas.
+
+**Sigue B2**, lectura pública con mínimo local/restante; B3 incorporará sesión JPA y cleanup de
+Hibernate, y M3C conectará HTTP/replay y comprobación final. No se declara cerrado el presupuesto
+extremo a extremo ni una SLA física de cancelación. El último clean verify transversal sigue siendo
+M3A (8227 casos); este corte ejecutó sólo su gate focal. Commit
+`feat(legal): comparte plazo con el registro interno`, sin push.

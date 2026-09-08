@@ -13,6 +13,7 @@ final class LegalPrivateRequirementsDeadline {
     private final LongSupplier clock;
     private final long startedAt;
     private final long budgetNanos;
+    private final LegalRegistrationBudget registrationBudget;
     private final AtomicReference<Throwable> cleanupFailure = new AtomicReference<>();
 
     LegalPrivateRequirementsDeadline(Duration budget) {
@@ -25,10 +26,27 @@ final class LegalPrivateRequirementsDeadline {
 
     /** Only the nominal registration path can open a thirty-second operation. */
     static LegalPrivateRequirementsDeadline registration(LongSupplier clock) {
-        return new LegalPrivateRequirementsDeadline(30_000_000_000L, clock);
+        return adoptRegistrationBudget(LegalRegistrationBudget.start(clock));
+    }
+
+    /** Adopts the original owner without sampling another clock or opening a new budget. */
+    static LegalPrivateRequirementsDeadline adoptRegistrationBudget(LegalRegistrationBudget owner) {
+        return new LegalPrivateRequirementsDeadline(Objects.requireNonNull(owner, "owner"));
+    }
+
+    private LegalPrivateRequirementsDeadline(LegalRegistrationBudget owner) {
+        this.registrationBudget = owner;
+        this.clock = null;
+        this.budgetNanos = 0;
+        this.startedAt = 0;
+    }
+
+    boolean usesRegistrationBudget(LegalRegistrationBudget owner) {
+        return registrationBudget != null && registrationBudget == owner;
     }
 
     private LegalPrivateRequirementsDeadline(long budgetNanos, LongSupplier clock) {
+        this.registrationBudget = null;
         this.clock = Objects.requireNonNull(clock, "clock");
         this.budgetNanos = budgetNanos;
         this.startedAt = clock.getAsLong();
@@ -47,6 +65,14 @@ final class LegalPrivateRequirementsDeadline {
     }
 
     int remainingMillis() {
+        if (registrationBudget != null) {
+            try {
+                return registrationBudget.remainingMillis();
+            } catch (LegalRegistrationBudget.UnavailableException unavailable) {
+                // Keep the original cleanup cause; expiry retains the historical null cause.
+                throw new LegalPrivateRequirementsReadException(unavailable.getCause());
+            }
+        }
         Throwable failure = cleanupFailure.get();
         if (failure != null) {
             throw new LegalPrivateRequirementsReadException(failure);
@@ -60,6 +86,10 @@ final class LegalPrivateRequirementsDeadline {
 
     /** Spring may absorb release errors; the owning operation must still reject delivery. */
     void recordCleanupFailure(Throwable failure) {
+        if (registrationBudget != null) {
+            registrationBudget.recordCleanupFailure(failure);
+            return;
+        }
         Objects.requireNonNull(failure, "failure");
         if (!cleanupFailure.compareAndSet(null, failure)) {
             Throwable first = cleanupFailure.get();

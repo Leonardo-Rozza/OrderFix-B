@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 /** Internal complete registration only: one operation budget and transaction, no HTTP or session effects. */
 public final class LegalRegistrationService {
@@ -55,10 +56,23 @@ public final class LegalRegistrationService {
     /** The caller classifies legacy/partial requests and supplies metadata captured by the server. */
     public LegalRegistrationReceipt register(Registration registration, String idempotencyKey,
             String requiredSetRevision, List<Acceptance> acceptances, LegalRequestMetadata metadata) {
+        return register(registration, idempotencyKey, requiredSetRevision, acceptances, metadata, null, false);
+    }
+
+    /** Continue the caller's original registration budget, including time spent before this service. */
+    public LegalRegistrationReceipt register(Registration registration, String idempotencyKey,
+            String requiredSetRevision, List<Acceptance> acceptances, LegalRequestMetadata metadata,
+            LegalRegistrationBudget owner) {
+        return register(registration, idempotencyKey, requiredSetRevision, acceptances, metadata, owner, true);
+    }
+
+    private LegalRegistrationReceipt register(Registration registration, String idempotencyKey,
+            String requiredSetRevision, List<Acceptance> acceptances, LegalRequestMetadata metadata,
+            LegalRegistrationBudget owner, boolean suppliedOwner) {
         var completion = new LegalTransactionCompletionState<LegalRegistrationReceipt>();
         var verifiedReplay = new AtomicReference<LegalRegistrationReceipt>();
         try {
-            return dataSource.withinDeadline(deadline -> {
+            Function<LegalPrivateRequirementsDeadline, LegalRegistrationReceipt> operation = deadline -> {
                 try {
                     final LegalAcceptanceCommand command;
                     try {
@@ -116,7 +130,9 @@ public final class LegalRegistrationService {
                     }
                     throw failure;
                 }
-            });
+            };
+            return suppliedOwner ? dataSource.withinRegistrationBudget(owner, operation)
+                    : dataSource.withinDeadline(operation);
         } catch (RuntimeException failure) {
             LegalRegistrationFailure.Reason reason = classify(failure);
             RuntimeException cause = failure instanceof LegalRegistrationFailure typed
