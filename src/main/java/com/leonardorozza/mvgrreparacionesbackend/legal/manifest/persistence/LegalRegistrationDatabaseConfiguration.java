@@ -14,6 +14,10 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -124,6 +128,24 @@ public class LegalRegistrationDatabaseConfiguration {
     @Bean
     LegalAcceptanceKeyConfiguration legalRegistrationKeyConfiguration(Environment environment) {
         return LegalAcceptanceKeyConfiguration.from(environment);
+    }
+
+    @Bean
+    LegalRegistrationPreparation legalRegistrationPreparation(Environment environment) {
+        // Preserve the current UTC trial clock and JVM-local JPA audit semantics separately.
+        return new LegalRegistrationPreparation(new BCryptPasswordEncoder(), Clock.systemUTC(),
+                LocalDateTime::now, environment.getProperty("plan.trial-dias", Integer.class, 14));
+    }
+
+    @Bean
+    LegalIdempotencyResultStore legalRegistrationResults(JdbcTemplate jdbc) {
+        return new LegalIdempotencyResultStore(jdbc);
+    }
+
+    @Bean
+    LegalRegistrationWriter legalRegistrationWriter(JdbcTemplate jdbc, LegalAcceptanceKeyConfiguration keys,
+                                                    LegalIdempotencyResultStore results) {
+        return new LegalRegistrationWriter(jdbc, keys.codec(), keys.retentionPolicy(), results);
     }
 
     private static String required(Environment environment, String suffix) {

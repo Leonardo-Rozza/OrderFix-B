@@ -14,8 +14,8 @@ legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focale
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
 pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). 15J3 cerrado con
 920 focales y clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 pruebas
-focales y clean verify fresco de 7567. 15L1 cerrado con 436 focales; sigue 15L2.
-15L permanece abierto: todavía faltan writer y orquestación del registro.
+focales y clean verify fresco de 7567. 15L1 cerrado con 436 focales; 15L2 cerrado con 437 focales.
+15L permanece abierto: sigue 15L3, orquestación y gate del servicio de registro.
 
 ## Objetivo y resultado esperado
 
@@ -900,3 +900,33 @@ REGISTRATION/MISS antes del gate compartido. La evidencia de permisos usa SQL si
 BCrypt/Clock/auditoría y la escritura completa de cuenta/evidencia siguen en **15L2**. L3 compondrá
 replay y servicio; 15L no queda cerrado por esta frontera. Sin activación HTTP ni cambios frontend.
 Commit atómico previsto `feat(legal): prepara frontera aislada de registro`, sin push.
+
+### Apertura 15L2 — 2026-09-08
+
+Se implementan preparación opaca, selección propia ligada al comando y writer de cuenta/evidencia
+en la frontera L1. La selección pura se adelanta a L2 para impedir inputs contradictorios antes de
+escribir; L3 conservará la prioridad de replay/disponibilidad y orquestará estos componentes.
+BCrypt/Clock/trialDias/auditoría mantienen la decisión15A; ninguna operación emite sesión ni email.
+La lista nominal de 14 archivos y el gate focal quedan fijados en el plan antes del código.
+
+### Cierre 15L2 — 2026-09-08T09:50:51-03:00
+
+Preparación BCrypt/Clock/auditoría, selección REGISTRATION y writer de cuenta/evidencia implementados
+en los 14 archivos nominales. El writer exige una reserva nueva y el gate editorial, reacredita
+el agregado vigente y crea taller, suscripción FREE/TRIAL y titular ADMIN; lote, actos/documentos
+canónicos, metadata protegida y ledger con actos comparten conexión y transacción restringida.
+El recibo contiene sólo IDs y flag de replay; el resultado permanece tentativo hasta commit y
+liberación de recursos. No se emite sesión ni bienvenida desde estas piezas.
+
+Gate focal final de **437 pruebas** (302 Surefire + 135 PostgreSQL), 15 suites frescas sin
+fallos/errores/omitidas/reintentos, terminado 2026-09-08T09:48:59-03:00. PostgreSQL acredita columnas y defaults,
+IDs/ordinales canónicos, metadata descifrada, xmin único, batches y rollback sin huérfanos ante
+fallos de cada etapa, email/longitud, nonce y agregado adulterado. Los intentos fallidos previos y
+las correcciones del fixture/aserciones quedan detallados en el plan; producción no se modificó
+para resolverlos. Auditoría de ambos artefactos aprobada; V27/V28/V29 intactas.
+
+**Sigue 15L3**: prioridad completa de replay/disponibilidad/revisión/semántica, adaptación del lector
+al deadline compartido y gate del servicio con concurrencia/causalidad. El GET independiente del
+fixture no acredita ese flujo integral. 15L sigue abierto; 15M conserva HTTP y sesión/email poscommit.
+No se activa el contexto ni se toca frontend. Commit atómico
+`feat(legal): escribe cuenta y evidencia de registro`, sin push.

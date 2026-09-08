@@ -8,8 +8,8 @@ Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecuci�
 con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
-fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; sigue 15L2, writer de cuenta y evidencia.
-15L permanece abierto hasta completar L2/L3.
+fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 cerrado con 437 focales.
+Sigue 15L3, orquestación y gate del servicio. 15L permanece abierto hasta completar L3.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -52,7 +52,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión — cerrado | A |
-| 15L | Escritor interno de registro atómico — L1 cerrado; L2/L3 pendientes | F, G, H, I, K |
+| 15L | Escritor interno de registro atómico — L1/L2 cerrados; L3 pendiente | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
 | 15O | Mantenimiento de resultados vencidos y metadata | F, G, H, I |
@@ -1826,6 +1826,145 @@ Sin cambios de frontend runtime ni FRONTEND_INTEGRATION; sus dos rutas no versio
 Un commit atómico `feat(legal): prepara frontera aislada de registro`, sin push.
 **15L permanece abierto: sigue 15L2**, writer de cuenta/evidencia; después L3 orquestará el servicio.
 15M mantiene la integración HTTP y sesión/email poscommit. No se publicó ni activó este contexto.
+
+### Apertura 15L2 — 2026-09-08
+
+Baseline `5dde748`, rama backend ratificada y árbol limpio. Frontend `7545201` conserva `.agents/`
+y `public/OrdenFix project naming/` no versionados. Sin AGENTS.md aplicable en padres/src/docs.
+Lista nominal de 14 archivos fijada antes del código:
+
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationPreparation.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationSelection.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationValidationException.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationWriter.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationReceipt.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfiguration.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationPreparationTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationSelectionTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationWriterTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationWriterIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationWriterITSupport.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfigurationTest.java`
+- `docs/plans/2026-09-06-legal-account-consent-implementation.md`
+- `docs/plans/2026-09-06-legal-account-consent-design.md`
+
+Decisiones de implementación:
+
+- Preparación inmutable propia ligada al comando y deadline originales, con BCrypt por defecto,
+  Clock de aplicación UTC, `plan.trial-dias` (14 por defecto) y una observación coherente de
+  LocalDateTime en zona JVM para las cuatro columnas de auditoría. Checkpoints antes/después de
+  trabajo costoso, sin reiniciar deadline. Mantener trialDays configurado, incluso 0/negativo,
+  porque el alta actual no exige positividad. No truncar, normalizar ni prehashear email/password.
+- Se adelanta a L2 la selección pura de REGISTRATION y su rechazo tipado: es necesaria para que el
+  writer reciba un valor validado ligado al mismo comando y snapshot. Compara revisión antes de
+  semántica, rechaza duplicados, confirmaciones falsas, actos/digests/documentos incorrectos y
+  obligatorios ausentes. Opcionales pueden omitirse; nunca produce EMPTY/DEDUP. L3 conservará
+  prioridad replay→disponibilidad→revisión→semántica y conectará estos rechazos al servicio.
+- Writer propio en la misma JDBC/reserva REGISTRATION/MISS y gate editorial ya tomado. No admite
+  actor/IDs de cuenta externos: crea taller→FREE/TRIAL→ADMIN mediante los 21 INSERT por columna de
+  L1, sin SELECT de email/password ni RETURNING de suscripción. La constraint de email resuelve
+  conflictos con rollback; no se convierte una inserción parcial en éxito.
+- Agregado/current acreditados por el llamador; writer verifica su coherencia con selección/comando
+  antes del primer INSERT de negocio. Toma lock exclusivo de actor después de generar sus IDs y
+  exige las filas actuales; lote REGISTRATION, actos/documentos canónicos, metadata y ledger usan
+  esa misma conexión. Reutiliza codec/metadata writer y persistWithActs; no modifica selección,
+  writer, rol ni inventarios de aceptación autenticada. Metadata preparada antes del negocio.
+- Recibo tipado contiene sólo IDs durables y marca de replay. La devolución del writer aún es
+  tentativa: la frontera exterior decide commit y entrega. Contexto explícito de L1 incorpora
+  los colaboradores internos de escritura; permanece apagado y sin servicio/controller/HTTP.
+- PostgreSQL propio con rol L1: paridad, optional/obligatorios, batches >32, snapshots y metadata
+  reales, xmin de una transacción, fallo tras cada etapa, constraints, email y nonce collision,
+  rollback sin huérfanos. Fixtures propios reutilizan importación editorial, sin alterar fixtures
+  históricos. No se consideran gaps de secuencias como filas persistidas.
+- L3 deberá adaptar LegalPublicRequirementsReader para compartir el deadline30 de registro; en L2
+  se recibe el snapshot previamente acreditado y no se abre otro lector/servicio/transacción.
+  Carreras simultáneas, replay de servicio, commit/cierre/causalidad global siguen en L3; HTTP y
+  sesión/email poscommit quedan en 15M. V27/V28/V29 y frontend runtime permanecen intactos.
+
+Gate focal verify de preparación/selección/writer/config, PostgreSQL de writer y regresiones de
+frontera/privilegios, metadata y aceptación. El baseline integral de 15K y el foco L1 no se cuentan
+como evidencia nueva. Commit previsto `feat(legal): escribe cuenta y evidencia de registro`, sin push.
+
+### Cierre 15L2 — 2026-09-08T09:50:51-03:00
+
+Corte cerrado sobre `5dde748`, con los 14 archivos nominales. Preparación BCrypt/Clock/auditoría,
+selección pura de REGISTRATION, recibo de IDs y writer de cuenta/evidencia implementados e integrados
+en el contexto explícito de L1. La preparación conserva comando y deadline originales; valida la
+salida BCrypt, respeta trialDays configurado y no modifica las entradas para eludir límites físicos.
+La selección comprueba revisión antes de semántica y entrega requisitos en orden canónico; los
+opcionales pueden omitirse, los obligatorios no. No produce resultados EMPTY ni DEDUP.
+
+El writer exige reserva nueva REGISTRATION, misma JDBC, preparación/selección ligadas al comando,
+gate editorial y agregado vigente acreditado antes de los INSERT de negocio. Vuelve a comprobar
+perfil/scope/revisión/procedencia/tiempos del agregado y su conjunto vigente. Prepara metadata antes
+de insertar taller→FREE/TRIAL→ADMIN. Después adquiere el lock del actor recién generado y persiste
+lote, actos/documentos canónicos en batches de 32, metadata protegida y ledger con actos. Todo usa
+la misma conexión y transacción REQUIRES_NEW/READ_COMMITTED con rol restringido. El recibo del
+writer sigue siendo tentativo hasta que la frontera confirme commit y liberación de recursos.
+
+Gate focal `verify` aprobado con Java 21/PostgreSQL 16, terminado **2026-09-08T09:48:59-03:00**:
+**437 pruebas** (302 Surefire en 10 suites y 135 Failsafe en 5 suites),
+cero fallos/errores/omitidas/reintentos, 168.088 s. Los 15 XML frescos se
+contrastaron con los métodos compilados; no se suman informes históricos al resultado.
+
+| Suite focal | Pruebas |
+| --- | ---: |
+| LegalRegistrationPreparationTest | 39 |
+| LegalRegistrationSelectionTest | 30 |
+| LegalRegistrationWriterTest | 21 |
+| LegalRegistrationDatabaseConfigurationTest | 37 |
+| LegalRegistrationTransactionBoundaryTest | 21 |
+| LegalAcceptanceSelectionTest | 48 |
+| LegalAcceptanceMetadataWriterTest | 7 |
+| LegalAcceptanceMetadataCodecTest | 50 |
+| LegalAcceptanceMetadataPolicyTest | 13 |
+| LegalAcceptanceDatabaseConfigurationTest | 36 |
+| LegalRegistrationWriterIT | 25 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+| LegalRegistrationPrivilegeVerifierIT | 49 |
+| LegalAcceptanceServiceIT | 35 |
+| LegalAcceptanceMetadataIT | 20 |
+
+Las pruebas unitarias acreditan los límites BCrypt de 72 bytes, incluidos caracteres Unicode.
+La integración real acredita paridad de columnas y defaults, hash BCrypt verificable, fechas de
+aplicación y auditoría coherente, identidad efectiva restringida, metadata descifrada, IDs exactos
+de requisitos/documentos y ordinales canónicos. La cuenta completa, agregado, evidencia, metadata
+y resultado durable tienen el mismo xmin; la ruta exitosa usa una conexión y un commit. Se cubren
+opcionales omitidos y 34 actos para cruzar el límite de batch. Los 11 fallos SQL inyectados después
+de INSERT físico revierten las filas de todas las etapas. También revierten email duplicado,
+longitud física excedida, colisión de nonce dentro de la preparación/entre lotes, metadata incompleta
+y recibos de agregado adulterados, sin huérfanos ni recibo confirmado. Los gaps de secuencia no son
+filas persistidas. La reserva de replay real se rechaza en el writer antes de DML/gate editorial;
+la misma clave con payload distinto no altera el alta ya confirmada.
+
+Antes del gate final hubo dos intentos fallidos limitados al fixture/aserciones nuevos. En el
+primero, las 302 unitarias y 110 PostgreSQL de regresión aprobaron, pero los 25 casos nuevos
+fallaron al preparar el GET del fixture, antes de invocar el writer: la transacción del GET
+público no estaba ligada a Spring. Se
+corrigió a TransactionTemplate REQUIRES_NEW/READ_COMMITTED con rollback y deadline propio del GET.
+Se precisaron además la inyección de fallos en INSERT con/sin schema, los argumentos válidos del
+rechazo de replay y las comparaciones exactas de evidencia. El segundo aprobó 436 de 437 casos;
+la aserción de replay confundía el inventario de funciones del preflight con una llamada al gate
+editorial. Se distinguió la llamada SQL efectiva y se repitió todo el gate focal. Ninguno de estos
+ajustes modificó producción ni debilitó sus guardas. No hubo un cambio transversal que exigiera
+repetir clean verify; el integral de 15K permanece como baseline, no como evidencia fresca de L2.
+
+Auditoría final: fuentes Java coinciden con las congeladas para el gate; clases cambiadas limitadas
+a los archivos nominales; ambos artefactos cotejados contra target, sin clases de tests ni archivos
+`*secret*.properties`. V27/V28/V29 conservan sus SHA congelados en fuentes, target y JAR. No hay
+nuevas anotaciones HTTP ni nuevas excepciones a la procedencia de dependencias runtime.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `c07be5530f06e24761c22b2b06cd71aa65d16245d9cdd440bbea990db952a286`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `ddac38ee78e56c8788ef40f2a94cd1d94788f89475b23fdd1c5159ff5eb87b8b`.
+
+El fixture obtiene requisitos mediante una transacción independiente que modela un GET público
+y se revierte; luego compone las piezas internas del writer para probarlas. Esa evidencia no
+sustituye la orquestación L3 ni acredita aún el presupuesto integral del servicio por fases.
+**15L permanece abierto: sigue 15L3**, que deberá componer replay→disponibilidad→revisión→semántica,
+adaptar el lector al deadline compartido de registro y probar concurrencia y causalidad de
+commit/cierre. 15M mantiene HTTP y sesión/email poscommit. El contexto continúa apagado.
+Frontend y FRONTEND_INTEGRATION intactos, con las dos rutas no versionadas preservadas.
+Commit atómico `feat(legal): escribe cuenta y evidencia de registro`, sin push.
 
 ## 15M — Integración de registro compatible y replay
 

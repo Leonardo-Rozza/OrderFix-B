@@ -40,6 +40,8 @@ class LegalRegistrationDatabaseConfigurationTest {
             context.refresh();
             assertThat(context.getBeansOfType(DataSource.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalAcceptanceKeyConfiguration.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalRegistrationPreparation.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalRegistrationWriter.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalDatabaseBoundaryMarker.class)).isEmpty();
         }
     }
@@ -145,6 +147,9 @@ class LegalRegistrationDatabaseConfigurationTest {
             assertThat(remaining).isBetween(29_000, 30_000);
             var boundary = context.getBean(LegalRegistrationTransactionBoundary.class);
             boundary.requireExactBoundary();
+            assertThat(context.getBean(LegalRegistrationWriter.class).usesJdbc(jdbc)).isTrue();
+            assertThat(context.getBean(LegalIdempotencyResultStore.class).usesJdbc(jdbc)).isTrue();
+            assertThat(context.getBean(LegalRegistrationPreparation.class)).isNotNull();
             assertThat(boundary.usesJdbc(jdbc)).isTrue();
             assertThat(context.getBean(LegalAcceptanceKeyConfiguration.class).toString())
                     .doesNotContain(HMAC_SECRET, AES_SECRET);
@@ -180,6 +185,26 @@ class LegalRegistrationDatabaseConfigurationTest {
         try (var context = context(values)) {
             context.register(LegalPrivateRequirementsDatabaseConfiguration.class);
             assertThatThrownBy(context::refresh).isInstanceOf(RuntimeException.class);
+        }
+    }
+
+    @ParameterizedTest @ValueSource(ints = {0, -2, 21})
+    void preparationUsesTheConfiguredTrialWithoutOpeningThePool(int days) {
+        var values = properties();
+        values.put("plan.trial-dias", Integer.toString(days));
+        try (var context = context(values)) {
+            context.refresh();
+            var command = com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommandValidator.registration(
+                    new com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommand.Registration(
+                            "Trial fixture", null, "Admin fixture", "trial@test.invalid", "fixture-password"),
+                    "sha256:" + "a".repeat(64), java.util.List.of());
+            var bounded = context.getBean(LegalPrivateRequirementsDataSource.class);
+            var prepared = bounded.withinDeadline(deadline -> context.getBean(LegalRegistrationPreparation.class)
+                    .prepare(command, deadline));
+            assertThat(java.time.temporal.ChronoUnit.DAYS.between(prepared.startDate(), prepared.trialEndDate())).isEqualTo(days);
+            assertThat(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                    .matches(command.registration().password(), prepared.encodedPassword())).isTrue();
+            assertThat(context.getBean(HikariDataSource.class).getHikariPoolMXBean().getTotalConnections()).isZero();
         }
     }
 
