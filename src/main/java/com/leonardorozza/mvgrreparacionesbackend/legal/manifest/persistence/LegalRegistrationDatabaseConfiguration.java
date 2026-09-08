@@ -1,5 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalApplicableScopeResolver;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateProvenanceCalculator;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalRequiredSetAggregateRevisionCalculator;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -146,6 +149,57 @@ public class LegalRegistrationDatabaseConfiguration {
     LegalRegistrationWriter legalRegistrationWriter(JdbcTemplate jdbc, LegalAcceptanceKeyConfiguration keys,
                                                     LegalIdempotencyResultStore results) {
         return new LegalRegistrationWriter(jdbc, keys.codec(), keys.retentionPolicy(), results);
+    }
+
+    @Bean
+    LegalV29AcceptanceSchemaVerifier legalRegistrationIdempotencySchema(JdbcTemplate jdbc) {
+        return new LegalV29AcceptanceSchemaVerifier(jdbc, "public");
+    }
+
+    @Bean
+    LegalApplicableScopeResolver legalRegistrationScopeResolver() {
+        return new LegalApplicableScopeResolver();
+    }
+
+    @Bean
+    LegalRequiredSetAggregateRevisionCalculator legalRegistrationRevisionCalculator() {
+        return new LegalRequiredSetAggregateRevisionCalculator();
+    }
+
+    @Bean
+    LegalRequiredSetAggregateProvenanceCalculator legalRegistrationProvenanceCalculator() {
+        return new LegalRequiredSetAggregateProvenanceCalculator();
+    }
+
+    @Bean
+    LegalRequiredSetAggregateReplayVerifier legalRegistrationAggregateReplayVerifier(
+            JdbcTemplate jdbc, LegalRequiredSetAggregateRevisionCalculator revisions,
+            LegalRequiredSetAggregateProvenanceCalculator provenance) {
+        return new LegalRequiredSetAggregateReplayVerifier(jdbc, revisions, provenance);
+    }
+
+    @Bean
+    LegalRequiredSetAggregateStore legalRegistrationAggregates(JdbcTemplate jdbc,
+            LegalRequiredSetAggregateRevisionCalculator revisions,
+            LegalRequiredSetAggregateProvenanceCalculator provenance,
+            LegalRequiredSetAggregateReplayVerifier replay) {
+        return new LegalRequiredSetAggregateStore(jdbc, revisions, provenance, replay);
+    }
+
+    @Bean
+    LegalPublicRequirementsReader legalRegistrationRequirements(JdbcTemplate jdbc) {
+        return new LegalPublicRequirementsReader(jdbc);
+    }
+
+    @Bean
+    LegalRegistrationService legalRegistrationService(JdbcTemplate jdbc,
+            LegalPrivateRequirementsDataSource dataSource, LegalRegistrationTransactionBoundary boundary,
+            LegalApplicableScopeResolver resolver, LegalRequiredSetAggregateStore aggregates,
+            LegalPublicRequirementsReader requirements, LegalRegistrationPreparation preparation,
+            LegalRegistrationWriter writer, LegalV29AcceptanceSchemaVerifier schema,
+            LegalAcceptanceKeyConfiguration keys) {
+        return new LegalRegistrationService(jdbc, dataSource, boundary, resolver, aggregates,
+                requirements, preparation, writer, schema, keys);
     }
 
     private static String required(Environment environment, String suffix) {

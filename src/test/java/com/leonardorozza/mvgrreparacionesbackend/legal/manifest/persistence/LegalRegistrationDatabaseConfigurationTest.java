@@ -42,6 +42,9 @@ class LegalRegistrationDatabaseConfigurationTest {
             assertThat(context.getBeansOfType(LegalAcceptanceKeyConfiguration.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalRegistrationPreparation.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalRegistrationWriter.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalRegistrationService.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReader.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalRequiredSetAggregateStore.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalDatabaseBoundaryMarker.class)).isEmpty();
         }
     }
@@ -150,6 +153,10 @@ class LegalRegistrationDatabaseConfigurationTest {
             assertThat(context.getBean(LegalRegistrationWriter.class).usesJdbc(jdbc)).isTrue();
             assertThat(context.getBean(LegalIdempotencyResultStore.class).usesJdbc(jdbc)).isTrue();
             assertThat(context.getBean(LegalRegistrationPreparation.class)).isNotNull();
+            assertThat(context.getBean(LegalRegistrationService.class)).isNotNull();
+            assertThat(context.getBean(LegalPublicRequirementsReader.class).usesJdbc(jdbc)).isTrue();
+            assertThat(context.getBean(LegalRequiredSetAggregateStore.class).usesJdbc(jdbc)).isTrue();
+            assertThat(context.getBean(LegalV29AcceptanceSchemaVerifier.class).usesJdbc(jdbc)).isTrue();
             assertThat(boundary.usesJdbc(jdbc)).isTrue();
             assertThat(context.getBean(LegalAcceptanceKeyConfiguration.class).toString())
                     .doesNotContain(HMAC_SECRET, AES_SECRET);
@@ -159,6 +166,7 @@ class LegalRegistrationDatabaseConfigurationTest {
             assertThat(context.getBeansOfType(LegalAcceptanceHistoryService.class)).isEmpty();
             assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
             assertThat(context.getBeansOfType(LegalAcceptanceService.class)).isEmpty();
+            assertThat(context.getBeansOfType(LegalPublicRequirementsReadService.class)).isEmpty();
             assertThat(context.getBeansOfType(com.leonardorozza.mvgrreparacionesbackend.service.impl.RegistroService.class)).isEmpty();
             assertThat(context.getBeansOfType(com.leonardorozza.mvgrreparacionesbackend.service.impl.AccountSessionPolicy.class)).isEmpty();
             assertThat(context.getBeanNamesForAnnotation(Controller.class)).isEmpty();
@@ -204,6 +212,33 @@ class LegalRegistrationDatabaseConfigurationTest {
             assertThat(java.time.temporal.ChronoUnit.DAYS.between(prepared.startDate(), prepared.trialEndDate())).isEqualTo(days);
             assertThat(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
                     .matches(command.registration().password(), prepared.encodedPassword())).isTrue();
+            assertThat(context.getBean(HikariDataSource.class).getHikariPoolMXBean().getTotalConnections()).isZero();
+        }
+    }
+
+    @Test
+    void registrationServiceStaysOutOfTheScannedWebContext() {
+        assertThat(AnnotatedElementUtils.hasAnnotation(LegalRegistrationService.class, Component.class)).isFalse();
+        assertThat(AnnotatedElementUtils.hasAnnotation(LegalRegistrationService.class, Controller.class)).isFalse();
+        try (var context = unregisteredContext(properties())) {
+            context.refresh();
+            assertThat(context.getBeansOfType(LegalRegistrationService.class)).isEmpty();
+            assertThat(context.getBeansOfType(DataSource.class)).isEmpty();
+        }
+    }
+
+    @Test
+    void wiredServiceRejectsInvalidInputBeforeBorrowingTheConfiguredPool() {
+        try (var context = context(properties())) {
+            context.refresh();
+            var service = context.getBean(LegalRegistrationService.class);
+            Throwable rejected = catchThrowable(() -> service.register(null, "invalid", null, null, null));
+            assertThat(rejected).isInstanceOf(LegalRegistrationFailure.class);
+            var failure = (LegalRegistrationFailure) rejected;
+            assertThat(failure.reason()).isEqualTo(LegalRegistrationFailure.Reason.INVALID_PAYLOAD);
+            assertThat(failure.completion()).isEqualTo(LegalRegistrationFailure.Completion.NONE);
+            assertThat(failure.persistence()).isEqualTo(LegalRegistrationFailure.Persistence.NOT_PERSISTED);
+            assertThat(failure.confirmedReceipt()).isEmpty();
             assertThat(context.getBean(HikariDataSource.class).getHikariPoolMXBean().getTotalConnections()).isZero();
         }
     }

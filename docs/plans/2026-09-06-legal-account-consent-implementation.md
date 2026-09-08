@@ -8,8 +8,8 @@ Estado: 15A, 15B, 15F, 15C, 15D y 15E cerrados el 2026-09-06; diseño y ejecuci�
 con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 15J2 cerrado con
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
-fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 cerrado con 437 focales.
-Sigue 15L3, orquestación y gate del servicio. 15L permanece abierto hasta completar L3.
+fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
+15L completo en L1/L2/L3. Sigue 15M, registro HTTP compatible y efectos poscommit.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -52,7 +52,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15I | Servicio interno de aceptación atómica — cerrado en I1/I2/I3 | B, C, F, G, H |
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión — cerrado | A |
-| 15L | Escritor interno de registro atómico — L1/L2 cerrados; L3 pendiente | F, G, H, I, K |
+| 15L | Servicio interno de registro atómico — cerrado en L1/L2/L3 | F, G, H, I, K |
 | 15M | Registro HTTP compatible, replay y efectos poscommit | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
 | 15O | Mantenimiento de resultados vencidos y metadata | F, G, H, I |
@@ -1965,6 +1965,192 @@ adaptar el lector al deadline compartido de registro y probar concurrencia y cau
 commit/cierre. 15M mantiene HTTP y sesión/email poscommit. El contexto continúa apagado.
 Frontend y FRONTEND_INTEGRATION intactos, con las dos rutas no versionadas preservadas.
 Commit atómico `feat(legal): escribe cuenta y evidencia de registro`, sin push.
+
+### Apertura 15L3 — 2026-09-08
+
+Baseline `d776bc8`, rama backend ratificada y árbol limpio. Frontend `7545201` mantiene sus dos
+rutas no versionadas sin cambios. No hay AGENTS.md aplicable en padres/backend/src/docs.
+Se ratifican los 13 archivos nominales antes de implementar:
+
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationService.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationFailure.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPublicRequirementsReader.java`
+- `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfiguration.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationServiceTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationFailureTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalPublicRequirementsReaderRegistrationTest.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationServiceITSupport.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationServiceIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationCommitIT.java`
+- `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationDatabaseConfigurationTest.java`
+- `docs/plans/2026-09-06-legal-account-consent-implementation.md`
+- `docs/plans/2026-09-06-legal-account-consent-design.md`
+
+Decisiones de orquestación y cierre de 15L:
+
+- Servicio interno sólo para el bloque legal completo de REGISTRATION. Recibe Registration, clave,
+  revisión, aceptaciones y metadata capturada por servidor; no clasifica legacy/parcial ni lee HTTP.
+  El deadline de la fábrica registration se inicia antes de validar forma/clave y de tomar conexión.
+  Conserva el mismo plazo exterior de 30 s al entrar en la transacción L1 de 25 s.
+- Orden: forma/clave/captura → preflight propio → reserva/replay → gate editorial compartido →
+  materialización REGISTRATION → lectura íntegra disponible → revisión/selección L2 → preparación
+  BCrypt/Clock/auditoría → writer L2 → constraints inmediatas → commit/cierre/deadline final.
+  BCrypt se ejecuta sólo en MISS válido, dentro del presupuesto ya iniciado y de esa misma TX;
+  la decisión 15A exige reloj previo a BCrypt y pool, no hash previo a reservar conexión.
+- Replay devuelve los IDs acreditados por G2 con replay=true, sin consultar punteros actuales,
+  materializar, tomar gate editorial, preparar BCrypt/Clock/metadata ni llamar al writer. No compara
+  contraseña/email actuales ni emite JWT: 15M aplicará la política K por IDs durables. Cambiar el
+  password del payload con la misma clave conserva KEY_REUSED. SQL/email duplicado nunca se toma
+  como replay ni se captura para continuar una transacción PostgreSQL abortada.
+- Failure propio separa Completion de la TX de entrega de Persistence del resultado conocido.
+  Guarda un recibo de replay sólo después de acreditar el resultado durable completo. Si falla la
+  entrega después, sigue siendo un error, pero Persistence=PERSISTED y confirmedReceipt conserva
+  ese replay aunque la TX de entrega quede ROLLED_BACK/UNKNOWN. Sin replay acreditado se conserva
+  el estado de la tentativa actual, sin afirmar inexistencia histórica de una cuenta/clave.
+  No se altera el núcleo compartido de completion ni el servicio de aceptación autenticada.
+- LegalPublicRequirementsReader agrega readForRegistration y un adaptador privado de check/cancel,
+  ligado al deadline original sin reloj propio. read con deadline público mantiene firma y SQL;
+  no se modifica ningún Deadline/DataSource histórico ni se amplía el GET público de 15 s.
+- El contexto explícito L1 incorpora los colaboradores y servicio con la misma JDBC; continúa
+  apagado por defecto, sin configuración escaneable ni registro en el contexto HTTP.
+- Tres archivos PG propios componen el fixture L2 para preparar datos/rol y llaman al servicio real;
+  no reutilizan su harness de escritura manual. Acreditar replay sin DML/gate/catálogo, prioridad
+  disponibilidad→revisión→semántica, carreras observadas por locks (clave igual/payload igual o
+  distinto, claves distintas/email igual), lotes >32 y ausencia de huérfanos. Para la carrera de
+  email se materializa previamente el agregado del fixture y así se observa el UNIQUE de users.
+- Commit/deadline: fallos antes de commit, ACK perdido, rollback/cierre y plazo en fases con estado
+  honesto; no convertir UNKNOWN en rollback ni en éxito. El resultado durable previo de replay
+  se distingue expresamente. Los fallos por etapa/paridad/nonce de L2 quedan como regresión, no
+  se presentan como pruebas nuevas del servicio. Sesión/email poscommit siguen en 15M; el deadline
+  completo que incluya sesión se acreditará allí. La matriz transversal de capacidad sigue en 15P.
+
+Gate focal verify: servicio/failure/reader/config nuevos, regresiones L1/L2 de registro, G2,
+aceptación y lector público (incluido transporte/deadline HTTP existente). La adaptación del reader
+es aditiva y conserva SQL y firma previos; las regresiones públicas acreditarán esa paridad. No se
+cuenta el clean verify de 15K como evidencia fresca; sólo se ampliará a integral ante cambio
+transversal o fallo que lo justifique. V27/V28/V29, roles, inventarios y frontend intactos.
+Commit previsto `feat(legal): crea cuenta y evidencia en una transaccion`, sin push.
+
+### Cierre 15L3 y 15L — 2026-09-08T13:51:38-03:00
+
+Corte cerrado sobre `d776bc8`, con los 13 archivos nominales. LegalRegistrationService compone la
+frontera L1 y la preparación/selección/writer L2 en un único plazo monotónico iniciado antes de
+validar entrada o adquirir conexión. Forma/clave y metadata preceden al preflight; la reserva
+idempotente precede al catálogo. En MISS, gate compartido, agregado, lectura íntegra y selección
+preceden a BCrypt/Clock/auditoría, escritura y constraints inmediatas. La entrega normal sólo se
+produce después de commit, liberación y comprobación final del plazo. El contexto explícito tiene
+sus colaboradores sobre la misma JDBC y permanece apagado, sin publicar el servicio en HTTP.
+
+Replay devuelve los IDs originales con replay=true y no ejecuta BCrypt, materialización, gate
+editorial ni writer. LegalRegistrationFailure conserva la finalización de la TX de entrega y la
+persistencia conocida por separado: el recibo de un replay plenamente acreditado sigue siendo
+PERSISTED aunque esa entrega falle y su TX termine ROLLED_BACK o UNKNOWN. Esto no convierte el
+fallo operativo en éxito. Sin replay acreditado, Persistence describe la tentativa actual sin
+prometer inexistencia histórica de la cuenta/clave; un COMMIT fallido sigue siendo UNKNOWN.
+
+LegalPublicRequirementsReader agrega readForRegistration y un adaptador privado de check/cancel
+sin reloj, duración ni estado de cleanup propios. El cuerpo SQL, los límites, la acreditación de
+texto y la firma pública read se conservan; los callbacks pertenecen al deadline original.
+No se modifican Deadline/DataSource compartidos ni el núcleo de completion. El contexto de registro
+mantiene 30 s exteriores/25 s transaccionales y el GET público conserva su presupuesto de 15 s.
+
+Gate focal `verify` aprobado con Java 21 y PostgreSQL 16, terminado **2026-09-08T10:44:14-03:00**:
+**651 pruebas** (375 Surefire en 14 suites y 276 Failsafe en 10 suites), cero
+fallos/errores/omitidas/reintentos, 1269.607 s. Los 24 XML frescos se cotejaron
+con todos los métodos de sus clases compiladas; no se contaron informes históricos.
+
+| Suite focal | Pruebas |
+| --- | ---: |
+| LegalRegistrationServiceTest | 32 |
+| LegalRegistrationFailureTest | 11 |
+| LegalPublicRequirementsReaderRegistrationTest | 21 |
+| LegalRegistrationDatabaseConfigurationTest | 39 |
+| LegalRegistrationPreparationTest | 39 |
+| LegalRegistrationSelectionTest | 30 |
+| LegalRegistrationWriterTest | 21 |
+| LegalRegistrationTransactionBoundaryTest | 21 |
+| LegalPublicRequirementsDeadlineTest | 9 |
+| LegalPublicRequirementsDataSourceTest | 19 |
+| LegalPublicRequirementsDatabaseConfigurationTest | 60 |
+| LegalIdempotencyCoordinatorTest | 38 |
+| LegalIdempotencyResultStoreTest | 25 |
+| LegalAcceptanceServiceTest | 10 |
+| LegalRegistrationServiceIT | 31 |
+| LegalRegistrationCommitIT | 19 |
+| LegalRegistrationWriterIT | 25 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+| LegalRegistrationPrivilegeVerifierIT | 49 |
+| LegalIdempotencyCoordinatorIT | 41 |
+| LegalAcceptanceServiceIT | 35 |
+| LegalPublicRequirementsReadServiceIT | 34 |
+| LegalPublicRequirementsHttpDeadlineIT | 9 |
+| LegalPublicRequirementsHttpIT | 27 |
+
+Las pruebas del servicio cubren forma antes de pool/BCrypt, disponibilidad antes de revisión y
+semántica, replay antes del catálogo y rechazo tipado de clave/payload incompatible. PostgreSQL
+acredita una cuenta ADMIN y su grafo en una conexión/commit con xmin único, BCrypt verificable,
+metadata descifrada, opcionales omitidos y 34 actos que cruzan batches de lectura/escritura.
+El replay conserva IDs, filas y metadata anteriores tras REPLACE/RETIRE reales, con gate editorial
+exclusivo retenido por otra transacción, sin DML ni BCrypt nuevos. También recupera los IDs originales
+tras cambiar email/password/tokenVersion y reasignar el email viejo a otra cuenta; estados de
+usuario/taller inactivos se rechazan. Esto no acredita emisión de sesión, que sigue pendiente en M.
+
+Las carreras se sincronizan por barreras y observaciones de pg_locks/pg_blocking_pids. La misma
+clave/payload produce una cuenta y replay; la misma clave/password distinto produce KEY_REUSED;
+una clave retenida agota la espera idempotente y produce IN_PROGRESS. Claves distintas/email igual
+llegan al INSERT de users con el agregado ya confirmado por el fixture: se observa el bloqueo y
+se exige SQLSTATE 23505, excluyendo 55P03, con una sola cuenta y sin huérfanos. Los rechazos semánticos,
+fuentes corruptas, fallos SQL de fases representativas y metadata incompleta revierten agregado,
+cuenta/evidencia/resultado. Las 25 pruebas del writer L2 vuelven a ejecutarse como regresión de
+paridad, etapas, límites físicos y colisiones de nonce.
+
+Los fallos anteriores al COMMIT físico acreditan rollback; un COMMIT invocado sin confirmación
+mantiene UNKNOWN sin retry automático. Un observador independiente distingue pérdida de conexión
+previa al servidor de pérdida del ACK tras commit real. Fallos después del commit/cierre/plazo
+conservan COMMITTED y el recibo durable. Para un replay acreditado anteriormente se prueba por
+separado la persistencia conocida frente a entrega ROLLED_BACK/UNKNOWN/COMMITTED. Cleanup y rollback
+fallidos prevalecen sobre el rechazo semántico, sin rescatar una respuesta de cliente como éxito.
+
+El reloj desplazable acredita progreso del registro después de 15 s consumidos y vencimiento del
+plazo original de 30 s en metadata del lector, BCrypt y poscommit. El caso PostgreSQL del lector
+vence después de consultar markdown_octets y antes de cargar TEXT; no simula una demora dentro
+de la conversión Markdown. Las pruebas del reader con JDBC acotado acreditan además consumo del
+remanente entre consultas, checkpoints de FETCH/bytes, cancelación, cleanup e interrupción, y la
+misma salida/SQL para ambas entradas. Las regresiones públicas de lectura/HTTP/deadline ejercitan
+la ruta anterior con su límite de 15 s. No se atribuye un SLA a cancelación o cierre del driver.
+
+El gate Maven aprobó en su primer intento, sin reintentos de pruebas. Son 116 casos nuevos
+(32 de servicio, 11 de failure, 21 de reader, 2 de configuración y 50 PostgreSQL del servicio/commit)
+y 535 de regresión. Antes del gate, la compilación aislada del fixture adaptó el observador BCrypt
+al método protegido encodeNonNullPassword, porque encode es final; se conserva el encoder real.
+La revisión causal añadió la exigencia de SQLSTATE 23505 a la carrera por email, evitando aceptar
+un timeout de lock como evidencia de la restricción de unicidad. No se ajustó producción para
+resolver fallos de pruebas y no hubo cambios de Java después de iniciar el gate.
+
+La duración total registrada incluye un intervalo de unos 900 s sin avance visible durante la
+inicialización del contexto de un caso HTTP público existente. Su XML contiene el aviso Hikari
+«Thread starvation or clock leap detected» entre 10:25:56 y 10:40:56, antes de inicializar MockMvc;
+el caso y la suite terminaron aprobados. No se atribuye una causa concreta a esa interrupción ni
+se interpreta ese intervalo como latencia de una solicitud o medición de SLA. El gate y la auditoría
+se recuperaron al retomar la tarea; no se reiniciaron ni se contaron resultados duplicados.
+
+Auditoría de fuentes/artefactos aprobada: código idéntico al congelado para el gate, cambios de
+clases limitados a las fuentes nominales, ambos JAR cotejados contra target. Sin tests ni archivos
+`*secret*.properties` empaquetados; V27/V28/V29 conservan sus SHA congelados en fuente, target y JAR.
+No se agregan anotaciones HTTP ni excepciones nuevas de procedencia de dependencias runtime.
+La adaptación aditiva del reader conserva sus SQL y firma, con regresión pública focal incluida;
+no se presenta el clean verify anterior de 15K como evidencia fresca de este corte.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `3d31e76bd45472455341015a6af950dc56510376d0e6c1eb39198900ab569b4a`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `3c548fd7179c0539797adc0c0ff97755d2a48dd8412f46d04cd404df160287a5`.
+
+**15L queda cerrado en L1/L2/L3. Sigue 15M**, integración del registro HTTP compatible, replay y
+sesión/email poscommit. L3 devuelve identidad durable; no autentica por email/password actuales
+ni emite sesión. K se aplicará por IDs desde M y allí se acreditará el plazo incluyendo sesión.
+El mantenimiento, enforcement apagado, matriz transversal de capacidad y gate integral permanecen
+en sus cortes posteriores. Frontend y sus dos rutas no versionadas intactos, sin tocar
+FRONTEND_INTEGRATION, roles, inventarios ni migraciones congeladas.
+Commit atómico `feat(legal): crea cuenta y evidencia en una transaccion`, sin push.
 
 ## 15M — Integración de registro compatible y replay
 

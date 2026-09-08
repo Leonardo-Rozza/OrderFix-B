@@ -26,6 +26,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +38,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Complete content accreditation inside the caller's preflighted, shared mutable transaction. */
 final class LegalPublicRequirementsReader {
@@ -144,6 +146,21 @@ final class LegalPublicRequirementsReader {
     LegalPublicRegistrationRequirements read(LegalRequiredSetAggregateReceipt receipt,
                                              LegalEditorialTimeBoundary boundary,
                                              LegalPublicRequirementsDeadline deadline) {
+        Objects.requireNonNull(deadline, "deadline");
+        return readWithBudget(receipt, boundary, new ReadBudget(deadline::check, deadline::cancel));
+    }
+
+    /** Registration shares its caller's original thirty-second budget, including cleanup failures. */
+    LegalPublicRegistrationRequirements readForRegistration(LegalRequiredSetAggregateReceipt receipt,
+                                                            LegalEditorialTimeBoundary boundary,
+                                                            LegalPrivateRequirementsDeadline deadline) {
+        Objects.requireNonNull(deadline, "deadline");
+        return readWithBudget(receipt, boundary, new ReadBudget(deadline::check, deadline::cancel));
+    }
+
+    private LegalPublicRegistrationRequirements readWithBudget(LegalRequiredSetAggregateReceipt receipt,
+                                                               LegalEditorialTimeBoundary boundary,
+                                                               ReadBudget deadline) {
         Objects.requireNonNull(deadline, "deadline").check();
         Objects.requireNonNull(boundary, "boundary");
         ScopeOrigin origin = registrationOrigin(Objects.requireNonNull(receipt, "receipt"));
@@ -199,7 +216,7 @@ final class LegalPublicRequirementsReader {
 
     private String readHeader(Connection connection, LegalRequiredSetAggregateReceipt receipt,
                               ScopeOrigin origin, LegalEditorialTimeBoundary boundary,
-                              LegalPublicRequirementsDeadline deadline) throws SQLException {
+                              ReadBudget deadline) throws SQLException {
         List<String> rows = query(connection, HEADER_SQL, List.of(receipt.aggregateId()), 1, row -> {
             require(receipt.aggregateId().equals(uuid(row, "aggregate_id"))
                     && "REGISTRATION".equals(row.getString("perfil"))
@@ -243,7 +260,7 @@ final class LegalPublicRequirementsReader {
 
     private List<RequirementMetadata> readMembers(Connection connection, ScopeOrigin origin,
                                                   LegalEditorialTimeBoundary boundary,
-                                                  LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                                  ReadBudget deadline) throws SQLException {
         List<RequirementMetadata> rows = query(connection, MEMBERS_SQL,
                 List.of(origin.publicationId(), origin.requiredSetId()), LegalManifestLimits.MAX_REQUIREMENTS, row -> {
                     UUID id = uuid(row, "requisito_version_id");
@@ -279,7 +296,7 @@ final class LegalPublicRequirementsReader {
 
     private void comparePublicationMembers(Connection connection, ScopeOrigin origin,
                                             List<RequirementMetadata> members,
-                                            LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                            ReadBudget deadline) throws SQLException {
         Map<UUID, RequirementMetadata> expected = new LinkedHashMap<>();
         members.forEach(member -> expected.put(member.id(), member));
         List<UUID> rows = query(connection, PUBLICATION_MEMBERS_SQL, List.of(origin.publicationId()),
@@ -295,7 +312,7 @@ final class LegalPublicRequirementsReader {
     }
 
     private Map<UUID, List<UUID>> readReferences(Connection connection, List<RequirementMetadata> requirements,
-                                                LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                                ReadBudget deadline) throws SQLException {
         Map<UUID, List<UUID>> result = new LinkedHashMap<>();
         requirements.forEach(requirement -> result.put(requirement.id(), new ArrayList<>()));
         List<UUID> ids = List.copyOf(result.keySet());
@@ -322,7 +339,7 @@ final class LegalPublicRequirementsReader {
     private Map<UUID, DocumentMetadata> readDocumentMetadata(Connection connection, List<UUID> ids,
                                                             ScopeOrigin origin,
                                                             LegalEditorialTimeBoundary boundary,
-                                                            LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                                            ReadBudget deadline) throws SQLException {
         Map<UUID, DocumentMetadata> result = new LinkedHashMap<>();
         for (List<UUID> batch : batches(ids)) {
             List<Object> args = new ArrayList<>(batch);
@@ -358,7 +375,7 @@ final class LegalPublicRequirementsReader {
     }
 
     private Map<UUID, String> readStatements(Connection connection, List<RequirementMetadata> requirements,
-                                             LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                             ReadBudget deadline) throws SQLException {
         Map<UUID, RequirementMetadata> metadata = new LinkedHashMap<>();
         requirements.forEach(requirement -> metadata.put(requirement.id(), requirement));
         Map<UUID, String> result = new LinkedHashMap<>();
@@ -386,7 +403,7 @@ final class LegalPublicRequirementsReader {
     }
 
     private Map<UUID, DocumentProjection> readDocuments(Connection connection, Map<UUID, DocumentMetadata> metadata,
-                                                       LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                                       ReadBudget deadline) throws SQLException {
         Map<UUID, DocumentProjection> result = new LinkedHashMap<>();
         for (List<UUID> batch : batches(List.copyOf(metadata.keySet()))) {
             String sql = """
@@ -412,7 +429,7 @@ final class LegalPublicRequirementsReader {
     }
 
     private String validatedText(ResultSet row, long octets, String digest,
-                                 LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                 ReadBudget deadline) throws SQLException {
         byte[] bytes = row.getBytes("text_utf8");
         deadline.check();
         require(bytes != null && bytes.length == octets);
@@ -424,7 +441,7 @@ final class LegalPublicRequirementsReader {
 
     /** Every query has a maximum-plus-one sentinel; text queries also have a server-side byte gate. */
     private static <T> List<T> query(Connection connection, String sql, List<?> arguments, int maximum,
-                                      RowMapper<T> mapper, LegalPublicRequirementsDeadline deadline) throws SQLException {
+                                      RowMapper<T> mapper, ReadBudget deadline) throws SQLException {
         deadline.check();
         try (PreparedStatement statement = connection.prepareStatement(sql + " LIMIT " + (maximum + 1),
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
@@ -521,6 +538,12 @@ final class LegalPublicRequirementsReader {
             result.add(ids.subList(start, Math.min(ids.size(), start + BATCH_SIZE)));
         }
         return result;
+    }
+
+    /** Capability adapter only: no duration, clock, cleanup state or independently renewable budget. */
+    private record ReadBudget(Runnable checkpoint, Consumer<Statement> cancellation) {
+        void check() { checkpoint.run(); }
+        void cancel(Statement statement) { cancellation.accept(statement); }
     }
 
     @FunctionalInterface

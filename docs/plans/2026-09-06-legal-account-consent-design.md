@@ -14,8 +14,8 @@ legales del contrato. 15G1 cerrado con 294 pruebas y 15G2 con 260 pruebas focale
 15I completo en I1/I2/I3, con clean verify fresco de 6959 pruebas aprobadas. 15J1 cerrado con 346
 pruebas focales; 15J2 cerrado con 628 pruebas (550 unitarias y 78 PostgreSQL). 15J3 cerrado con
 920 focales y clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 pruebas
-focales y clean verify fresco de 7567. 15L1 cerrado con 436 focales; 15L2 cerrado con 437 focales.
-15L permanece abierto: sigue 15L3, orquestación y gate del servicio de registro.
+focales y clean verify fresco de 7567. 15L1 cerrado con 436 focales; 15L2 con 437 y 15L3 con 651 focales.
+15L completo en L1/L2/L3. Sigue 15M, registro HTTP compatible y efectos poscommit.
 
 ## Objetivo y resultado esperado
 
@@ -930,3 +930,31 @@ al deadline compartido y gate del servicio con concurrencia/causalidad. El GET i
 fixture no acredita ese flujo integral. 15L sigue abierto; 15M conserva HTTP y sesión/email poscommit.
 No se activa el contexto ni se toca frontend. Commit atómico
 `feat(legal): escribe cuenta y evidencia de registro`, sin push.
+
+### Apertura 15L3 — 2026-09-08
+
+Se ratifica la composición del servicio interno sobre L1/L2: deadline único antes de forma/pool,
+reserva/replay antes del catálogo y preparación BCrypt sólo tras MISS y selección válida. El lector
+compartirá check/cancel del plazo original mediante readForRegistration; el GET público conserva
+su firma y presupuesto. El fallo de entrega de un replay acreditado conserva Persistence=PERSISTED
+y sus IDs, distinguiéndolo de Completion de esa transacción; sigue siendo error operativo.
+La lista nominal de 13 archivos y el gate focal se fijan en el plan antes de editar código.
+No se publica HTTP ni se emite sesión/email; 15M deberá cubrir esos efectos y su plazo poscommit.
+
+### Cierre 15L3 y 15L — 2026-09-08T13:51:38-03:00
+
+Servicio interno de registro completo, clasificación de fallos y lector con deadline compartido
+implementados en los 13 archivos nominales. La reserva/replay precede al catálogo; sólo un MISS
+válido prepara BCrypt y escribe mediante L2. El recibo normal se entrega después de confirmar y
+liberar recursos. Un replay ya acreditado conserva Persistence=PERSISTED e IDs aunque falle su
+transacción de entrega: Completion describe esa entrega, y el fallo sigue siendo operativo.
+
+Gate focal final de **651 pruebas** (375 Surefire + 276 PostgreSQL), 24 suites frescas sin
+fallos/errores/omitidas/reintentos, terminado 2026-09-08T10:44:14-03:00. La cobertura y los intentos quedan
+detallados en el plan. Auditoría de ambos artefactos aprobada; V27/V28/V29, roles e inventarios
+intactos. El GET público conserva firma/SQL y plazo de 15 s; registro comparte su plazo de 30 s
+sin reiniciarlo por fase, con transacción propia de 25 s.
+
+**15L cerrado en L1/L2/L3; sigue 15M.** El servicio aún no se registra en HTTP ni emite sesión/email.
+M aplicará K por IDs durables y acreditará el presupuesto incluyendo sesión. Frontend intacto.
+Commit atómico `feat(legal): crea cuenta y evidencia en una transaccion`, sin push.
