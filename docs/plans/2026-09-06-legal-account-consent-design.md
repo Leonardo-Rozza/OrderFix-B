@@ -1000,3 +1000,38 @@ presenta un gate PostgreSQL ni clean verify anterior como evidencia nueva. Front
 **Sigue 15M2**, token de verificación en transacción propia confirmada antes de enviar. 15M permanece
 abierto: M3 integra HTTP/sesión/replay y acredita el plazo exterior más clean verify fresco.
 Commit atómico `feat(legal): prepara entrada compatible de registro`, sin push.
+
+### Apertura 15M2 — 2026-09-08
+
+Se implementa la frontera aprobada de verificación poscommit en nueve archivos nominales fijados
+en el plan. CuentaService captura sólo IDs; agenda después del commit exterior o invoca directamente
+sin TX. Un bean independiente relee estado y pertenencia, invalida y emite sólo tokens de email y
+persiste el hash en REQUIRES_NEW/READ_COMMITTED. El notifier envía sólo después del retorno confirmado
+de ese proxy; no persiste con el EntityManager que Spring mantiene durante afterCommit.
+
+Se conserva token32bytes/SHA-256, 48h por defecto, LocalDateTime.now, asunto y ruta existentes. La
+interpolación HTML escapa valores. Errores de emisión/commit/envío son best effort con categorías
+fijas sin datos; ante ACK perdido no enviar ni reintentar automáticamente. PostgreSQL acreditará
+visibilidad independiente antes del envío y consumo real por verificarEmail, además de rollback,
+reenvío selectivo y suspensión/restauración JPA. No se amplían SMTP, reset, sesión ni HTTP legal.
+
+No se añade un lock aislado de emisor que deje sin cubrir consumo/reenvío concurrentes; esas carreras
+históricas quedan explícitamente para evaluación conjunta en 15P. M2 acredita secuencia y commit,
+no unicidad concurrente de tokens. Gate focal con empaquetado; clean verify fresco sigue en M3.
+
+### Cierre 15M2 — 2026-09-08T15:00:57-03:00
+
+Verificación poscommit implementada en nueve archivos nominales: CuentaService agenda por IDs y el
+issuer externo confirma el token en REQUIRES_NEW/READ_COMMITTED antes de enviar. El notifier usa
+datos actuales, mensajes HTML escapados y categorías de fallo sin datos; no reintenta por ACK
+perdido. Reset, consumo, transporte y contrato HTTP actual se conservan.
+
+**111 pruebas focales aprobadas** (84 Surefire + 27 PostgreSQL), 52 nuevas y
+59 de regresión. Se acreditaron visibilidad independiente del token antes del envío,
+consumo real, rollback, suspensión JPA y fallos de INSERT/commit/ACK/sender. Auditoría de XML,
+clases, recursos y ambos artefactos aprobada; hashes congelados y frontend intactos. El plan detalla
+ajustes del fixture, evidencia y límites, sin atribuir a mocks un commit real.
+
+**Sigue 15M3**, HTTP/sesión/replay y plazo exterior con clean verify fresco. 15M sigue abierto;
+reenvío/consumo concurrentes conservan su seguimiento en 15P. Commit atómico
+`fix(auth): confirma verificacion antes de enviar email`, sin push.

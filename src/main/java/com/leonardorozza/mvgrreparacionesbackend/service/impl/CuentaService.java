@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -37,15 +39,13 @@ public class CuentaService {
     private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailSender emailSender;
+    private final AccountVerificationNotifier verificationNotifier;
 
     @Value("${app.public-url:http://localhost:5173}")
     private String publicUrl;
 
     @Value("${auth.token.reset-horas:1}")
     private int resetHoras;
-
-    @Value("${auth.token.verificacion-horas:48}")
-    private int verificacionHoras;
 
     // ---------- Olvido / reset de contraseña ----------
 
@@ -83,17 +83,25 @@ public class CuentaService {
 
     // ---------- Verificación de email ----------
 
-    /** Manda el email de bienvenida + verificación (lo llama el registro). */
-    @Transactional
+    /** Schedules verification after the caller commits; the notifier persists in its own transaction. */
     public void enviarVerificacion(User user) {
-        String token = emitirToken(user, TipoAuthToken.VERIFICACION_EMAIL, verificacionHoras);
-        String link = publicUrl + "/verificar-email?token=" + token;
-        emailSender.enviar(user.getEmail(), "Confirmá tu email de OrdenFix",
-                """
-                <p>Hola %s, ¡bienvenido a OrdenFix!</p>
-                <p>Confirmá tu email haciendo clic en el link (vence en %d horas):</p>
-                <p><a href="%s">%s</a></p>
-                """.formatted(user.getUsername(), verificacionHoras, link, link));
+        Long userId = user == null ? null : user.getId();
+        Long tallerId = user == null || user.getTaller() == null ? null : user.getTaller().getId();
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            verificationNotifier.notifyVerification(userId, tallerId);
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // An active transaction without callbacks cannot accredit a post-commit delivery.
+            log.warn("Verificación de email omitida: COMMIT_CALLBACK_UNAVAILABLE.");
+            return;
+        }
+        // Capture only durable IDs, never a managed User or its persistence context.
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() {
+                verificationNotifier.notifyVerification(userId, tallerId);
+            }
+        });
     }
 
     @Transactional

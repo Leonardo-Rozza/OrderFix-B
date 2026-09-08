@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15L completo en L1/L2/L3. 15M1 cerrado con 434 pruebas focales; siguen M2 poscommit y M3 HTTP integral.
+15L completo en L1/L2/L3. 15M1 cerrado con 434 pruebas focales y M2 con 111; sigue M3, integración HTTP y gate transversal.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -2309,6 +2309,142 @@ inventarios, roles y frontend permanecen intactos. No hay cambio HTTP efectivo e
 **15M1 cerrado; sigue 15M2**, verificación de email poscommit con token confirmado y consumible.
 15M sigue abierto hasta integrar HTTP/sesión/replay y aprobar clean verify fresco en M3.
 Commit atómico `feat(legal): prepara entrada compatible de registro`, sin push.
+
+### Apertura 15M2 — 2026-09-08
+
+Baseline backend `0a99433`, rama `codex/lanzamiento-publico-backend`, árbol limpio. Se continúa el
+diseño aprobado de M2. Frontend `7545201`, sus dos rutas no versionadas y V27/V28/V29 preservados.
+Lista nominal exacta de **nueve archivos**, fijada antes del código:
+
+- Existente `svc/CuentaService.java`: sólo separar el disparo de verificación; reset/olvido y consumo
+  conservan su implementación. No modificar RegistroService ni AuthController en este corte.
+- Nuevos `svc/AccountVerificationTokenIssuer.java` y `svc/AccountVerificationNotifier.java`.
+- Nuevos tests en el paquete equivalente: AccountVerificationTokenIssuerTest,
+  AccountVerificationNotifierTest, CuentaVerificationSchedulingTest y AccountVerificationPostCommitIT.
+  El IT contiene su fixture/observadores PostgreSQL propios, sin ampliar helpers existentes.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Fronteras ratificadas:
+
+1. `AccountVerificationTokenIssuer.issue(Long userId, Long tallerId)` es un bean invocado a través
+   del proxy con REQUIRES_NEW/READ_COMMITTED mutable. Usa findSessionByIdAndTallerId ya existente;
+   relee identidad/pertenencia, usuario/taller activos, email actual no vacío y email no verificado.
+   Ausencia/ineligibilidad devuelve Optional.empty sin DML. Los roles actuales pueden verificar su
+   cuenta, sin convertir esta operación en emisión de sesión ni buscar por email histórico.
+2. Invalida sólo VERIFICACION_EMAIL y persiste el hash SHA-256 de un token SecureRandom de 32 bytes,
+   Base64 URL sin padding. Conserva auth.token.verificacion-horas:48 y LocalDateTime.now de la
+   implementación actual, sin cambiar zona/reloj o introducir rangos de configuración. Preparar
+   token/expiración antes de invalidar. Un fallo previo al commit revierte la TX nueva; perder su ACK
+   puede dejar el token persistido y se trata como entrega incierta, sin envío.
+   Retorna Optional<Delivery> inmutable con destinatario/nombre actuales, token crudo y horas; su
+   toString es redactado y no transporta entidades JPA, IDs ni el hash persistido.
+3. `AccountVerificationNotifier.notifyVerification(userId,tallerId)` invoca al issuer y envía sólo
+   tras su retorno confirmado. No engloba emisión/envío en otra transacción. Conserva asunto,
+   ruta /verificar-email y texto; escapa nombre y link al interpolarlos en HTML para que los valores
+   no se interpreten como marcado. No cambia SMTP, activación, reset, outbox ni garantía de entrega.
+   Fallo de emisión/commit o envío se absorbe con categoría literal, sin causa/input/credenciales;
+   no reintenta automáticamente. Commit incierto del token implica no enviar, aunque la fila
+   pudiera haber persistido; el reenvío explícito puede reemplazarla.
+4. CuentaService.enviarVerificacion conserva su API User para los llamadores actuales, captura
+   únicamente userId/tallerId y agenda el notifier en afterCommit si hay TX real con sincronización.
+   Quita la anotación propia para no abrir una TX vacía cuando se llama sin TX; en ese caso llama
+   directamente al notifier. Si hay TX real sin sincronización, omite con categoría fija porque
+   no puede acreditar su commit. No captura User ni EntityManager. Reenvío conserva su TX y su
+   self-invocation agenda la misma ruta; REQUIRES_NEW vive en el bean externo, no en la self-call.
+5. Spring puede conservar flags/recursos de la TX exterior ya confirmada durante afterCommit.
+   La garantía se prueba con commit del issuer y conexión/EntityManager propios, más lectura de
+   token desde otra conexión antes del envío; no se exige TSM vacío en ese callback. Una llamada
+   directa sin TX sí debe limpiar sus recursos al terminar.
+
+La operación no amplía permisos JDBC legales, queries, entidades ni migraciones. El reenvío
+secuencial invalida enlaces anteriores. La carrera histórica DELETE+INSERT entre reenvíos
+simultáneos y el consumo concurrente no se declaran resueltos aquí: un lock sólo de emisor no
+resolvería ambos. La evaluación conjunta queda como seguimiento explícito de concurrencia en 15P;
+no se promete un único token vivo concurrente ni vinculación inmutable a un email futuro.
+
+Gate focal: los tres tests unitarios nuevos, CuentaTests, AuthTests y AccountSessionPolicyTest;
+PostgreSQL16 en AccountVerificationPostCommitIT y regresión AccountSessionPolicyIT. Incluir alta
+sin email antes de commit, rollback exterior sin token/email, nueva conexión/RC, cuenta por IDs y
+datos actuales, token durable visible al enviar y consumible por verificarEmail, invalidación
+secuencial selectiva, cuenta ya verificada/inactiva y pertenencia, fallos de INSERT/commit/ACK perdido
+y sender sin revertir alta. Observar contadores/filas/resultados reales, no atribuir commit a mocks.
+verify focal empaqueta ambos JAR; auditoría XML/clases/recursos/hashes congelados. No ejecutar Maven
+en paralelo sobre target. clean verify queda reservado a M3, salvo fallo transversal detectado.
+Commit atómico previsto `fix(auth): confirma verificacion antes de enviar email`, sin push.
+
+### Cierre 15M2 — 2026-09-08T15:00:57-03:00
+
+Verificación de email poscommit implementada en los nueve archivos nominales. CuentaService
+captura sólo IDs y programa después del commit exterior; el issuer independiente relee cuenta y
+pertenencia en REQUIRES_NEW/READ_COMMITTED, invalida sólo VERIFICACION_EMAIL y confirma el hash del
+token antes del envío. El notifier absorbe fallos de emisión/commit/envío con categorías fijas y
+sin reintento automático. Un ACK perdido no autoriza a enviar aunque el token haya persistido.
+
+Se preservan token32bytes/SHA-256, parámetros y defaults, reloj LocalDateTime y reenvío secuencial;
+el mensaje conserva asunto/ruta y escapa sus valores HTML. RegistroService y las rutas/respuestas
+actuales de cuenta quedan intactos, al igual que reset/consumo y el transporte SMTP. M2 modifica
+efectivamente cuándo se emite la bienvenida legacy, sin conectar aún el registro HTTP legal.
+
+Gate focal: **111 pruebas** (84 Surefire + 27 PostgreSQL), 52 nuevas y 59
+de regresión, ocho suites frescas sin fallos/errores/omitidas/reintentos. verify focal terminó con
+BUILD SUCCESS en 53.318 s y empaquetó ambos artefactos. No se repitió clean
+verify; el gate transversal fresco continúa reservado a M3.
+
+| Suite focal | Casos |
+| --- | ---: |
+| AccountVerificationTokenIssuerTest | 18 |
+| AccountVerificationNotifierTest | 7 |
+| CuentaVerificationSchedulingTest | 10 |
+| CuentaTests | 6 |
+| AuthTests | 8 |
+| AccountSessionPolicyTest | 35 |
+| AccountVerificationPostCommitIT | 17 |
+| AccountSessionPolicyIT | 10 |
+
+
+PostgreSQL16 con Flyway acredita ausencia de email/token antes del commit y tras rollback exterior,
+transacción mutable RC con conexión/EntityManager propios, lectura de estado actual por IDs y
+restauración de la transacción exterior; una conexión independiente ve el token antes de enviar.
+El enlace se consume realmente por verificarEmail y persiste usadoEn/emailVerificado; el reenvío
+secuencial reemplaza sólo verificación, conserva reset y omite cuentas no aplicables.
+Fallos reales de INSERT, commit antes del servidor, ACK perdido y sender conservan los resultados
+durables correspondientes, no envían por emisión incierta y permiten recuperación explícita.
+Los flags/recursos exteriores que Spring mantiene durante afterCommit no se confunden con una
+transacción nueva del token ni con ausencia absoluta de contexto durante el envío.
+
+El gate Maven aprobó en su primer intento, sin reintentos ni cambios de Java después de congelar
+las fuentes. Terminó el 2026-09-08T14:57:50-03:00 sobre PostgreSQL 16.14. Las nuevas suites aportan
+18 casos de issuer, 7 de notifier, 10 de programación y 17 PostgreSQL; 59 casos son regresión de
+auth/cuenta y política de sesión. Las verificaciones de callbacks y errores con mocks se limitan
+a sus decisiones unitarias; la evidencia de commit/rollback proviene del fixture PostgreSQL.
+
+Antes del gate, la revisión y compilación aislada ajustaron únicamente el fixture nuevo: su
+configuración desmarca el primary del componente RecordingEmailSender sólo en ese contexto y
+acredita que el observador sea el único elegido. La prueba de suspensión actualiza sólo columnas
+no clave mediante la conexión JPA exterior, conservando su entidad gestionada; evita crear una
+autocontención entre UPDATE del email único y el FK del token. El límite local de lock de 2 s
+pertenece sólo al INSERT observado del fixture, no se atribuye a producción ni a un SLA. El helper
+de observación identifica transacción mutable RC; la confirmación se acredita por filas visibles
+desde otra conexión y consumo posterior, no por el nombre del helper.
+
+Los fallos de INSERT se generan en PostgreSQL (SQLSTATE 22012). La pérdida de confirmación se
+inyecta alrededor del commit real: antes del servidor se cierra la conexión y se comprueba rollback;
+después de confirmar en PostgreSQL se oculta el ACK y se comprueba que el token nuevo sí existe,
+sin email. En ambos casos el reenvío explícito crea un enlace consumible. No se cambiaron las
+clases productivas para obtener un resultado favorable en estas pruebas.
+
+Auditoría de XML frescos contra métodos compilados, fuentes congeladas, clases nominales y ambos
+artefactos aprobada. V27/V28/V29 conservan sus hashes en fuente/target/JAR; dependencias runtime,
+roles, inventarios, repositorios y frontend intactos. El verificador de empaquetado no encontró
+archivos *secret*.properties; no se presenta como análisis genérico de secretos.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `e1a714a957145faa1edb616e513d21dcda134d07c595ddb85dc3ada70d6c39ba`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `951b4befc02cde996edc36f05bf4318e7b566316acc3f76498d75fdcbd18bd5e`.
+
+**15M2 cerrado; sigue 15M3**, integración de registro HTTP compatible, sesión actual por IDs y
+replay, con plazo exterior y clean verify fresco. 15M permanece abierto. M2 no acredita entrega
+garantizada ni unicidad de tokens bajo reenvío/consumo concurrentes; sigue el seguimiento explícito
+de 15P. Commit atómico `fix(auth): confirma verificacion antes de enviar email`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 
