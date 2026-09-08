@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; sigue B3, luego M3C.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; siguen B3B/B3C y M3C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -2945,6 +2945,198 @@ captura de limpieza absorbida por Hibernate. M3C conectará parser/HTTP/replay y
 de respuesta. B2 no acredita todavía esos flujos ni una SLA física de cancelación. No se repitió
 clean verify completo: el último integral es M3A (8227 casos), con nuevos gates en B3/C. B y M
 siguen abiertos. Commit atómico `feat(legal): comparte plazo con lectura publica`, sin push.
+
+### Subdivisión 15M3B3 y apertura B3A — 2026-09-08
+
+La revisión de fuentes locales Boot4.0.6/Spring7.0.7/Hibernate7.2.12 confirma tres fronteras; se
+subdivide antes del código para mantener cortes pequeños:
+
+- **B3A — Router JDBC inerte y protección de recursos.** Dos DataSource suministrados, sin crear
+  pools ni beans. Fuera del scope se delega al histórico; dentro se usa el dedicado con el owner30.
+  Capturar fallos de control/limpieza absorbidos por Hibernate. Implementar ahora con foco y JPA/PG.
+- **B3B — Recursos y wiring Boot.** Holder AutoCloseable dueño del pool privado/watchdog y decorador
+  del bean exacto dataSource después de inicialización, sin segundo bean DataSource ordinario.
+  Acreditar misma referencia en EMF/JpaTM/JdbcTemplate y configuración/credenciales efectivas,
+  lifecycle ante cierre/refresh fallido y aislamiento de contextos. Apertura y gate propios.
+- **B3C — Emisión con checkpoints.** Reutilizar K en una sola TX REQUIRES_NEW/RC/readOnly bajo el
+  scope, sin invocar otra frontera anotada interna. Controlar antes/después de repo, BCrypt y JWT,
+  y tras commit/cleanup también ante fallo. Mantener login y alta legacy. Gate transversal fresco.
+  M3C (distinto de B3C) integrará después el registro HTTP/replay y control final de respuesta.
+
+Decisiones de wiring registradas para B3B: Boot destruye el bean original aunque un BPP exponga el
+router; el holder debe cerrar sus recursos y nunca el pool histórico. DataSourceProperties/DB_*
+no bastan para obtener URL/credenciales efectivas si Hikari o JdbcConnectionDetails las reemplazan.
+Copiar/acreditar el Hikari inicializado y su autoCommit; Hibernate deriva de ese pool la omisión
+del begin JDBC. Opciones de URL pgjdbc no deben sobreescribir los timeouts privados. No crear el
+holder con dependencia circular del dataSource ni dejar recursos fuera de su lifecycle registrado.
+
+B3A parte de backend `6dff064`, rama `codex/lanzamiento-publico-backend`, árbol limpio. B2 aprobó
+410 focales; último clean verify integral M3A:8227. Frontend `7545201` y sus dos rutas no versionadas
+preservados. Siete archivos nominales, antes de código:
+
+- Nuevos en `src/main/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/`:
+  `LegalRegistrationSessionDataSource.java` y `LegalRegistrationSessionUnavailableException.java`.
+- Nuevos tests del paquete equivalente: `LegalRegistrationSessionDataSourceTest.java`,
+  `LegalRegistrationSessionCleanupTest.java` y `LegalRegistrationSessionDataSourceIT.java`.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Contrato del router inerte:
+
+1. Clase pública final, constructor package-private (historical, dedicated), sin beans, propiedades
+   ni creación de pools. No admite delegados idénticos. Fuera del scope, la API DataSource conserva
+   delegación literal al histórico, incluida la identidad de la conexión; no modifica su timeout,
+   autoCommit ni credenciales. El cierre del router detiene sólo su protección/sus préstamos,
+   nunca cierra ninguno de los pools suministrados. El holder futuro tendrá su propiedad explícita.
+2. withinRegistrationBudget(owner, work) conserva exactamente el owner original; no inicia reloj
+   ni cap propio. Null/owner ajeno se rechazan sin reemplazar el ámbito; mismo owner anidado se
+   reutiliza y finally restaura/elimina el contexto local. Fuera del scope no hay owner ambiente.
+   Consultar owner antes/después del trabajo y ante RuntimeException: expiry/control/cleanup domina
+   la entrega; conservar fallo anterior suprimido si corresponde, sin esconder Error. Nunca decide
+   persistencia ni convierte un COMMITTED/UNKNOWN en rollback.
+3. Dentro del scope, sólo getConnection() usa el dedicado; no permite sustituir credenciales ni
+   escapar por unwrap, metadata.getConnection, Statement.getConnection o ResultSet.getStatement.
+   Rechazar préstamo con restante menor a 1000 ms; después comprobar owner y cerrar adquisición
+   parcial si no se pudo preparar Lease. Préstamo/pool acotado de 1 s será acreditado en B3B;
+   B3A no pretende convertir cualquier DataSource arbitrario en un pool con ese límite.
+4. SQL: min(5000 ms, restante owner), queryTimeout en segundos y SET LOCAL statement_timeout en
+   milisegundos dentro de TX; FETCH y metadatos bajo comprobaciones y red min(6000 ms, restante).
+   Watchdog cancela/aborta el préstamo al vencer y se cancela al liberarlo, sin abortarlo luego
+   de devolverlo. Conservar el margen SQL5/red6 para errores operativos de PostgreSQL. No prometer
+   SLA física de cancelación/teardown. El caller debe finalizar la TX y liberar recursos dentro
+   del scope; aún no se instala en EMF ni se afirma que K deje de firmar JWT después de un fallo.
+5. Captura estrecha por operación JDBC, sin inferir por SQLState ni por stack de Hibernate:
+   Connection/Statement/ResultSet.close, rollback/restauración de conexión y controles de recursos
+   Statement.getMaxRows/getQueryTimeout/isClosed/setMaxRows(0)/setQueryTimeout(0). Esos controles
+   pueden fallar antes o después de execute: son fallos de control o limpieza, no SQL de negocio.
+   No capturar cualquier set*. Errores de execute/next/getters de negocio se propagan sin intoxicar
+   owner cuando el cierre es correcto; 55P03 desde execute conserva esa distinción. Un error de
+   commit se propaga sin registrarlo como cleanup ni reinterpretar su ACK. El IT deberá observar
+   cómo JpaTM/Hibernate traducen el error y notifican completion: no asumir que equivale al manager
+   JDBC ni que una notificación ROLLED_BACK acredita rollback físico tras ACK perdido. La TX de
+   sesión es de lectura; no determina la persistencia del alta previa. Rollback/close/reset siguen
+   posibles después del vencimiento; preservar primera causa y suprimidas, sin cierre duplicado.
+6. Excepción de disponibilidad fija, sin datos de cuenta ni SQL en el mensaje público. La cadena
+   interna conserva causas; el owner sigue siendo LegalRegistrationBudget sin cambios. La política
+   de sesión, consultas, JWT/claims, endpoints, DTO, email y configuración quedan intactos en A.
+
+Validación focal: nuevos DataSourceTest (JDBC simulado), CleanupTest con ResourceRegistryStandardImpl
+real de Hibernate y nuevo DataSourceIT con JPA/PostgreSQL16 reales, sin Boot ni nueva entidad que
+contamine el entity-scan global. Usar entidades/migraciones existentes, pools de prueba con la misma
+credencial de aplicación, observación independiente y recursos propios del IT. Probar presupuesto
+consumido, SQL/FETCH, identidad/routing, suspensión/restauración, fallos de control/cleanup efectivos,
+55P03 operativo, commit/ACK y limpieza. No confundir Hibernate real con JDBC simulado ni con K.
+Regresiones: Budget/Adoption B1 y B2, AccountSessionPolicyTest/IT y ambos SharedBudgetIT anteriores.
+verify focal de once suites, auditoría de XML/clases/recursos/ambos JAR y hashes V27/V28/V29 congelados.
+Sin Maven concurrente ni clean verify integral en A salvo fallo transversal: son dos clases nuevas
+inertes. B3B/C fijarán sus gates según la activación y efectos transversales. Sin cambios de roles,
+migraciones, dependencia, configuración, frontend ni push. Commit previsto
+`feat(legal): acota recursos JDBC de sesion`.
+
+### Cierre 15M3B3A — 2026-09-08T18:33:21-03:00
+
+Implementados los siete archivos nominales: router JDBC y excepción nuevos, tres suites nuevas y
+los dos documentos. Las dos fuentes productivas son inertes: no registran beans ni crean pools;
+no cambian configuración, K, JWT, consultas, endpoints, DTO, login o frontend. La composición Boot
+y el dueño del pool dedicado corresponden a B3B, con gate propio; B3C integrará checkpoints de K.
+
+El ámbito explícito conserva el owner30 original y permite anidamiento sólo del mismo propietario.
+Fuera del ámbito se delega literalmente al DataSource histórico. Dentro, la conexión dedicada y
+los handles JDBC preservan el ámbito y no exponen delegados por unwrap ni referencias inversas.
+El wrapper limita SQL/red con el remanente y dispone de watchdog; devolver la conexión cancela
+ese watchdog y evita abortos posteriores sobre el préstamo. El límite de adquisición de 1 s debe garantizarlo el pool suministrado.
+No se promete una SLA física de cancelación ni se confunde esta pieza con la activación completa.
+
+Los errores de control/limpieza se registran por método y argumento, no por SQLState ni cualquier
+setter. Rollback, resets y cierre siguen disponibles después del vencimiento; la primera causa
+se conserva y bloquea las fases posteriores del owner. Los errores operativos con limpieza correcta
+conservan su naturaleza. El control al salir del ámbito cubre también la salida excepcional sin
+ocultar Error ni inferir la persistencia del alta.
+
+Gate focal aprobado: **222 pruebas** (167 Surefire + 55 PostgreSQL), 59 nuevas y
+163 de regresión. Once suites frescas sin fallos, errores, omitidas ni reintentos internos en
+la ejecución final. verify focal terminó con BUILD SUCCESS en 77.2 s.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalRegistrationSessionDataSourceTest | 25 |
+| LegalRegistrationSessionCleanupTest | 17 |
+| LegalRegistrationBudgetTest | 17 |
+| LegalRegistrationBudgetAdoptionTest | 20 |
+| LegalPublicRequirementsBudgetTest | 23 |
+| LegalPublicRequirementsBudgetAdoptionTest | 30 |
+| AccountSessionPolicyTest | 35 |
+| LegalRegistrationSessionDataSourceIT | 17 |
+| AccountSessionPolicyIT | 10 |
+| LegalRegistrationSharedBudgetIT | 12 |
+| LegalPublicRequirementsSharedBudgetIT | 16 |
+
+
+Las 25 pruebas nuevas de DataSource usan JDBC simulado: delegación histórica literal, API administrativa,
+identidad/anidamiento/restauración de ámbitos, ThreadLocal, salida excepcional, preservación de Error,
+SQL/FETCH/metadata, commit sin reinterpretar la cadena, adquisición parcial, cierre y cancelación.
+El watchdog se ejecuta realmente sobre un préstamo nominal de 1 s; su reloj de owner queda fijo en
+ese test para aislar cancel/abort y rechazo de IO. Ese caso no acredita expiración física del owner
+ni una SLA de teardown. Otro caso espera después del vencimiento programado y verifica que un
+préstamo devuelto no vuelva a abortarse. Los pools simulados no son cerrados por el router.
+
+Las 17 pruebas de Cleanup invocan ResourceRegistryStandardImpl de Hibernate 7.2.12 real sobre JDBC
+simulado. Cubren SQL/runtime absorbidos al cerrar ResultSet/Statement y consultar/restaurar límites,
+además de la diferencia de isClosed: SQLException absorbida y RuntimeException propagada. Exigen
+invocación efectiva del punto de fallo y registro del owner, incluidos controles anteriores a execute.
+Que Hibernate ya no registre recursos no demuestra que un cierre físico fallido haya tenido éxito.
+El mismo 55P03 desde execute conserva owner saludable si su limpieza termina correctamente.
+
+Las 17 pruebas nuevas de integración usan JPA/Hibernate y PostgreSQL 16 reales con entidades
+productivas, un EMF manual, el mismo rol de aplicación de prueba en ambos pools y observación
+independiente. Acreditan bootstrap histórico, identidad compartida con EMF/JpaTM, REQUIRES_NEW,
+READ_COMMITTED/readOnly y suspensión/restauración del EM/recurso/PID exterior. La TX externa hace
+un UPDATE real, invisible para la lectura interna, y luego rollback; la sesión dedicada no hace DML.
+El owner consumido durante 28 s deja SQL de 2 s y red de 2 s observados. Un 55P03 de lock_timeout real permite volver a
+usar el mismo owner después del rollback y cierre correctos.
+
+Nueve variantes de control/cleanup se inyectan sólo después de consulta/fila real. Los fallos de
+ResultSet/Statement bloquean el callback antes de commit; Connection.close, setReadOnly(false) y
+clearWarnings poscommit bloquean la entrega exterior manteniendo COMMITTED, 1 commit y 0 rollbacks.
+Los dos últimos acreditan absorción real de Spring/Hibernate. Todas verifican primera causa,
+retorno de préstamos, ausencia de DML y rechazo del próximo intento antes del pool. Vencimientos
+tras FETCH o tras hidratación antes de retornar callback producen 0 commits y 1 rollback;
+tras el commit delegado conservan COMMITTED y no entregan resultado.
+
+El ACK perdido se inyecta después de un COMMIT JDBC exitoso: Hibernate 7.2.12/Spring 7.0.7 traducen
+08006 a DataAccessResourceFailureException con causa SQL original. Spring notifica ROLLED_BACK,
+pero el conteo físico observado es 1 commit y 0 rollbacks. Esa notificación no revierte la confirmación
+ni dice nada sobre el alta previamente persistida. El ACK se propaga como fallo de commit y no se
+registra como cleanup en el owner. Este IT tiene un checkpoint propio: no invoca K, BCrypt ni JWT;
+B3C todavía debe colocar sus checkpoints productivos antes/después de esas fases.
+
+La compilación previa de las cinco fuentes y el único verify focal aprobaron al primer intento.
+No hubo fallos ni cambios transversales: no se amplió al clean verify integral. Se revisaron las
+fuentes y las matrices antes de congelarlas; la ampliación de dos casos de cleanup de conexión se
+hizo en el test nominal antes del gate. La auditoría final comprobó seis clases nuevas, 1055 clases
+y 32 recursos anteriores intactos y 1061 clases/32 recursos coincidentes en ambos artefactos.
+
+Comando focal con Java 21.0.10 y sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never -Dtest=LegalRegistrationSessionDataSourceTest,LegalRegistrationSessionCleanupTest,LegalRegistrationBudgetTest,LegalRegistrationBudgetAdoptionTest,LegalPublicRequirementsBudgetTest,LegalPublicRequirementsBudgetAdoptionTest,AccountSessionPolicyTest -Dit.test=LegalRegistrationSessionDataSourceIT,AccountSessionPolicyIT,LegalRegistrationSharedBudgetIT,LegalPublicRequirementsSharedBudgetIT verify
+```
+
+Auditoría aprobada de XML frescos contra métodos compilados, cinco fuentes Java congeladas y ambos
+JAR: clases/recursos coinciden con target, Start-Class web/CLI correctos, sin tests ni entradas
+duplicadas. El chequeo de nombres *secret*.properties no sustituye un análisis genérico de secretos.
+Todos los elementos productivos de B2 conservan sus bytes; se agregan sólo clases derivadas de las
+dos fuentes nuevas. V27/V28/V29 conservan hashes en fuente/target/JAR. Dependencias, roles,
+configuración y frontend permanecen intactos, incluidas las rutas no versionadas del frontend.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `fc82577fea19315d7d0462b797b3eef02ae2032f155782c24a7fd2bde585661c`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `2785bfe35065d42629a978e06a7add9302e435896efa3a5636540f9e69161cb0`.
+
+**15M3B3A cerrado; sigue B3B**, recursos y composición Boot del DataSource, y luego B3C para la
+emisión con checkpoints y gate transversal. M3C posterior conectará registro HTTP/replay y control
+final de respuesta. B3, M3B y M siguen abiertos. No se repitió clean verify completo en este corte
+inerte; el último integral continúa siendo M3A (8227 casos). Commit atómico
+`feat(legal): acota recursos JDBC de sesion`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 

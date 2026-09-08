@@ -1167,3 +1167,44 @@ GET público histórico y escritor L3 están en el foco. Migraciones congeladas 
 final de respuesta. No se cierra aún el presupuesto extremo a extremo. Último clean verify integral
 M3A (8227 casos); este corte ejecutó sólo su gate focal. Commit
 `feat(legal): comparte plazo con lectura publica`, sin push.
+
+### Apertura 15M3B3A — 2026-09-08
+
+B3 se divide antes del código: A router/protección JDBC inerte, B recursos y wiring Boot, C emisión
+con checkpoints y gate integral. Un router suministrado con dos fuentes evita crear ahora otro bean
+DataSource o cambiar login/JPA; fuera de scope delega literalmente al histórico y dentro adopta el
+owner30 para el dedicado. El holder futuro conserva propiedad de pool/watchdog; Boot destruye el
+original y la configuración efectiva puede provenir de Hikari/JdbcConnectionDetails, no sólo props.
+
+Siete archivos nominales en A: dos clases nuevas, tres tests nuevos y estos documentos. Se capturan
+por método/argumento los fallos de control/limpieza que Hibernate7.2.12 absorbe, incluidos getters
+y resets de Statement; no por SQLState ni cualquier set*. SQL operativo como55P03 no intoxica owner
+con cleanup correcto. Recursos se pueden cerrar/rollback después de expiry, se conserva la causa
+original y no se modifica evidencia de commit. Pool1s/SQL5s/red6s son los límites del consumidor
+nominal; el wrapper solo no puede acreditar el límite de un pool arbitrario.
+
+Foco con Hibernate ResourceRegistry real sobre JDBC simulado y JPA/PostgreSQL reales, diferenciados.
+No se registra bean, crea pool, altera credenciales ni modifica K/JWT en A; por tanto aún no se
+afirma bloqueo de firma después de cleanup. Las notificaciones de JpaTM se observarán sin asumir
+la traducción UNKNOWN del manager JDBC: un ACK perdido no demuestra rollback físico aunque el
+framework notifique ROLLED_BACK. No se modifica el manager ni se decide persistencia del alta.
+B3C agregará checkpoints alrededor de consulta/BCrypt/
+firma y al finalizar la TX. M3C posterior conecta HTTP/replay. Último clean verify integral M3A
+(8227 casos); nuevos gates transversales se fijarán en B3B/C. Sin migraciones ni push.
+
+### Cierre 15M3B3A — 2026-09-08T18:33:21-03:00
+
+Router inerte con DataSource histórico/dedicado suministrados y ámbito explícito del owner30.
+Los controles y cierres JDBC registran la causa original aunque Hibernate la absorba; un SQL
+operativo no se convierte en fallo de limpieza por compartir SQLState. El cierre se permite tras
+expiry; no se modifica evidencia del commit ni se entrega un resultado con owner invalidado.
+
+**222 pruebas focales aprobadas**, 59 nuevas (167 Surefire + 55 PostgreSQL en
+total), y auditoría de fuentes/reportes/ambos JAR aprobada. La evidencia separa ResourceRegistry
+real sobre JDBC simulado de la integración JPA/PostgreSQL; el plan detalla resultados y límites.
+La notificación de finalización de JpaTM no determina por sí sola el resultado físico de COMMIT.
+
+**Sigue B3B**, dueño del pool y composición Boot; B3C agregará checkpoints alrededor de consulta,
+BCrypt, JWT y salida transaccional. Todavía no se acredita esa emisión ni HTTP/replay de M3C.
+No hay activación, cambios de K/login/configuración/roles/migraciones/frontend ni push. Último
+clean verify integral M3A (8227 casos). Commit `feat(legal): acota recursos JDBC de sesion`.
