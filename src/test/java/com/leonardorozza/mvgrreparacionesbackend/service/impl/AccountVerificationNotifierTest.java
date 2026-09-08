@@ -2,12 +2,16 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.service.email.EmailSender;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.web.util.HtmlUtils;
 
@@ -20,12 +24,33 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /** Observes the issuer's public return; PostgreSQL tests independently accredit its actual commit. */
-@ExtendWith(OutputCaptureExtension.class)
 class AccountVerificationNotifierTest {
     private static final String RECIPIENT = "private-recipient@synthetic.invalid";
     private static final String NAME = "Nombre actual";
     private static final String TOKEN = "private-token-for-delivery";
     private static final String URL = "https://synthetic.invalid";
+
+    private Logger logger;
+    private Level previousLevel;
+    private ListAppender<ILoggingEvent> events;
+
+    @BeforeEach void observeOnlyTheNotifierLogger() {
+        logger = (Logger) LoggerFactory.getLogger(AccountVerificationNotifier.class);
+        previousLevel = logger.getLevel();
+        events = new ListAppender<>();
+        events.setContext(logger.getLoggerContext());
+        events.start();
+        // CLI contexts may disable the shared console/root logger. Observe this
+        // class directly, then restore its prior level without resetting logging.
+        logger.setLevel(Level.WARN);
+        logger.addAppender(events);
+    }
+
+    @AfterEach void releaseTheObserverAndRestoreTheLogger() {
+        logger.detachAppender(events);
+        events.stop();
+        logger.setLevel(previousLevel);
+    }
 
     @Test void sendsTheOriginalVerificationSubjectRouteAndHtmlOnlyAfterTheIssuerReturns() {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
@@ -58,16 +83,16 @@ class AccountVerificationNotifierTest {
         assertThat(html.getValue()).doesNotContain(name, base + "/verificar-email?token=" + TOKEN);
     }
 
-    @Test void skippedAccountDoesNotSendOrReissueAnything(CapturedOutput output) {
+    @Test void skippedAccountDoesNotSendOrReissueAnything() {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
         when(issuer.issue(7L, 19L)).thenReturn(Optional.empty());
         new AccountVerificationNotifier(issuer, sender, URL).notifyVerification(7L, 19L);
         verify(issuer, times(1)).issue(7L, 19L); verifyNoInteractions(sender);
-        assertThat(output).doesNotContain("TOKEN_ISSUANCE_FAILED", "DELIVERY_FAILED", TOKEN, RECIPIENT);
+        assertThat(events.list).isEmpty();
     }
 
     @ParameterizedTest @ValueSource(strings = {"persistence", "commit", "incoherent-result"})
-    void issuerOrCommitFailureNeverSendsAndIsLoggedOnlyAsAFixedCategory(String phase, CapturedOutput output) {
+    void issuerOrCommitFailureNeverSendsAndIsLoggedOnlyAsAFixedCategory(String phase) {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
         RuntimeException failure = phase.equals("commit")
                 ? new TransactionSystemException(TOKEN + RECIPIENT) : new IllegalStateException(TOKEN + RECIPIENT);
@@ -76,11 +101,10 @@ class AccountVerificationNotifierTest {
         assertThatCode(() -> new AccountVerificationNotifier(issuer, sender, URL).notifyVerification(7L, 19L))
                 .doesNotThrowAnyException();
         verify(issuer, times(1)).issue(7L, 19L); verifyNoInteractions(sender);
-        assertThat(output).contains("TOKEN_ISSUANCE_FAILED").doesNotContain("DELIVERY_FAILED", TOKEN, RECIPIENT,
-                URL, "TransactionSystemException", "IllegalStateException", "NullPointerException");
+        assertFixedWarning("TOKEN_ISSUANCE_FAILED");
     }
 
-    @Test void senderFailureIsAbsorbedWithoutReissuingTheAlreadyCommittedToken(CapturedOutput output) {
+    @Test void senderFailureIsAbsorbedWithoutReissuingTheAlreadyCommittedToken() {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
         when(issuer.issue(7L, 19L)).thenReturn(Optional.of(delivery()));
         doThrow(new IllegalStateException(TOKEN + RECIPIENT + URL)).when(sender).enviar(anyString(), anyString(), anyString());
@@ -88,7 +112,19 @@ class AccountVerificationNotifierTest {
                 .doesNotThrowAnyException();
         verify(issuer, times(1)).issue(7L, 19L); verify(sender, times(1)).enviar(anyString(), anyString(), anyString());
         verifyNoMoreInteractions(issuer, sender);
-        assertThat(output).contains("DELIVERY_FAILED").doesNotContain("TOKEN_ISSUANCE_FAILED", TOKEN, RECIPIENT, URL, "IllegalStateException");
+        assertFixedWarning("DELIVERY_FAILED");
+    }
+
+    private void assertFixedWarning(String category) {
+        assertThat(events.list).singleElement().satisfies(event -> {
+            assertThat(event.getLoggerName()).isEqualTo(AccountVerificationNotifier.class.getName());
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getMessage()).isEqualTo("Verificación de email omitida: " + category + ".");
+            assertThat(event.getFormattedMessage()).isEqualTo(event.getMessage()).doesNotContain(TOKEN, RECIPIENT, URL);
+            assertThat(event.getArgumentArray()).isNullOrEmpty();
+            assertThat(event.getThrowableProxy()).isNull();
+            assertThat(event.getKeyValuePairs()).isNullOrEmpty();
+        });
     }
 
     private static AccountVerificationTokenIssuer.Delivery delivery() {

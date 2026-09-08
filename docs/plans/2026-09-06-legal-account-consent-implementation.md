@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15L completo en L1/L2/L3. 15M1 cerrado con 434 pruebas focales y M2 con 111; sigue M3, integración HTTP y gate transversal.
+15L completo en L1/L2/L3. 15M1/M2/15M3A cerrados; clean verify fresco con 8227 pruebas. Siguen M3B plazo/JPA y M3C HTTP/replay.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -2445,6 +2445,175 @@ archivos *secret*.properties; no se presenta como análisis genérico de secreto
 replay, con plazo exterior y clean verify fresco. 15M permanece abierto. M2 no acredita entrega
 garantizada ni unicidad de tokens bajo reenvío/consumo concurrentes; sigue el seguimiento explícito
 de 15P. Commit atómico `fix(auth): confirma verificacion antes de enviar email`, sin push.
+
+### Subdivisión 15M3 y apertura 15M3A — 2026-09-08
+
+La revisión previa separa tres fronteras independientes para mantener cortes pequeños:
+
+- **15M3A — Alta legacy confirmada y sesión por IDs.** Extraer la escritura JPA y conectar las
+  fronteras K/M2 ya verificadas. Gate focal y clean verify fresco por el efecto transversal en alta.
+- **15M3B — Plazo compartido y sesión JPA acotada.** Un propietario del plazo legal de 30 s, sin
+  reinicios entre lectura pública, escritor y sesión. La adquisición/FETCH/cleanup JPA necesitan
+  una frontera selectiva y pool acotado: TransactionTemplate con timeout y checkpoints solos no
+  acreditan esos límites. Conservar el pool histórico fuera del registro legal y las credenciales
+  de aplicación para la sesión; nunca usar el rol escritor legal para JPA. Fijar archivos nominales
+  y subdividir si hace falta al abrir B, antes del código. Email best effort queda fuera de ese plazo.
+- **15M3C — Integración HTTP y replay.** Capacidades/configuración aislada, reader/parser M1,
+  fachada y ruta existentes, traducción de errores limitada al registro, replay sin bienvenida,
+  plazo acreditado extremo a extremo y clean verify fresco. Apertura nominal propia antes del código.
+
+M3 sigue abierto hasta completar todas esas fronteras. No se impone un nuevo plazo legal al alta
+legacy en A. Tampoco se declara resuelta la frontera JPA por introducir un timeout parcial.
+
+Baseline backend `0a563a1`, rama `codex/lanzamiento-publico-backend`, árbol limpio. Frontend `7545201`
+y sus archivos no versionados preservados. Lista exacta de **siete archivos**, fijada antes del código:
+
+- Nuevo `src/main/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/LegacyRegistrationAccountWriter.java`.
+- Existente `src/main/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/RegistroService.java`.
+- Nuevos tests en el paquete equivalente: `LegacyRegistrationAccountWriterTest.java`,
+  `RegistroServiceTest.java` y `LegacyRegistrationPostCommitIT.java`. El IT contiene su fixture propio.
+- Este plan y `docs/plans/2026-09-06-legal-account-consent-design.md`.
+
+Writer.create(RegisterRequestDto) devuelve Identity(long userId, long tallerId) inmutable, IDs
+positivos y toString redactado, sólo después del retorno confirmado de un proxy REQUIRES_NEW /
+READ_COMMITTED mutable. Conserva exactamente validación de email existente, valores de negocio,
+encoder, Clock, plan.trial-dias:14 y las tres escrituras Taller + Suscripcion FREE/TRIAL + ADMIN.
+No introduce normalización, cambio de defaults ni transporte de entidades fuera de esa frontera.
+
+RegistroService.registrar deja de abrir una transacción: writer.create → notifier M2 por IDs una
+vez → AccountSessionPolicy K por IDs y contraseña. Conserva el orden lógico de las llamadas de
+verificación y sesión. Precisión respecto del baseline M2: CuentaService difería el envío físico
+al afterCommit exterior, después de firmar JWT. A realiza el envío tras confirmar el writer y
+antes de K; por eso la sesión puede reflejar cambios confirmados durante la notificación.
+K relee email, contraseña, verificación, estado, pertenencia y tokenVersion actuales en su TX propia.
+No se buscan datos por el email del request para emitir la sesión. Si writer no retorna por fallo
+de escritura/commit, no hay notificación ni sesión; commit con ACK perdido sigue siendo incierto,
+sin reintento automático. Si falla sesión después del alta confirmada, el alta permanece durable,
+se propaga el error y no se recrea ni se reenvía. Una TX llamadora se suspende durante cada frontera
+REQUIRES_NEW; su rollback posterior no revierte el alta ya confirmada.
+
+No se modifican AuthController, DTO, K, infraestructura legal, dependencias ni V27/V28/V29. Gate focal:
+dos unitarios nuevos, AuthTests, CuentaTests, AccountSessionPolicyTest, AccountVerificationNotifierTest,
+AuthServiceTest y CuentaVerificationSchedulingTest;
+PostgreSQL 16 en LegacyRegistrationPostCommitIT, AccountSessionPolicyIT y AccountVerificationPostCommitIT.
+Observar commit mediante conexión independiente antes de email/sesión, paridad del alta, IDs y metadata
+actuales, suspensión/restauración, rollback de las tres filas, fallos de commit/ACK y fallo poscommit
+sin recreación. Los mocks acreditan secuencia, no persistencia. Después clean verify fresco sin
+Maven concurrente y auditoría de reportes/clases/recursos/JAR/hashes congelados. Documentar intentos,
+evidencia y límites. Commit previsto `refactor(auth): emite sesion despues de confirmar el alta`, sin push.
+
+### Ajuste nominal 15M3A por gate integral — 2026-09-08
+
+El primer verify focal aprobó 148 casos. El primer clean verify fresco recompiló todo, pero
+Surefire terminó con 6995 casos y cuatro fallos en AccountVerificationNotifierTest: CapturedOutput
+vacío no contenía las categorías de fallo esperadas. Esa misma suite de siete casos había aprobado
+en el foco. No hubo otro fallo de test; ese intento no llegó a ejecutar Failsafe ni a empaquetar.
+
+Antes de corregir, se incorpora un **octavo archivo nominal existente**:
+`src/test/java/com/leonardorozza/mvgrreparacionesbackend/service/impl/AccountVerificationNotifierTest.java`.
+El ajuste es del observador de logs del test: capturar eventos del logger específico mediante un
+appender propio en memoria, con nivel local explícito restaurado al terminar, sin depender de
+System.out ni de la configuración global de consola de otros contextos. Mantener las siete pruebas,
+exigir categoría literal, nivel WARN, ausencia de argumentos/datos sensibles y throwable, y ninguna
+notificación adicional. No cambiar el logger/productivo, niveles de aplicación ni suites ajenas.
+Se conservan los reportes del intento fallido y se repetirán foco y clean verify completo después
+del ajuste. Los siete archivos iniciales conservan su alcance; esta ampliación responde a un fallo
+concreto del gate transversal, no agrega funcionalidad nueva.
+
+### Cierre 15M3A — 2026-09-08T16:20:09-03:00
+
+Alta legacy confirmada y sesión por IDs implementadas en los ocho archivos nominales. El writer
+conserva valores, validación de email existente, Clock, trial configurable y las tres escrituras
+Taller/Suscripcion FREE/TRIAL/ADMIN. Su proxy REQUIRES_NEW/READ_COMMITTED devuelve sólo IDs tras
+confirmar. RegistroService invoca writer → notifier M2 → política K; K relee cuenta y pertenencia,
+contraseña, email/verificación, estado y tokenVersion actuales. No se transportan entidades ni se
+busca la sesión por el email del request. HTTP, DTO, K y fronteras legales no se modificaron.
+
+Se precisa el cambio de orden físico respecto de M2: el envío ya no espera el afterCommit exterior
+posterior a la firma JWT; ahora ocurre entre el commit del writer y K. Un fallo poscommit de K
+conserva el alta y cualquier token de verificación ya confirmado; se propaga sin recrear cuenta ni
+repetir bienvenida. REQUIRES_NEW suspende
+una TX llamadora y su rollback posterior no deshace el alta; el único caller productivo HTTP actual
+no abre esa TX. Fallo de escritura/commit sin retorno del writer impide email/sesión, incluso cuando
+el servidor persistió pero se perdió su ACK. No se agrega recuperación automática para ese caso.
+
+**Gate focal: 166 pruebas aprobadas**, 43 nuevas y 123 de regresión, doce suites
+sin fallos/errores/omitidas/reintentos. verify focal terminó en 61.789 s. Los dos
+unitarios acreditan secuencia y contrato; los 14 casos PostgreSQL nuevos acreditan persistencia real.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegacyRegistrationAccountWriterTest | 19 |
+| RegistroServiceTest | 10 |
+| AuthTests | 8 |
+| CuentaTests | 6 |
+| AccountSessionPolicyTest | 35 |
+| AccountVerificationNotifierTest | 7 |
+| AuthServiceTest | 12 |
+| CuentaVerificationSchedulingTest | 10 |
+| LegalManifestCliTest | 18 |
+| LegacyRegistrationPostCommitIT | 14 |
+| AccountSessionPolicyIT | 10 |
+| AccountVerificationPostCommitIT | 17 |
+
+
+PostgreSQL 16.14 con Flyway y conexión owner independiente observa las tres filas confirmadas antes
+de email/JWT, token durable antes de enviar y la misma TX mutable RC para las tres escrituras.
+El fixture conserva valores sin normalización y prueba trial configurado en 23 días. Reasignar el
+email a otro usuario tras el commit no cambia la identidad de sesión; se leen email, role, verificación
+y tokenVersion actuales. Cambiar contraseña, actividad o pertenencia rechaza sin recreación. JWT
+o transporte fallidos no revierten datos confirmados. INSERT fallido real (22012), commit anterior
+al servidor y ACK perdido (08006) acreditan resultados durables distintos sin notificación/sesión.
+El caso con caller REPEATABLE_READ observa PID/EntityManager separados en escritura y sesión,
+restaura el mismo contexto exterior y conserva el alta después de su rollback.
+
+**clean verify completo y fresco: 8227 pruebas aprobadas**, 6995 Surefire + 1232 Failsafe,
+289 suites, sin fallos/errores/omitidas/reintentos. Duración 1689.863 s.
+El resultado integral incluye los casos focales; no se suman ambas ejecuciones como pruebas distintas.
+Se recompilaron todos los fuentes main/test y se contrastaron inventarios de compilación, métodos
+JUnit e informes XML frescos, incluidos métodos heredados. No hay selectores parciales en este gate:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never clean verify
+```
+
+Intentos y revisión: javac aislado de las cinco fuentes iniciales aprobó. El primer verify focal
+aprobó 148 pruebas en 61.889 s. El primer clean verify fresco terminó en 94.862 s con 6995 casos
+Surefire y cuatro fallos de AccountVerificationNotifierTest: CapturedOutput vacío no contenía las
+categorías esperadas. No llegó a Failsafe/empaquetado. Se conservaron log, resultado, hashes y XML
+de ese intento. LegalManifestCliTest ejecuta un contexto cuya configuración deshabilita consola y
+nivel root; la captura de System.out dependía del estado global de logging de suites anteriores.
+
+Antes de editar se amplió la lista a ocho archivos para corregir exclusivamente ese fixture M2.
+El appender de test observa eventos del logger específico, restaura su nivel y se desconecta al
+terminar; exige WARN, mensaje literal, ausencia de argumentos y throwable. No cambia producción,
+configuración global ni la política de ocultar datos. El foco final añade LegalManifestCliTest para
+ejercitar el contexto previo a los tests del notifier. La revisión independiente de producción,
+unitarios y causalidad PostgreSQL no encontró otros cambios requeridos. La auditoría exige resultado
+Maven exitoso, comando integral sin selectores y también escanea la fuente nueva aún no versionada.
+
+El foco final ejecutó LegalManifestCliTest antes de AccountVerificationNotifierTest en el mismo
+proceso y aprobó sus 18+7 casos. La revisión del fixture corregido no encontró hallazgos. El primer
+fallo no registró el estado exacto de LoggerContext en ese instante; se documenta la dependencia
+observada de la consola compartida, sin atribuir cambios a una implementación productiva nueva.
+
+Auditoría aprobada de ambas ejecuciones y artefactos finales: 1053 clases productivas y 32 recursos
+coinciden con target en ambos JAR; Start-Class web/CLI correcto, sin tests empaquetados ni entradas
+duplicadas. Los tres bytecodes afectados son LegacyRegistrationAccountWriter, su Identity y RegistroService;
+los dos primeros son nuevos y no cambia ningún otro bytecode productivo frente al baseline. V27/V28/V29 conservan sus hashes en fuente/target/JAR. La dependencia
+runtime AspectJ conserva su procedencia y bytes nominales; el escaneo de activación incluye el writer
+nuevo aún no versionado. El gate *secret*.properties aprobado no se presenta como análisis genérico
+de secretos. Sin cambios de permisos JDBC, migraciones, dependencias ni frontend.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `3b99f46b83dc5f668db3c9da4ff2bf1b90834f43d3cc51572869830270af79f3`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `344898ee534b2760ba212602ef6b88f6c3841c18627b7a724fa59d4a90ab3118`.
+
+**15M3A cerrado; sigue 15M3B**, plazo legal compartido y frontera selectiva JPA de sesión. Después
+15M3C conecta HTTP/replay y acredita el plazo extremo a extremo con otro clean verify fresco.
+M3 y 15M permanecen abiertos. A no acredita plazo de 30 s ni replay legal ni concurrencia de reenvíos;
+los flags/rollout siguen igual y 15P conserva su seguimiento. Commit atómico
+`refactor(auth): emite sesion despues de confirmar el alta`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 

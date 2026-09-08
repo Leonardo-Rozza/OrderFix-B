@@ -1035,3 +1035,50 @@ ajustes del fixture, evidencia y límites, sin atribuir a mocks un commit real.
 **Sigue 15M3**, HTTP/sesión/replay y plazo exterior con clean verify fresco. 15M sigue abierto;
 reenvío/consumo concurrentes conservan su seguimiento en 15P. Commit atómico
 `fix(auth): confirma verificacion antes de enviar email`, sin push.
+
+### Apertura 15M3A — 2026-09-08
+
+M3 se subdivide antes del código: A confirma el alta legacy y usa sesión K por IDs; B cierra el
+plazo compartido y la frontera JPA; C integra HTTP/replay y el gate extremo a extremo. Un timeout
+de transacción no limita por sí solo adquisición, FETCH ni cleanup JPA. B necesitará un scope/pool
+selectivo de sesión legal con credenciales de aplicación, conservando el pool histórico fuera de él.
+No se impone ese nuevo plazo al legacy ni al email externo best effort en A.
+
+Siete archivos nominales fijados en el plan. Writer separado confirma Taller/Suscripcion/ADMIN
+en REQUIRES_NEW/READ_COMMITTED y devuelve sólo IDs. La fachada sin TX propia llama writer, notifier
+M2 y sesión K. Se conserva el orden lógico de llamadas, pero M2 difería el envío físico al commit
+exterior posterior a la firma JWT. A envía tras confirmar el writer y antes de K, que puede reflejar
+cambios confirmados durante la notificación. Valores, defaults, trial y DTO permanecen; K relee identidad
+actual por pertenencia durable. Fallos antes del retorno del writer impiden email/sesión; un fallo
+de sesión poscommit conserva el alta sin recrearla ni reenviar. REQUIRES_NEW implica que rollback
+de una TX llamadora posterior no revierte el alta. ACK perdido no habilita reintentos automáticos.
+
+PostgreSQL acreditará estas fronteras con visibilidad independiente; foco y clean verify fresco
+por cambiar la ruta transversal del alta. HTTP legal, replay y el plazo compartido siguen pendientes,
+sin activaciones, cambios de migraciones, frontend ni push.
+
+### Ajuste de fixture 15M3A — 2026-09-08
+
+El integral fresco detectó cuatro fallos de captura de consola en AccountVerificationNotifierTest
+de M2; sus siete casos habían aprobado focalmente. Se fija ese test como octavo archivo antes de
+editar: observar eventos del logger con appender local y restaurar su nivel, sin cambiar producción
+ni depender de System.out/configuración global de consola. Se conserva la evidencia del intento
+fallido y se repiten foco e integral completos. Los contratos de logging/sanitización no se relajan.
+
+### Cierre 15M3A — 2026-09-08T16:20:09-03:00
+
+Alta legacy extraída en writer REQUIRES_NEW/READ_COMMITTED con IDs inmutables; la fachada llama
+writer confirmado, notifier M2 y sesión K. Se preservan valores/defaults/trial/DTO. K usa identidad
+actual por pertenencia durable; un fallo poscommit conserva el alta y cualquier token de verificación ya confirmado, sin recreación ni reenvío.
+Fallo o ACK perdido antes del retorno del writer impide los pasos posteriores. La TX llamadora se
+restaura y su rollback no revierte el alta confirmada. El orden físico email/JWT quedó precisado.
+
+**166 pruebas focales aprobadas**, 43 nuevas, y **clean verify fresco con 8227 pruebas**
+(6995 Surefire + 1232 Failsafe, 289 suites). No se suman ejecuciones repetidas.
+PostgreSQL acredita commits, datos actuales por IDs, rollback, ACK, fallos poscommit y suspensión.
+Auditoría de XML/clases/recursos y ambos JAR aprobada; migraciones congeladas y frontend intactos.
+El plan registra comando, evidencia, ajustes, límites y hashes de los artefactos finales.
+
+**Sigue 15M3B**, plazo compartido y frontera selectiva JPA; luego M3C integra HTTP/replay y el gate
+extremo a extremo. M3/15M siguen abiertos, sin activación ni promesas nuevas de plazo/replay en A.
+Commit `refactor(auth): emite sesion despues de confirmar el alta`, sin push.
