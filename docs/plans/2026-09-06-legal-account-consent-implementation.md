@@ -4334,3 +4334,86 @@ este foco acredita la operación durante TRIAL. El próximo recorrido es reparac
 entrega sin exigir pagos dentro de OrdenFix. Commits de cierre previstos, uno por repositorio y sin
 push: backend `test(usuarios): acredita empleados y aislamiento real`; frontend
 `test(empleados): verifica permisos y acceso real`.
+
+
+### Verificación de salida inicial — reparación, presupuesto y entrega sin Cobros
+
+Apertura sobre backend `2d73445`. Se conservan los ocho recorridos reales de registro/empleados
+y se incorporan aprobación y rechazo de presupuesto en desktop y mobile de 320 px: doce casos
+Playwright. Lista nominal backend fijada antes del Java:
+
+- Modificar `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationBrowserE2E.java`.
+- Este plan, con apertura y cierre pendiente.
+- `README.md`, con instrucciones y alcance del laboratorio.
+
+El mismo harness prepara exactamente dos cuentas sintéticas de reparación, una por proyecto,
+antes de capturar los baselines. Usa el writer legacy existente sobre la credencial de aplicación
+sin privilegios administrativos, que confirma taller/suscripción/ADMIN; luego actualiza sólo las
+filas identificadas para dejar la suscripción FREE/ACTIVA y el email verificado. Esta preparación
+es un estado de fixture: no acredita expiración de TRIAL ni ejecución del scheduler. No crea un
+endpoint de control ni agrega configuración JPA, grants, archivos de fixtures, dependencias o secretos reales.
+El taller inicial sigue reservado como testigo de aislamiento y conserva su fila y xmin; los dos
+talleres nuevos sí modifican su secuencia de órdenes y contador mensual mediante las operaciones
+reales. Las seis altas legales anteriores mantienen íntegros sus controles y deltas posteriores al seed.
+
+Cada recorrido ingresa por login real, comprueba FREE/ACTIVA y Cobros deshabilitado, crea por UI
+un cliente/equipo/reparación con estimado 50000 y emite un presupuesto ORIGINAL de mano de obra:
+un ítem de cantidad 1 y precio 50000, validez 7 días. Desde seguimiento público sin JWT se registra
+la respuesta. Aprobar lleva a EN_PROCESO y permite COMPLETADO → ENTREGADO; rechazar el ORIGINAL
+lleva a LISTO_SIN_REPARAR y permite ENTREGADO. Ninguna respuesta ni entrega registra cobros o
+inicia checkout. El estado financiero derivado conserva total 50000, cobrado 0, saldo 50000 y
+SIN_COBRAR; el presupuesto no se confunde con un pago ni con un comprobante fiscal.
+
+El reporte agrega únicamente caso/proyecto/email e IDs de titular, cliente, equipo, reparación,
+presupuesto y código de seguimiento. No agrega contraseña, JWT ni secretos de dispositivo. SQL
+acredita cuatro grafos reales nuevos con pertenencia al taller correcto, presupuesto/ítem exactos,
+estado APROBADO o RECHAZADO y reparación ENTREGADO. También verifica los sellos de respuesta y
+conformidad dentro de la ventana de ejecución, garantía conforme al comportamiento existente y
+el consumo de dos reparaciones por taller FREE. Las fechas locales de presupuesto/entrega se
+comparan con la zona del JVM; el contador mensual usa el Clock UTC productivo. El PATCH actual
+sella fecha_conformidad_entrega y garantía, pero no asigna fecha_entrega; no se atribuye lo contrario.
+Los deltas de cuentas/evidencia siguen siendo los de los ocho casos anteriores, y se agregan cuatro
+reparaciones/equipos/presupuestos/ítems y cuatro clientes (seis clientes nuevos contando empleados).
+Inventario/repuestos/cobros y tablas de pagos conservan sus filas y xmin; la observación durable y
+las solicitudes del navegador no se presentan como un contador global de DML transitorio.
+
+Gate previsto: runner optativo existente con compilación y Failsafe serial, PostgreSQL 16 real y
+los doce casos Playwright sin simulación de API. Defaults, código productivo, V27/V28/V29, roles,
+retenciones y límites de conexión permanecen intactos. No se abre N/O/P/Q ni se completa email,
+Mercado Pago, staging, HTTPS/proxy o despliegue. No se ejecuta Maven concurrente ni se hace push.
+
+### Cierre aprobado — reparación, presupuesto y entrega sin Cobros
+
+Ejecución final aprobada el **2026-09-09 a las 09:27:13 -03:00**, con
+`JAVA_HOME=<Java 21> npm run test:e2e:registration-real` desde el frontend y Node 24.14.0.
+Compilación serial 17.564 s y Failsafe 55.861 s. El XML acredita un harness JUnit aprobado que ejecutó
+y verificó doce casos Playwright, sin fallos, errores, omisiones ni reintentos. Los ocho recorridos
+anteriores se conservaron y los cuatro nuevos aprobaron en escritorio y móvil 320 px.
+
+Ingreso y creación del presupuesto por UI devolvieron 201; aprobación/rechazo público sin JWT 200;
+las transiciones llegaron a ENTREGADO y las lecturas privadas/públicas lo confirmaron. La UI no
+mostró Cobros ni consultó sus endpoints; se exigió la lista exacta de escrituras del recorrido,
+sin checkout ni llamadas a proveedores de pago. Total y saldo permanecieron en 50000 y cobrado 0,
+según el precio estimado: esos datos no acreditan un pago ni prueban una deuda del cliente.
+
+PostgreSQL 16.14 confirmó cuatro clientes/equipos/reparaciones/presupuestos con sus ítems exactos,
+pertenencia, respuesta y conformidad; garantía según el comportamiento actual y dos usos por taller
+FREE. Los controles anteriores de cuentas, evidencia, roles e aislamiento aprobaron. No se crearon
+cobros ni registros de pagos, y las tablas observadas conservaron sus filas y xmin. Ambos contenedores
+exclusivos de las dos ejecuciones fueron eliminados y se verificaron cerrados los puertos de Vite,
+Tomcat y PostgreSQL. Lint/TypeScript, listado exacto y revisión independiente frontend aprobaron.
+
+La primera ejecución falló antes de crear las reparaciones: heredaba cupo 50 de las propiedades de
+test, mientras las aserciones exigían el default productivo 25. Pasaron los ocho casos anteriores.
+Se corrigió sólo el harness con `plan.free.max-reparaciones-mes=25`; no se relajó la prueba ni se
+cambió configuración productiva. La repetición final recompiló y ejecutó la matriz completa con el
+runner frontend y Node compatible. No se acredita agotamiento del cupo, rollover mensual ni
+expiración de trial. La configuración FREE/ACTIVA sigue siendo preparación explícita de laboratorio.
+
+Sólo cambiaron pruebas y documentación. V27/V28/V29 conservan sus hashes congelados; no se repitió
+clean verify porque el fallo de preparación no requirió cambios productivos o transversales.
+El próximo criterio es el registro manual opcional de cobros externos, historial y corrección por
+permisos. Staging, evidencia/documentos y los demás pendientes de la salida mantienen su alcance.
+Un commit por repositorio, sin push y preservando cambios ajenos: backend
+`test(reparaciones): acredita presupuesto y entrega real`; frontend
+`test(reparaciones): verifica entrega sin cobros`.

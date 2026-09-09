@@ -10,6 +10,8 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAccept
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalAcceptanceCommandValidator;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalIdempotencyFingerprint;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoActoLegal;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.RegisterRequestDto;
+import com.leonardorozza.mvgrreparacionesbackend.service.impl.LegacyRegistrationAccountWriter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,12 +32,17 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -74,8 +81,11 @@ class LegalRegistrationBrowserE2E {
             "clientes", "equipos", "reparaciones", "repuestos", "reparacion_fotos", "presupuestos", "presupuesto_items",
             "articulos", "cobros", "subscription_provider_links", "payment_events", "subscription_payments", "taller_qr_cobro");
     private static final List<String> COUNTED_TABLES = List.of("users", "talleres", "suscripciones", "auth_tokens", "clientes",
+            "equipos", "reparaciones", "presupuestos", "presupuesto_items",
             "legal_aceptacion_lotes", "legal_aceptaciones", "legal_aceptacion_documentos", "legal_aceptacion_metadatos",
             "legal_aceptacion_metadatos_cifrados", "legal_idempotencia_resultados", "legal_idempotencia_sin_actos");
+    private static final List<String> UNCHANGED_TABLES = List.of("articulos", "repuestos", "cobros",
+            "subscription_provider_links", "payment_events", "subscription_payments", "taller_qr_cobro");
     private static LegalRegistrationHttpITSupport fixture;
     private static Path publicationDirectory;
 
@@ -129,6 +139,7 @@ class LegalRegistrationBrowserE2E {
         values.put("admin.email", "browser-baseline@ordenfix-e2e.test");
         values.put("admin.password", "Browser-baseline-synthetic-123");
         values.put("plan.trial-dias", "14");
+        values.put("plan.free.max-reparaciones-mes", "25"); // Explicit production default; test properties otherwise use 50.
         values.put("ordenfix.legal.account-read.enabled", "false");
         values.put("ordenfix.legal.account-acceptance.enabled", "false");
         values.put(LegalRegistrationHttpConfiguration.CONSENT_PROPERTY, "true");
@@ -149,13 +160,15 @@ class LegalRegistrationBrowserE2E {
         values.forEach((key, value) -> registry.add(key, () -> value));
     }
 
-    @Test void browserVerifiesRegistrationAndEmployeePermissions() throws Exception {
+    @Test void browserVerifiesRegistrationEmployeesAndRepairDelivery() throws Exception {
         Path frontend = Path.of(System.getProperty("ordenfix.browser.frontend", "../mvgr-reparaciones-frontend")).toRealPath();
         assertThat(frontend.resolve("package.json")).isRegularFile();
         assertThat(frontend.resolve("playwright.registration-real.config.ts")).isRegularFile();
         assertThat(port).isPositive();
         assertPhysicalRoles();
+        Map<String, Identity> repairAccounts = prepareFreeRepairAccounts();
         Map<String, Long> baseline = counts();
+        Map<String, List<String>> unchangedRows = unchangedRows();
         assertThat(baseline.get("users")).as("DataLoader baseline exists before any browser request").isPositive();
         BaselineAccount otherWorkshop = baselineAccount();
         Instant started = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
@@ -180,7 +193,7 @@ class LegalRegistrationBrowserE2E {
             assertThat(finished).as("Playwright exceeded five minutes.\n%s", tail(log)).isTrue();
             assertThat(process.exitValue()).as("Playwright failed.\n%s", tail(log)).isZero();
             Instant finishedAt = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
-            verifyReport(report, baseline, otherWorkshop, started, finishedAt);
+            verifyReport(report, baseline, otherWorkshop, repairAccounts, unchangedRows, started, finishedAt);
         } catch (Throwable failure) {
             primary = failure; throw failure;
         } finally {
@@ -190,28 +203,44 @@ class LegalRegistrationBrowserE2E {
     }
 
     private void verifyReport(Path report, Map<String, Long> baseline, BaselineAccount otherWorkshop,
+                              Map<String, Identity> repairAccounts, Map<String, List<String>> unchangedRows,
                               Instant started, Instant finished) throws Exception {
         assertThat(report).isRegularFile();
         assertThat(Files.size(report)).isBetween(1L, 262_144L);
         JsonNode entries = JSON.readTree(Files.readAllBytes(report));
         assertThat(entries.isArray()).isTrue();
-        assertThat(entries).hasSize(8);
+        assertThat(entries).hasSize(12);
         List<String> scenarios = new ArrayList<>();
         Set<String> emails = new HashSet<>();
         Set<Long> users = new HashSet<>(), workshops = new HashSet<>(), employees = new HashSet<>(), clients = new HashSet<>();
+        Set<Long> repairClients = new HashSet<>(), equipment = new HashSet<>(), repairs = new HashSet<>(), budgets = new HashSet<>();
+        Set<String> trackingCodes = new HashSet<>();
         int acts = 0, documents = 0;
         for (JsonNode entry : entries) {
             assertThat(entry.isObject()).isTrue();
             String scenario = text(entry, "case"), project = text(entry, "project"), email = text(entry, "email");
-            assertThat(scenario).isIn("created", "replayed", "blocked", "employees");
+            assertThat(scenario).isIn("created", "replayed", "blocked", "employees", "repair-approved", "repair-rejected");
             assertThat(project).isIn("desktop", "mobile-320");
+            scenarios.add(scenario + ":" + project);
+            if (scenario.startsWith("repair-")) {
+                assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrder(
+                        "case", "project", "email", "ownerId", "clientId", "equipmentId", "repairId", "budgetId", "trackingCode");
+                assertThat(email).isEqualTo(repairEmail(project));
+                verifyRepair(entry, project, repairAccounts.get(project), started, finished);
+                assertThat(repairClients.add(positiveId(entry, "clientId"))).isTrue();
+                assertThat(equipment.add(positiveId(entry, "equipmentId"))).isTrue();
+                assertThat(repairs.add(positiveId(entry, "repairId"))).isTrue();
+                assertThat(budgets.add(positiveId(entry, "budgetId"))).isTrue();
+                assertThat(trackingCodes.add(text(entry, "trackingCode"))).isTrue();
+                continue;
+            }
             Set<String> fields = scenario.equals("blocked") ? Set.of("case", "project", "email")
                     : scenario.equals("employees") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances",
                             "idempotencyKey", "employee", "client", "ownerId", "otherOwnerId")
                     : Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey");
             assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrderElementsOf(fields);
             assertThat(email).isEqualTo(scenario + "-" + project + "-" + RUN_ID + "@ordenfix-e2e.test");
-            assertThat(emails.add(email)).isTrue(); scenarios.add(scenario + ":" + project);
+            assertThat(emails.add(email)).isTrue();
             if (scenario.equals("blocked")) {
                 assertThat(fixture.owner.queryForObject("SELECT count(*) FROM users WHERE email=?", Long.class, email)).isZero();
                 assertThat(entry.has("idempotencyKey")).isFalse();
@@ -230,16 +259,25 @@ class LegalRegistrationBrowserE2E {
             }
         }
         assertThat(scenarios).containsExactlyInAnyOrder("created:desktop", "created:mobile-320", "replayed:desktop",
-                "replayed:mobile-320", "blocked:desktop", "blocked:mobile-320", "employees:desktop", "employees:mobile-320");
+                "replayed:mobile-320", "blocked:desktop", "blocked:mobile-320", "employees:desktop", "employees:mobile-320",
+                "repair-approved:desktop", "repair-approved:mobile-320", "repair-rejected:desktop", "repair-rejected:mobile-320");
         assertThat(users).hasSize(6); assertThat(workshops).hasSize(6);
         assertThat(employees).hasSize(2).doesNotContainAnyElementsOf(users);
         assertThat(clients).hasSize(2);
+        assertThat(repairClients).hasSize(4).doesNotContainAnyElementsOf(clients);
+        assertThat(equipment).hasSize(4); assertThat(repairs).hasSize(4);
+        assertThat(budgets).hasSize(4); assertThat(trackingCodes).hasSize(4);
+        verifyFreeRepairAccounts(repairAccounts, started, finished);
+        assertThat(unchangedRows()).isEqualTo(unchangedRows);
         // Login and profile reads must not mutate the pre-existing administrator or workshop.
         // Newly created objects below are checked by their durable values, not by a global DML counter.
         assertThat(baselineAccount()).isEqualTo(otherWorkshop);
         Map<String, Long> after = counts();
         assertThat(after.get("users") - baseline.get("users")).isEqualTo(8);
-        assertThat(after.get("clientes") - baseline.get("clientes")).isEqualTo(2);
+        assertThat(after.get("clientes") - baseline.get("clientes")).isEqualTo(6);
+        for (String table : List.of("equipos", "reparaciones", "presupuestos", "presupuesto_items")) {
+            assertThat(after.get(table) - baseline.get(table)).as("repair graph delta for %s", table).isEqualTo(4);
+        }
         for (String table : List.of("talleres", "suscripciones", "auth_tokens", "legal_aceptacion_lotes",
                 "legal_aceptacion_metadatos", "legal_idempotencia_resultados")) {
             assertThat(after.get(table) - baseline.get(table)).as("durable delta for %s", table).isEqualTo(6);
@@ -248,6 +286,136 @@ class LegalRegistrationBrowserE2E {
         assertThat(after.get("legal_aceptacion_documentos") - baseline.get("legal_aceptacion_documentos")).isEqualTo(documents);
         assertThat(after.get("legal_aceptacion_metadatos_cifrados") - baseline.get("legal_aceptacion_metadatos_cifrados")).isEqualTo(12);
         assertThat(after.get("legal_idempotencia_sin_actos")).isEqualTo(baseline.get("legal_idempotencia_sin_actos"));
+    }
+
+    private Map<String, Identity> prepareFreeRepairAccounts() {
+        Map<String, Identity> result = new LinkedHashMap<>();
+        var writer = application.getBean(LegacyRegistrationAccountWriter.class);
+        for (String project : List.of("desktop", "mobile-320")) {
+            var identity = writer.create(new RegisterRequestDto("Taller sin cobros", null, "Titular reparaciones",
+                    repairEmail(project), PASSWORD));
+            // Only the owned fixture's identified rows change; this is not a simulated trial expiry.
+            // Both the real writer and these updates use the application's non-superuser credential.
+            assertThat(applicationJdbc.update("""
+                    UPDATE public.suscripciones SET estado='ACTIVA',fecha_fin_trial=NULL
+                     WHERE taller_id=? AND plan='FREE' AND estado='TRIAL'
+                    """, identity.tallerId())).isEqualTo(1);
+            assertThat(applicationJdbc.update("""
+                    UPDATE public.users SET email_verificado=true
+                     WHERE id=? AND taller_id=? AND email=? AND role='ADMIN' AND active AND NOT email_verificado
+                    """, identity.userId(), identity.tallerId(), repairEmail(project))).isEqualTo(1);
+            result.put(project, new Identity(identity.userId(), identity.tallerId()));
+        }
+        assertThat(result.values()).extracting(Identity::tallerId).doesNotHaveDuplicates();
+        return Map.copyOf(result);
+    }
+
+    private static String repairEmail(String project) {
+        return "repair-free-" + project + "-" + RUN_ID + "@ordenfix-e2e.test";
+    }
+
+    private Map<String, List<String>> unchangedRows() {
+        Map<String, List<String>> rows = new LinkedHashMap<>();
+        for (String table : UNCHANGED_TABLES) {
+            rows.put(table, fixture.owner.queryForList("SELECT to_jsonb(t)::text || ':' || t.xmin::text FROM public."
+                    + table + " t ORDER BY 1", String.class));
+        }
+        return rows;
+    }
+
+    private void verifyFreeRepairAccounts(Map<String, Identity> accounts, Instant started, Instant finished) {
+        Clock clock = application.getBean(Clock.class);
+        // The finite fixture does not freeze application time or claim a month/year rollover test.
+        assertThat(YearMonth.from(started.atZone(clock.getZone())))
+                .as("run must remain within one application month to assert the two-use counter")
+                .isEqualTo(YearMonth.from(finished.atZone(clock.getZone())));
+        for (var entry : accounts.entrySet()) {
+            var identity = entry.getValue();
+            var rows = fixture.owner.queryForList("""
+                    SELECT u.username,u.email,u.role,u.active,u.email_verificado,u.token_version,
+                           t.nombre,t.activo,s.plan,s.estado,s.fecha_fin_trial,s.consumo_mes,s.reparaciones_mes
+                      FROM users u JOIN talleres t ON t.id=u.taller_id JOIN suscripciones s ON s.taller_id=t.id
+                     WHERE u.id=? AND t.id=?
+                    """, identity.userId(), identity.tallerId());
+            assertThat(rows).hasSize(1); var row = rows.getFirst();
+            assertThat(row.get("username")).isEqualTo("Titular reparaciones");
+            assertThat(row.get("email")).isEqualTo(repairEmail(entry.getKey())); assertThat(row.get("role")).isEqualTo("ADMIN");
+            assertThat(row.get("active")).isEqualTo(true); assertThat(row.get("email_verificado")).isEqualTo(true);
+            assertThat(((Number) row.get("token_version")).longValue()).isZero();
+            assertThat(row.get("nombre")).isEqualTo("Taller sin cobros"); assertThat(row.get("activo")).isEqualTo(true);
+            assertThat(row.get("plan")).isEqualTo("FREE"); assertThat(row.get("estado")).isEqualTo("ACTIVA");
+            assertThat(row.get("fecha_fin_trial")).isNull();
+            assertThat(row.get("consumo_mes")).isEqualTo(YearMonth.from(finished.atZone(clock.getZone())).toString());
+            assertThat(((Number) row.get("reparaciones_mes")).intValue()).isEqualTo(2);
+            assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=?", Long.class, identity.tallerId()))
+                    .containsExactly(identity.userId());
+            assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, identity.userId())).isZero();
+            assertThat(fixture.owner.queryForObject("SELECT count(*) FROM reparaciones WHERE taller_id=?", Long.class, identity.tallerId())).isEqualTo(2);
+        }
+    }
+
+    private void verifyRepair(JsonNode entry, String project, Identity owner, Instant started, Instant finished) {
+        assertThat(owner).isNotNull(); assertThat(positiveId(entry, "ownerId")).isEqualTo(owner.userId());
+        long clientId = positiveId(entry, "clientId"), equipmentId = positiveId(entry, "equipmentId");
+        long repairId = positiveId(entry, "repairId"), budgetId = positiveId(entry, "budgetId");
+        boolean approved = text(entry, "case").equals("repair-approved");
+        String phone = project.equals("desktop") ? (approved ? "1155000201" : "1155000202")
+                : (approved ? "1155000301" : "1155000302");
+        var graphs = fixture.owner.queryForList("""
+                SELECT r.estado,r.descripcion_problema,r.precio_estimado,r.precio_final,r.codigo_seguimiento,r.numero_orden,
+                       r.fecha_conformidad_entrega,r.garantia_dias,r.garantia_inicio,r.garantia_fin,r.created_at,r.updated_at,
+                       e.marca,e.modelo,c.nombre,c.apellido,c.telefono,c.email,c.direccion
+                  FROM reparaciones r JOIN equipos e ON e.id=r.equipo_id JOIN clientes c ON c.id=e.cliente_id
+                 WHERE r.id=? AND e.id=? AND c.id=? AND r.taller_id=? AND e.taller_id=? AND c.taller_id=?
+                """, repairId, equipmentId, clientId, owner.tallerId(), owner.tallerId(), owner.tallerId());
+        assertThat(graphs).hasSize(1); var repair = graphs.getFirst();
+        assertThat(repair.get("estado")).isEqualTo("ENTREGADO"); assertThat(repair.get("descripcion_problema")).isEqualTo("No carga");
+        assertThat((BigDecimal) repair.get("precio_estimado")).isEqualByComparingTo("50000"); assertThat(repair.get("precio_final")).isNull();
+        assertThat(repair.get("codigo_seguimiento")).isEqualTo(text(entry, "trackingCode"));
+        assertThat(text(entry, "trackingCode")).matches("[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}");
+        assertThat((String) repair.get("numero_orden")).matches("ORD-[0-9]{4}-[0-9]{4}");
+        assertThat(repair.get("marca")).isEqualTo("Motorola"); assertThat(repair.get("modelo")).isEqualTo("G31");
+        assertThat(repair.get("nombre")).isEqualTo("Cliente recorrido"); assertThat(repair.get("apellido")).isEqualTo("Prueba local");
+        assertThat(repair.get("telefono")).isEqualTo(phone); assertThat(repair.get("email")).isNull(); assertThat(repair.get("direccion")).isNull();
+        LocalDateTime created = localTimestamp(repair, "created_at"), delivered = localTimestamp(repair, "fecha_conformidad_entrega");
+        withinRun(created, started, finished); withinRun(delivered, started, finished);
+        assertThat(delivered).isAfterOrEqualTo(created); withinRun(localTimestamp(repair, "updated_at"), started, finished);
+        assertThat(((Number) repair.get("garantia_dias")).intValue()).isEqualTo(90);
+        LocalDate warrantyStart = ((java.sql.Date) repair.get("garantia_inicio")).toLocalDate();
+        assertThat(warrantyStart).isEqualTo(delivered.toLocalDate());
+        assertThat(((java.sql.Date) repair.get("garantia_fin")).toLocalDate()).isEqualTo(warrantyStart.plusDays(90));
+        var budgets = fixture.owner.queryForList("""
+                SELECT estado,tipo,total,validez_dias,valido_hasta,observaciones,fecha_respuesta,created_at,updated_at
+                  FROM presupuestos WHERE id=? AND reparacion_id=? AND taller_id=?
+                """, budgetId, repairId, owner.tallerId());
+        assertThat(budgets).hasSize(1); var budget = budgets.getFirst();
+        assertThat(budget.get("estado")).isEqualTo(approved ? "APROBADO" : "RECHAZADO"); assertThat(budget.get("tipo")).isEqualTo("ORIGINAL");
+        assertThat((BigDecimal) budget.get("total")).isEqualByComparingTo("50000");
+        assertThat(((Number) budget.get("validez_dias")).intValue()).isEqualTo(7); assertThat(budget.get("observaciones")).isNull();
+        LocalDateTime response = localTimestamp(budget, "fecha_respuesta"), budgetCreated = localTimestamp(budget, "created_at");
+        withinRun(budgetCreated, started, finished); withinRun(response, started, finished);
+        withinRun(localTimestamp(budget, "updated_at"), started, finished);
+        assertThat(response).isAfterOrEqualTo(budgetCreated).isBeforeOrEqualTo(delivered);
+        assertThat(localTimestamp(budget, "valido_hasta")).isAfter(response);
+        withinRun(localTimestamp(budget, "valido_hasta").minusDays(7), started, finished);
+        var items = fixture.owner.queryForList("SELECT descripcion,cantidad,precio_unitario,tipo_item,calidad FROM presupuesto_items WHERE presupuesto_id=?", budgetId);
+        assertThat(items).hasSize(1); var item = items.getFirst();
+        assertThat(item.get("descripcion")).isEqualTo("Reparacion de carga"); assertThat(((Number) item.get("cantidad")).intValue()).isEqualTo(1);
+        assertThat((BigDecimal) item.get("precio_unitario")).isEqualByComparingTo("50000");
+        assertThat(item.get("tipo_item")).isEqualTo("MANO_DE_OBRA"); assertThat(item.get("calidad")).isNull();
+        assertThat(fixture.owner.queryForList("SELECT id FROM presupuestos WHERE reparacion_id=?", Long.class, repairId)).containsExactly(budgetId);
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM cobros WHERE reparacion_id=?", Long.class, repairId)).isZero();
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM repuestos WHERE reparacion_id=?", Long.class, repairId)).isZero();
+    }
+
+    private static LocalDateTime localTimestamp(Map<String, Object> row, String column) {
+        assertThat(row.get(column)).as("persisted timestamp %s", column).isInstanceOf(java.sql.Timestamp.class);
+        return ((java.sql.Timestamp) row.get(column)).toLocalDateTime();
+    }
+
+    private static void withinRun(LocalDateTime value, Instant started, Instant finished) {
+        ZoneId zone = ZoneId.systemDefault();
+        assertThat(value).isBetween(LocalDateTime.ofInstant(started, zone), LocalDateTime.ofInstant(finished, zone));
     }
 
     private BaselineAccount baselineAccount() {
