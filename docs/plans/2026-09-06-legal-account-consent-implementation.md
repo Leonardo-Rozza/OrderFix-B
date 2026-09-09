@@ -4417,3 +4417,100 @@ permisos. Staging, evidencia/documentos y los demás pendientes de la salida man
 Un commit por repositorio, sin push y preservando cambios ajenos: backend
 `test(reparaciones): acredita presupuesto y entrega real`; frontend
 `test(reparaciones): verifica entrega sin cobros`.
+
+
+### Verificación de salida inicial — historial y corrección de cobros externos
+
+Apertura sobre backend `e2d7760`. Se conservan los doce recorridos reales anteriores y se agrega
+un recorrido de cobros manuales por proyecto desktop/mobile de 320 px: catorce casos Playwright.
+Lista nominal backend fijada antes de editar Java:
+
+- Modificar `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationBrowserE2E.java`.
+- Este plan.
+- `README.md`.
+
+Cada caso nuevo registra por UI un titular ADMIN con consentimiento real y taller FREE/TRIAL,
+que habilita Cobros por entitlement TRIAL. El titular crea un empleado USER activo, ingresa una
+reparación de 50000 y la entrega mediante EN_PROCESO → COMPLETADO → ENTREGADO sin cobros.
+El empleado inicia sesión y registra un cobro externo manual de 50000 por TRANSFERENCIA,
+referencia EXTERNO-50000 y observación Carga manual inicial. No se procesa esa transferencia.
+Un intento de anulación por USER recibe 403; el ADMIN baseline de otro taller obtiene 404 al leer
+los cobros o intentar anularlos, conservando el testigo original de usuario/taller y xmin.
+
+El titular anula desde la UI con el motivo Importe cargado incorrectamente. Un segundo intento
+canónico recibe 409 COBRO_YA_ANULADO y conserva la auditoría. El titular registra el importe
+corregido de 30000, también TRANSFERENCIA, referencia EXTERNO-30000 y observación Importe
+corregido. El historial mantiene dos movimientos: el original de 50000 ANULADO y el nuevo de
+30000 ACTIVO. El detalle muestra 30000 activos, pendiente 20000 y estado PARCIAL; Caja incluye
+sólo el activo de 30000. La reparación sigue ENTREGADO. La autoría USER del alta se acredita con sesión/HTTP real:
+no existe una columna creado_por_id. La anulación sí acredita anulado_por_id del ADMIN, fecha
+y motivo. V23 exige auditoría completa, pero este corte no atribuye inmutabilidad general mediante
+triggers ni agrega ese contrato. Se contrastan las respuestas/relecturas y los valores durables.
+
+El reporte agrega case collections con los mismos campos legales del alta, ownerId, employee
+{id,email}, clientId, equipmentId, repairId, originalCobroId, correctedCobroId y otherOwnerId.
+No almacena contraseña ni JWT. Se conservan los dos seeds FREE existentes; no se agregan seeds,
+roles, grants, endpoints, dependencias, configuración productiva o cambios de V27/V28/V29.
+Después de esos seeds se esperan doce users nuevos (ocho titulares y cuatro empleados), ocho
+altas legales/talleres/suscripciones/tokens, ocho clientes, seis equipos/reparaciones, cuatro
+presupuestos/ítems y cuatro cobros exactos. Los cuatro recorridos FREE conservan cero cobros.
+
+Cobros deja de integrar la igualdad global de tablas sin cambios sólo a cambio de acreditar sus
+cuatro IDs nuevos exactos y mantener iguales todas las demás filas y xmin respecto del baseline.
+Stock/repuestos, vínculos del proveedor, eventos y pagos de suscripción y QR siguen sin cambios.
+Los valores y timestamps de cada movimiento, su reparación y taller, estado de anulación y suma
+activa se verifican con SQL. La garantía y conformidad de entrega conservan el comportamiento
+actual. La observación durable no se presenta como contador de DML transitorio ni como prueba
+de ejecución de un pago real. Email y Mercado Pago permanecen desactivados.
+
+El filtro de rate limit continúa activo. Sólo en el harness se fija login.requests=20 para los
+catorce logins de la matriz; el default productivo de diez permanece intacto. Registro conserva
+el límite local existente de veinte, suficiente para los diez POST de este foco. Gate previsto:
+runner optativo existente, compilación y Failsafe serial con PostgreSQL 16 y éxito de los catorce
+casos reales. No se ejecuta Maven concurrente ni se hace push ni se abre N/O/P/Q. Staging, transporte
+SMTP, HTTPS/proxy, pagos y los otros criterios de salida conservan sus pendientes.
+
+### Cierre local — historial y corrección de cobros externos
+
+Ejecución final aprobada el **2026-09-09 a las 09:53:49 -03:00** con
+`JAVA_HOME=<Java 21> npm run test:e2e:registration-real`, desde el frontend y Node 24.14.0.
+Compilación serial 17.058 s; Failsafe aproximadamente 71 s. El XML registra un harness JUnit,
+cero fallos/errores/omitidos, 69.517 s de suite y 58.096 s de método. El harness exige catorce
+reportes exactos y comprobó los catorce recorridos Playwright, sin reintentos internos.
+
+Los casos nuevos desktop/mobile 320 px entregaron sin cobros, registraron por UI 50000 con USER
+(201), comprobaron 403 al anular como empleado y 404 desde otro taller habilitado. El titular
+anuló con motivo, obtuvo 409 al repetir sin alterar la auditoría y registró 30000. Ambos usuarios
+vieron el original anulado y la corrección activa. Detalle mantuvo ENTREGADO y conformidad; el
+saldo derivado quedó en 20000, y la vista por período incluyó sólo el activo de 30000. La fase de
+cobros exigió seis POST canónicos incluidos los rechazados, sin checkout ni proveedores de pagos.
+
+PostgreSQL 16.14 verificó doce users nuevos, ocho altas completas con consentimiento/taller/
+suscripción/token, ocho clientes, seis equipos/reparaciones, cuatro presupuestos/ítems y cuatro
+cobros exactos. Los dos pares de cobros conservaron importes, referencias, pertenencia y secuencia
+entrega → registro → anulación ADMIN con motivo → registro corregido. Los cuatro recorridos FREE
+conservaron cero cobros. Tablas de pagos e inventario, usuario y taller baseline no cambiaron.
+El baseline de cobros estaba vacío: la igualdad exige exactamente los cuatro nuevos; el código
+compara también filas y xmin de cualquier cobro anterior, pero esta corrida no acredita un testigo
+previo no vacío. La autoría de alta USER se prueba con JWT/HTTP; SQL acredita al ADMIN que anula.
+
+Se corrigieron sólo tres defectos de prueba. Las dos primeras corridas aprobaron los doce casos
+anteriores y fallaron antes de crear los empleados nuevos: la primera por labels required con
+asterisco y la segunda por el email sintético con local-part mayor a 64. El spec usa selectores
+anclados que admiten el asterisco y el prefijo `cobro-user`, reflejado en el esperado Java. La tercera
+aprobó los catorce casos de navegador y falló porque AssertJ rechaza un argumento vacío en
+`doesNotContainAnyElementsOf`; `noneMatch(originalCobros::containsKey)` conserva la exclusión
+exacta y admite ese baseline. La cuarta recompiló y aprobó toda la matriz y sus aserciones SQL.
+No se relajaron validaciones del producto ni se alteró el alcance de la prueba.
+
+Lint, TypeScript, listado de catorce casos y revisión independiente de frontend/Java aprobaron.
+Se verificó que los cuatro contenedores PostgreSQL y sus auxiliares fueron eliminados y que todos
+los puertos del laboratorio quedaron cerrados. Sólo cambiaron pruebas y documentación; no se
+repitió clean verify porque los defectos fueron del laboratorio, sin cambio productivo o transversal.
+V27/V28/V29 conservan sus hashes. Un commit por repositorio, sin push y preservando archivos ajenos:
+backend `test(cobros): acredita historial y correccion real`; frontend
+`test(cobros): verifica registro manual y anulacion`.
+
+Control opcional de cobros queda acreditado localmente. El siguiente criterio es Evidencia y
+documentos; staging, textos definitivos, solicitudes de datos/baja y operación real conservan
+sus pendientes. No se activó email/Mercado Pago ni se publicaron fixtures o contenido legal.

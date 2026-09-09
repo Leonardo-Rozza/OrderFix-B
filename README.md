@@ -336,7 +336,14 @@ Cuatro casos adicionales recorren reparación, aprobación/rechazo público del 
 sin cobros en ambos dispositivos. El harness prepara dos talleres sintéticos FREE/ACTIVA antes del
 navegador; no prueba el vencimiento automático del trial. La UI opera con Cobros deshabilitado y
 saldo positivo, y PostgreSQL contrasta pertenencia, importes, respuesta, entrega, cupo y ausencia de
-cobros o pagos nuevos. Son doce recorridos en total, verificados por el único harness opt-in.
+cobros en esas reparaciones.
+
+Dos recorridos adicionales usan registro real y TRIAL: entregan antes de cargar cobros y comprueban
+la carga externa manual por USER, anulación reservada al titular, historial y nueva carga corregida.
+La vista por período incluye sólo activos. PostgreSQL exige los cuatro movimientos esperados y su
+auditoría, conservando sin cambios las demás filas y las tablas de pagos del proveedor. Son catorce
+recorridos en total. El límite de login se fija en 20 sólo en el harness para permitir la matriz;
+el filtro sigue activo y el default productivo de 10 no cambia.
 
 El sufijo `E2E` queda fuera de las suites Maven habituales: requiere selección explícita y no añade
 Node ni navegadores al gate por defecto. No publicar esta fixture ni usarla sobre bases existentes;
