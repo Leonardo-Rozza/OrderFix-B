@@ -45,6 +45,11 @@ final class LegalRegistrationHttpException extends RuntimeException {
                 code, Map.of("header", "Idempotency-Key"), null, null);
     }
 
+    static LegalRegistrationHttpException unsupportedMediaType() {
+        return new LegalRegistrationHttpException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Tipo de contenido no soportado",
+                "El registro requiere un cuerpo JSON.", null, null, null, null);
+    }
+
     static LegalRegistrationHttpException invalidBody() {
         return new LegalRegistrationHttpException(HttpStatus.BAD_REQUEST, "Solicitud inválida",
                 "El cuerpo de la solicitud es inválido o tiene un formato incorrecto.", null, null, null, null);
@@ -117,7 +122,7 @@ final class LegalRegistrationHttpException extends RuntimeException {
         };
     }
 
-    private static LegalRegistrationHttpException authenticationRejected(Throwable cause) {
+    static LegalRegistrationHttpException authenticationRejected(Throwable cause) {
         return new LegalRegistrationHttpException(HttpStatus.UNAUTHORIZED, "No autorizado",
                 "Usuario o contraseña incorrectos", null, null, null, cause);
     }

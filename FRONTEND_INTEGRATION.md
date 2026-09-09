@@ -190,10 +190,10 @@ actuales antes de emitir la sesión. Email, `emailVerificado`, rol, tenant y `to
 de esa lectura; la forma del JWT y de la respuesta permanece igual. La desactivación del taller
 invalida también sus sesiones existentes al validar el siguiente request. No es un bloqueo por
 suscripción ni por verificación de email. Las rutas legales conservan sus errores 401/403 propios.
-La emisión común por IDs queda preparada para el registro/replay legal de 15M; el registro histórico
-conserva por ahora su integración anterior.
+Desde 15M3C, el registro legal y su replay usan esa emisión por IDs después de confirmar el alta.
+El registro legacy también conserva la escritura confirmada antes de emitir sesión.
 
-> **`emailVerificado`** también viene en el register (siempre `false` ahí). Si es `false`,
+> **`emailVerificado`** también viene en el register: inicialmente `false`; en replay refleja el estado actual. Si es `false`,
 > mostrá un banner "Confirmá tu email (revisá tu casilla)" con botón de reenviar — el usuario
 > **puede operar igual** (verificación suave).
 
@@ -236,6 +236,11 @@ conserva por ahora su integración anterior.
 > staging y deploy. Las demás rutas legales de esta sección aún no existen en runtime.
 > `BACKEND-HANDOFF 1` y la Tarea 3 permanecen cerrados, y el registro histórico de §4.1 continúa
 > activo. No actives la UI basándote solamente en esta documentación.
+
+**Actualización 15M3C — 2026-09-09:** 15J ya conecta aceptación autenticada y 15M3C conecta registro
+con consentimiento/replay a la ruta existente. El registro obligatorio tiene su flag independiente;
+el advisor general de negocio (15N), contenido definitivo, staging y deploy siguen pendientes.
+Los estados históricos anteriores no habilitan producción. La activación del registro se detalla abajo.
 
 #### Endpoints y autorización
 
@@ -838,7 +843,44 @@ desde proxies confiables configurados y limita User-Agent a 512 caracteres. Esos
 protegen/retienen según la política aprobada y se omiten deliberadamente de este endpoint. El
 documento completo se consulta por su URL pública exacta.
 
-#### Registro objetivo con evidencia atómica
+#### Registro con evidencia atómica — integración 15M3C
+
+Estado de implementación al 2026-09-09: la ruta existente conecta el parser estricto, escritor legal,
+replay y emisión de sesión actual por IDs. Los flags siguen apagados por defecto; la integración no
+publica textos ni acredita staging o habilitación productiva.
+
+| Propiedad | Función |
+| --- | --- |
+| `ordenfix.legal.registration-consent.enabled` | Habilita el procesamiento atómico del bloque completo; requiere credencial restringida, keyrings y política de metadata propias. |
+| `ordenfix.legal.registration-enforcement.enabled` | Rechaza ausencia legal con 428; exige consentimiento y ambas lecturas públicas habilitadas. |
+| `VITE_REGISTRATION_CONSENT` (frontend) | `true` consulta requisitos y exige confirmaciones; ausente/`false` mantiene rollout legacy. Un valor inválido bloquea la pantalla. |
+
+El contexto de escritura selecciona exclusivamente `ordenfix.legal.registration-consent.jdbc-url`,
+`username`, `password`, los keyrings/versión activa de `ordenfix.legal.idempotency` y
+`ordenfix.legal.account-metadata`, la retención de metadata y, cuando se especifican,
+`ordenfix.legal.idempotency.result-ttl` y `plan.trial-dias`.
+No usa la credencial del datasource principal. La sesión usa el datasource de aplicación con la
+frontera JPA B3C. Se exige `server.forward-headers-strategy=none`; proxies confiables se configuran
+mediante `ordenfix.legal.account-metadata.trusted-proxy-cidrs`, con el control de peer existente.
+El consentimiento aditivo puede funcionar sin las lecturas públicas; el frontend nuevo sí necesita
+el GET de requisitos publicado. No activar enforcement antes de acreditar publicación y frontend.
+
+El request conserva la familia MIME JSON (`application/json` o `application/*+json`) y UTF-8;
+otros medios devuelven 415. Query se ignora como en el registro anterior. Se valida la clave antes
+de abrir el body. Las respuestas del registro y sus errores llevan `Cache-Control: no-store`.
+
+El plazo compartido de 30 segundos cubre lectura/parsing legal, escritor y emisión de sesión hasta
+su limpieza y control final. El notifier de verificación se ejecuta sólo para alta nueva después de
+ese control; su email best effort queda fuera del tramo acotado. El límite no promete preempción de
+BCrypt ni tiempo físico de email/transmisión HTTP. Si falla sesión después del commit, el mismo
+intento recupera el alta por replay; no reenvía bienvenida y conserva el reenvío explícito existente.
+
+La pantalla muestra afirmaciones y textos completos de la versión recibida como texto seguro.
+Al editar datos o revisar condiciones genera un intento nuevo. Red/503/409 en progreso conservan
+clave y body en memoria para reintentar; stale/428 conservan datos del taller, recargan condiciones y
+exigen confirmaciones nuevas. No hay fallback a legacy si falla la lectura legal ni persistencia
+de contraseña, confirmaciones o clave de intento en almacenamiento del navegador.
+
 
 Cuando el rollout habilite enforcement, `POST /api/auth/register` requiere además:
 

@@ -311,6 +311,33 @@ class LegalAcceptanceHttpSettingsTest {
         invalid(lookup);
     }
 
+    @Test void registrationSelectsItsOwnCredentialsWithoutRequiringAcceptanceOrPublicFlags() {
+        var input = properties();
+        input.remove(ACCEPTANCE + "enabled"); input.remove(READ);
+        String prefix = "ordenfix.legal.registration-consent.";
+        input.put(prefix + "enabled", "true");
+        input.put(prefix + "jdbc-url", "jdbc:postgresql://127.0.0.1:1/registration_fixture");
+        input.put(prefix + "username", "registration_fixture"); input.put(prefix + "password", "registration-private");
+        input.put("plan.trial-dias", "21");
+        var selected = LegalAcceptanceHttpSettings.registration(environment(input)).isolatedProperties();
+        assertThat(selected).containsEntry(prefix + "username", "registration_fixture")
+                .containsEntry("plan.trial-dias", "21").containsEntry(HMAC + "keyring.3", input.get(HMAC + "keyring.3"));
+        assertThat(selected.keySet()).noneMatch(name -> name.startsWith(ACCEPTANCE) || name.equals(READ));
+        assertThat(selected).doesNotContainKeys(JWT, DEVICE, PROXIES, FORWARD);
+    }
+
+    @Test void registrationRetainsSecretSeparationAndNeverFallsBackToAcceptanceCredentials() {
+        var input = LegalRegistrationHttpConfigurationTest.properties();
+        input.put(ACCEPTANCE + "password", "unrelated-acceptance");
+        input.remove("ordenfix.legal.registration-consent.password");
+        assertThatThrownBy(() -> LegalAcceptanceHttpSettings.registration(environment(input)))
+                .isInstanceOf(IllegalArgumentException.class).hasNoCause();
+        input.put("ordenfix.legal.registration-consent.password", "fixture");
+        input.put(AES + "keyring.2", input.get(HMAC + "keyring.1"));
+        assertThatThrownBy(() -> LegalAcceptanceHttpSettings.registration(environment(input)))
+                .isInstanceOf(IllegalArgumentException.class).hasNoCause();
+    }
+
     private static Map<String, String> properties() {
         Map<String, String> values = new LinkedHashMap<>();
         values.put(ACCEPTANCE + "enabled", "true"); values.put(READ, "true");

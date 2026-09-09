@@ -9,7 +9,9 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; B3B cerrado con 342 focales; B3C cerrado con clean verify de 8591 pruebas; sigue M3C.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; B3B cerrado con 342 focales; B3C cerrado con clean verify de 8591 pruebas. M3C cerrado el 2026-09-09 con clean verify de
+8661 pruebas y registro frontend integrado; 15M completo. N/O/P/Q se revisan contra los criterios
+de salida inicial antes de abrir nuevos cortes.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -18,6 +20,8 @@ Implementar el punto uno: requisitos autenticados, satisfacción exacta/heredada
 aceptación e idempotencia, registro atómico y enforcement preparado pero apagado. No incluye frontend
 runtime, contenido definitivo, invitaciones/email, PRO/Mercado Pago, fotos, exportación, baja/cierre,
 staging, grants compartidos ni activación de producción. Esas dependencias siguen abiertas.
+La ampliación ratificada en M3C incorpora únicamente la pantalla frontend de registro y sus pruebas,
+para completar Cuenta utilizable según el ajuste de salida inicial; el resto del alcance se conserva.
 
 - Baseline backend `a25c7aa`, rama `codex/lanzamiento-publico-backend`, árbol limpio.
 - Frontend `7545201`, rama `codex/frontend-refactor-checkpoint`, sin cambios; conservar sus dos
@@ -53,7 +57,7 @@ staging, grants compartidos ni activación de producción. Esas dependencias sig
 | 15J | POST de aceptaciones y errores contractuales — cerrado en J1/J2/J3 | D, E, I |
 | 15K | Política compartida de emisión de sesión — cerrado | A |
 | 15L | Servicio interno de registro atómico — cerrado en L1/L2/L3 | F, G, H, I, K |
-| 15M | Registro HTTP compatible, replay y efectos poscommit — M1/M2/M3 | J, K, L |
+| 15M | Registro HTTP compatible, replay y efectos poscommit — cerrado M1/M2/M3 | J, K, L |
 | 15N | Bloqueo legal configurable y excepciones exactas | D, E, J, M |
 | 15O | Mantenimiento de resultados vencidos y metadata | F, G, H, I |
 | 15P | Concurrencia, capacidad y fallos del flujo completo | A–O |
@@ -3534,6 +3538,122 @@ y control final de respuesta con su gate fresco. Este corte no demuestra todaví
 de extremo a extremo ni determina la persistencia del alta ante un fallo posterior de sesión.
 M3/15M continúan abiertos. Commit atómico
 `feat(legal): acota emision de sesion al plazo compartido`, sin push.
+
+### Apertura 15M3C — integración de registro y pantalla
+
+Fecha: 2026-09-08. Backend `74764df`, frontend `aadfcf9`; ramas y archivos ajenos preservados.
+El ajuste de salida inicial del frontend (`2026-09-08-salida-inicial-alcance-y-cierre.md`) prioriza
+Cuenta utilizable. Se conecta lo construido, sin nuevas subdivisiones de infraestructura.
+
+Diseño ratificado: un único handler de `/api/auth/register`, parser M1, bridge HTTP y contexto L3
+isolado; sesión B3C por IDs después del commit y notifier M2 sólo para alta nueva. Consentimiento y
+enforcement permanecen apagados por defecto. Legacy exige ausencia real del bloque completo; parcial
+400, completo con capacidad apagada 503, ausente con enforcement 428. Advice limitado al registro.
+Un owner de 30 segundos nace antes de la lectura legal y llega al control final tras sesión/cleanup.
+El email best effort ocurre después de ese control, fuera del tramo acotado; no se promete un límite
+físico de 30 segundos que incluya email o envío por la red. Si falla sesión, el retry conserva el alta
+confirmada y usa replay sin nueva bienvenida; el reenvío de verificación existente sigue disponible.
+Se conserva query ignorada y familia MIME JSON (`application/json`, `application/*+json`); los otros
+medios se rechazan con 415. El parser M1 conserva UTF-8 y la prioridad del header antes de abrir body.
+
+Lista nominal backend de este corte, relativa a `src/main/java/com/leonardorozza/mvgrreparacionesbackend/`:
+
+- Modificar `controller/AuthController.java`, `legal/http/LegalAcceptanceHttpSettings.java`,
+  `LegalAcceptancePeerConfiguration.java`, `LegalRegistrationHttpException.java`.
+- Crear en `legal/http/`: `LegalRegistrationHttpBridge.java`, `LegalRegistrationHttpConfiguration.java`,
+  `LegalRegistrationExceptionHandler.java`.
+- Tests del paquete HTTP: nuevos `LegalRegistrationHttpBridgeTest`, `LegalRegistrationHttpConfigurationTest`,
+  `LegalRegistrationControllerTest`; adaptar `LegalAcceptanceHttpSettingsTest`,
+  `LegalAcceptancePeerConfigurationTest`, `LegalRegistrationHttpExceptionTest` cuando corresponda.
+- Tests nuevos en `legal.manifest.persistence`: `LegalRegistrationHttpITSupport`,
+  `LegalRegistrationHttpIT`, `LegalRegistrationReplayIT`. PostgreSQL real, rol restringido y sesión JPA;
+  MockMvc standalone y email observado, sin afirmar un navegador/servidor desplegado.
+- Documentación: este plan, `FRONTEND_INTEGRATION.md` y `README.md` con capacidades efectivas y activación.
+
+Frontend paralelo: lectura del set público que incluye textos exactos, confirmaciones explícitas,
+clave/payload en memoria por intento, manejo de stale/428/409/503 y rollout `VITE_REGISTRATION_CONSENT`.
+Un flag inválido bloquea el registro. Documentos como texto completo legible sin ejecutar HTML.
+No se publica contenido, ni se activan producción, cobros o nuevos transportes de email.
+
+Validación: focales de parser/bridge/config/controlador y PostgreSQL primero; clean verify al cierre
+por el cambio transversal de registro. Frontend: focales de contrato/pantalla, typecheck/lint y
+navegador con rollout activo, separado de regresión legacy. Commit atómico por repositorio, sin push.
+
+
+### Evidencia focal 15M3C
+
+Fecha: 2026-09-09. Fuentes finales: 7 clases de producción, 6 archivos de pruebas unitarias,
+3 archivos de integración y los 3 documentos nominales. Sin cambios de migraciones ni dependencias.
+
+- Foco unitario: **442 pruebas**, 12 suites, sin fallos, errores ni omisiones; finalizó a las
+  00:06:11 -03:00 en 30.962 s.
+- Foco PostgreSQL 16: **55 pruebas**, 4 suites, sin fallos, errores ni omisiones; finalizó a las
+  00:07:00 -03:00 en 47.709 s. HTTP/replay nuevos aportan 18 casos y regresiones de sesión/legacy 37.
+- El armado real de configuración HTTP acredita el contexto de escritura aislado y su credencial
+  restringida, separado del datasource de aplicación que usa la sesión. Las pruebas verifican
+  commit de cuenta/evidencia, metadata, rechazos sin alta parcial, replay con estado actual y
+  recuperación después de un fallo de sesión sin repetir cuenta ni bienvenida.
+- MockMvc standalone usa controller, bridge y advice reales; JPA y PostgreSQL son reales. No
+  acredita contenedor servlet, transporte SMTP, navegador conectado ni despliegue en staging.
+
+El primer foco detectó un fixture Mockito con stubbing anidado al convertir una excepción;
+se construyó la excepción antes del stub y se conservó la expectativa 409. Una compilación posterior
+detectó que el contador de inserts de un test PostgreSQL es long; se corrigió su variable local.
+Ambos ajustes son de prueba, sin relajar contrato ni cambiar producción. El foco completo posterior
+aprobó con las fuentes finales. El gate integral fresco corre a continuación por el cambio transversal.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -B -Dtest=LegalRegistrationHttpBridgeTest,LegalRegistrationHttpConfigurationTest,LegalRegistrationControllerTest,LegalRegistrationRequestsTest,LegalRegistrationHttpExceptionTest,LegalAcceptanceHttpSettingsTest,LegalAcceptancePeerConfigurationTest,AuthTests,CuentaTests,RegistroServiceTest,AccountSessionPolicyTest,LegacyRegistrationAccountWriterTest test
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -B -Dit.test=LegalRegistrationHttpIT,LegalRegistrationReplayIT,LegalRegistrationSessionIssuerIT,LegacyRegistrationPostCommitIT failsafe:integration-test failsafe:verify
+```
+
+Failsafe focal usó el package fresco previo y las clases de test recompiladas por el foco unitario;
+no hubo procesos Maven concurrentes sobre target. El integral posterior parte de clean.
+
+
+Auditoría de artefactos e inventarios M3C aprobada sobre el clean actual: 491 fuentes productivas
+corresponden a 1078 clases; 344 fuentes de prueba a 900 clases, todas Java 21. Ambos JAR contienen
+las mismas 1078 clases y 32 recursos que target/classes, con bytes idénticos, 122 dependencias
+iguales y Start-Class web/CLI correctos. Sin tests empaquetados, entradas duplicadas ni
+application-secret.properties. Este último control es por nombre, no un escaneo genérico de secretos.
+V27/V28/V29 coinciden entre fuente, target y ambos JAR con sus hashes congelados.
+
+- JAR web SHA-256: `8bcc0cb9a4af609240064fd36a3b3068a0b916dd5142639199c796844fed51f0`.
+- JAR CLI SHA-256: `f14f4de632d400265b6c6b104d7b24f3d47777ee09dab0eef862c8c60d9b493d`.
+
+
+### Cierre 15M3C — registro integrado
+
+**15M3C, M3 y 15M cerrados localmente el 2026-09-09.** `clean verify` fresco aprobado con
+**8661 pruebas**, 7327 Surefire en 218 suites y 1334 Failsafe en 93 suites: 311 suites en total.
+Terminó a las `00:37:22 -03:00`, duración informada `29:08 min`, Java 21 y PostgreSQL 16.
+XML con el mismo número de casos que sus totales, sin duplicados, fallos, errores, omitidas ni
+reintentos internos. Auditoría exacta de XML contra 3062 métodos compilados: 2253 Surefire y
+809 Failsafe, sin omisiones de clases o métodos y con todos los reportes frescos. El integral
+incluye el foco; no se suman ambas corridas como casos diferentes.
+No se modificaron fuentes productivas ni de prueba durante el gate; los artefactos auditados arriba
+pertenecen a esta compilación limpia. El verificador nominal de secret.properties también aprobó.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home ./mvnw -B clean verify
+```
+
+Frontend coordinado: 46 Vitest focalizados, 6 Playwright nuevos (desktop y móvil 320 px),
+8 Playwright de regresión, typecheck, ESLint y build local con rollout activo aprobados. Se corrigió
+un doble submit que liberaba prematuramente el bloqueo de inputs y se repitieron sus verificaciones.
+La revisión independiente del contrato no encontró incompatibilidades de JSON, enums, códigos o
+headers. Su evidencia y límites están en el plan frontend de salida inicial del 2026-09-08.
+
+Los textos recibidos y las confirmaciones visibles llegan al mismo registro atómico; los reintentos
+recuperan el alta y emiten sesión con datos actuales. La configuración sigue apagada por defecto.
+No se acredita navegador → servidor → PostgreSQL real: Playwright simula API y las integraciones
+backend usan MockMvc/PG. No hay contenido definitivo publicado ni activación de staging/producción.
+Cuenta utilizable requiere esa verificación operativa para cerrar el criterio de salida.
+
+N/O/P/Q conservan sus contratos históricos y se evalúan contra la lista de salida inicial; este
+cierre no abre nuevas subdivisiones ni cambia PRO/Mercado Pago, cobros, email o migraciones.
+Un commit por repositorio, sin push: backend `feat(legal): integra consentimiento en el registro`;
+frontend `feat(registro): incorpora consentimiento de cuenta`.
 
 ## 15N — Enforcement compatible, apagado
 

@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.http;
 
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalAcceptanceDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalPrivateRequirementsDatabaseConfiguration;
+import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence.LegalRegistrationDatabaseConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.service.security.DeviceCredentialCipher;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.EnumerablePropertySource;
@@ -40,31 +41,43 @@ final class LegalAcceptanceHttpSettings {
     }
 
     static LegalAcceptanceHttpSettings from(Environment environment) {
+        return from(environment, ACCEPTANCE, true);
+    }
+
+    static LegalAcceptanceHttpSettings registration(Environment environment) {
+        return from(environment, LegalRegistrationDatabaseConfiguration.PROPERTY_PREFIX, false);
+    }
+
+    private static LegalAcceptanceHttpSettings from(Environment environment, String prefix, boolean acceptance) {
         try {
             if (!(environment instanceof ConfigurableEnvironment configurable)
-                    || !"true".equals(environment.getProperty(ACCEPTANCE + "enabled"))
-                    || !"true".equals(environment.getProperty(READ_ENABLED))) throw invalid();
+                    || !"true".equals(environment.getProperty(prefix + "enabled"))
+                    || (acceptance && !"true".equals(environment.getProperty(READ_ENABLED)))) throw invalid();
             requireOriginalPeer(environment);
 
             Map<String, Object> selected = new LinkedHashMap<>();
-            selected.put(ACCEPTANCE + "enabled", "true");
-            selected.put(READ_ENABLED, "true");
+            selected.put(prefix + "enabled", "true");
+            if (acceptance) selected.put(READ_ENABLED, "true");
             for (String suffix : List.of("jdbc-url", "username", "password")) {
-                String name = ACCEPTANCE + suffix;
+                String name = prefix + suffix;
                 selected.put(name, required(environment, name));
             }
 
             Map<Integer, String> hmac = keyring(configurable, IDEMPOTENCY);
             Map<Integer, String> aes = keyring(configurable, METADATA);
             requireIndependentKeys(environment, hmac, aes);
-            for (String prefix : List.of(IDEMPOTENCY, METADATA)) {
-                selected.put(prefix + "active-write-version", required(environment, prefix + "active-write-version"));
+            for (String keyPrefix : List.of(IDEMPOTENCY, METADATA)) {
+                selected.put(keyPrefix + "active-write-version", required(environment, keyPrefix + "active-write-version"));
             }
             hmac.forEach((version, secret) -> selected.put(IDEMPOTENCY + "keyring." + version, secret));
             aes.forEach((version, secret) -> selected.put(METADATA + "keyring." + version, secret));
             String ttl = environment.getProperty(IDEMPOTENCY + "result-ttl");
             if (ttl != null) selected.put(IDEMPOTENCY + "result-ttl", ttl);
             selected.put(METADATA + "retention", required(environment, METADATA + "retention"));
+            if (!acceptance) {
+                String trialDays = environment.getProperty("plan.trial-dias");
+                if (trialDays != null) selected.put("plan.trial-dias", trialDays);
+            }
             // I2 accredits active membership, TTL/retention and the full cryptographic configuration
             // before constructing its pool. Only selected strings reach that independent context.
             return new LegalAcceptanceHttpSettings(selected,

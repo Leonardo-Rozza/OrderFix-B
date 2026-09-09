@@ -3,13 +3,16 @@ package com.leonardorozza.mvgrreparacionesbackend.controller;
 
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.AuthResponseDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.LoginRequestDto;
-import com.leonardorozza.mvgrreparacionesbackend.service.dto.RegisterRequestDto;
+import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalRegistrationHttpBridge;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cuenta.OlvidePasswordRequestDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cuenta.ResetPasswordRequestDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.cuenta.VerificarEmailRequestDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.AuthService;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.CuentaService;
-import com.leonardorozza.mvgrreparacionesbackend.service.impl.RegistroService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -26,7 +29,7 @@ import java.util.Map;
 public class AuthController {
 
     private final AuthService authService;
-    private final RegistroService registroService;
+    private final LegalRegistrationHttpBridge registration;
     private final CuentaService cuentaService;
 
     @PostMapping("/login")
@@ -35,8 +38,11 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<AuthResponseDto> register(@Valid @RequestBody RegisterRequestDto request) {
-        return ResponseEntity.status(201).body(registroService.registrar(request));
+    public ResponseEntity<AuthResponseDto> register(HttpServletRequest request, HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        response.setHeader(HttpHeaders.ETAG, null);
+        return ResponseEntity.status(201).contentType(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store").body(registration.register(request));
     }
 
     // ---------- Olvido / reset de contraseña ----------

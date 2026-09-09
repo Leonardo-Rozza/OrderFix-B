@@ -48,6 +48,17 @@ class LegalAcceptancePeerConfigurationTest {
         }
     }
 
+    @Test void registrationAloneReusesThePeerGuardWithoutPrivateAcceptanceOrReader() {
+        try (var application = new AnnotationConfigApplicationContext()) {
+            application.setEnvironment(new MockEnvironment()
+                    .withProperty(LegalRegistrationHttpConfiguration.CONSENT_PROPERTY, "true"));
+            application.register(LegalAcceptancePeerConfiguration.class);
+            application.refresh();
+            assertThat(application.getBeansOfType(WebServerFactoryCustomizer.class)).hasSize(1);
+            assertThat(application.getBeansOfType(javax.sql.DataSource.class)).isEmpty();
+        }
+    }
+
     @Test void enabledGuardPublishesOnlyItsTomcatCustomizerWithoutOpeningResources() {
         try (var application = new AnnotationConfigApplicationContext()) {
             application.setEnvironment(new MockEnvironment()

@@ -16,9 +16,9 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 >   están implementados. El bloque 13 agrega los dos GET documentales, `documentSetRevision`, ETag,
 >   errores y políticas HTTP con lector restringido y flag apagado. El bloque 14 agrega el GET de
 >   requisitos públicos para `REGISTRO/es-AR`, con agregado V28, concurrencia/capacidad acreditadas
->   y flag independiente apagado. Quedan requisitos autenticados,
->   aceptación/registro de aplicación, idempotencia HTTP, enforcement, contenido definitivo,
->   staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
+>   y flag independiente apagado. El bloque 15 agrega requisitos/historial propios y aceptación;
+>   15M3C conecta registro con consentimiento y replay a la ruta existente. Quedan el enforcement
+>   general de negocio, contenido definitivo, staging y deploy. `BACKEND-HANDOFF 1` sigue cerrado.
 > - **`docs/plans/2026-09-01-legal-required-set-aggregate-v28-closure.md`** — cierre de V28:
 >   materialización interna con rol restringido, preflight, gate compartido, replay y preservación
 >   de historia V27. `requiredSetRevision` representa los conjuntos completos aplicables y permanece
@@ -300,3 +300,16 @@ src/main/java/com/leonardorozza/mvgrreparacionesbackend/
 └── utils/             # mappers (MapStruct) + jwt
 src/main/resources/db/migration/   # Flyway V1..V28
 ```
+
+## Registro con consentimiento — rollout 15M3C
+
+La ruta `/api/auth/register` integra alta atómica, evidencia, replay y sesión actual por IDs.
+`ordenfix.legal.registration-consent.enabled` y `ordenfix.legal.registration-enforcement.enabled`
+permanecen apagados por defecto. Un bloque legal enviado nunca se descarta para crear una cuenta legacy.
+La [guía de integración](FRONTEND_INTEGRATION.md#registro-con-evidencia-atómica--integración-15m3c)
+detalla configuración, errores y el flag frontend `VITE_REGISTRATION_CONSENT`.
+
+El contexto escritor usa su rol restringido; JPA emite sesión con la credencial de aplicación. Email
+best effort sólo sigue a un alta nueva confirmada y una sesión emitida. No se activa producción ni
+se publica contenido en este corte. El cierre local y las pruebas están en el
+[plan del bloque 15](docs/plans/2026-09-06-legal-account-consent-implementation.md).

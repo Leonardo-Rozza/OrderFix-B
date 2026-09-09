@@ -48,6 +48,19 @@ class LegalRegistrationHttpExceptionTest {
     private static final String SUBMITTED = "sha256:" + "a".repeat(64);
     private static final String SECRET = "SQL_SECRET_password=synthetic IP=192.0.2.200 UA=private-agent HMAC=private-hmac";
 
+    @Test void transportRejectionUsesFixed415WithoutExternalDiagnostics() throws Exception {
+        var rejected = LegalRegistrationHttpException.unsupportedMediaType();
+        fields(rejected, HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Tipo de contenido no soportado", null, null, null);
+        assertThat(rejected.getMessage()).isEqualTo("El registro requiere un cuerpo JSON.");
+        assertThat(rejected.getCause()).isNull();
+    }
+
+    @Test void currentSessionRejectionUsesTheSameGenericAuthenticationEnvelope() throws Exception {
+        var rejected = LegalRegistrationHttpException.authenticationRejected(new IllegalStateException(SECRET));
+        fields(rejected, HttpStatus.UNAUTHORIZED, "No autorizado", null, null, null);
+        assertThat(rejected.getMessage()).isEqualTo("Usuario o contraseña incorrectos");
+    }
+
     @Test void keyFactoriesExposeOnlyTheFixedHeaderContract() throws Exception {
         var required = LegalRegistrationHttpException.requiredKey();
         fields(required, HttpStatus.BAD_REQUEST, "Solicitud inválida", "IDEMPOTENCY_KEY_REQUERIDA",

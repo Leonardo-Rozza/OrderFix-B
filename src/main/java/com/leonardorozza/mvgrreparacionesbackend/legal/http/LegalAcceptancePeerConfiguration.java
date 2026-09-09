@@ -13,13 +13,24 @@ import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Condition;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.filter.ForwardedHeaderFilter;
 
 /** Rejects known peer rewriters in the supported embedded Tomcat runtime before serving requests. */
 @Configuration(proxyBeanMethods = false)
-@Conditional(LegalAcceptanceHttpConfiguration.Enabled.class)
+@Conditional(LegalAcceptancePeerConfiguration.Enabled.class)
 public class LegalAcceptancePeerConfiguration {
+
+    public static final class Enabled implements Condition {
+        @Override public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            boolean acceptance = new LegalAcceptanceHttpConfiguration.Enabled().matches(context, metadata);
+            boolean registration = new LegalRegistrationHttpConfiguration.Enabled().matches(context, metadata);
+            return acceptance || registration;
+        }
+    }
 
     @Bean
     WebServerFactoryCustomizer<TomcatServletWebServerFactory> legalAcceptancePeerGuard() {
