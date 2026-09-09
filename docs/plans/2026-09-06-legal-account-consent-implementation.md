@@ -4167,3 +4167,96 @@ Auditoría final de artefactos aprobada: las diez clases compiladas de las cuatr
 incluidas las internas, coinciden byte a byte con target/classes en ambos JAR. Start-Class web/CLI
 correctos, sin clases de tests, application-secret ni entradas duplicadas. V27/V28/V29 conservan
 sus hashes congelados en fuentes y en ambos artefactos. El gate de propiedades secretas pasó.
+
+
+### Verificación posterior a 15M — navegador real local
+
+Apertura sobre backend `d6e99d2`, posterior al cierre local de 15M. Este corte acredita
+navegador → servidor HTTP → PostgreSQL en una ejecución local reproducible. No abre 15N/15O/15P/15Q,
+no habilita flags por defecto, no despliega ni completa transporte de email o Mercado Pago.
+
+Lista nominal backend, fijada antes del Java:
+
+- Nuevo `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationBrowserE2E.java`.
+- Este plan.
+- `README.md` para la invocación optativa y los límites de evidencia.
+
+El JUnit optativo `LegalRegistrationBrowserE2E`, fuera de los patrones ordinarios `*IT`/`*Test`,
+será dueño de PostgreSQL 16 efímero, de la aplicación real con Tomcat en loopback/puerto aleatorio
+y del proceso Playwright. Reutiliza por composición los fixtures M3C/L3 de migraciones,
+publicación REGISTRO y roles restringidos, sin modificarlos. El rol de aplicación es no superusuario;
+sus grants adicionales y el rol de documentos públicos se crean exclusivamente en la base efímera.
+Las credenciales JWT/device/HMAC/AES son sintéticas e independientes. Los lectores públicos,
+consentimiento y enforcement se habilitan sólo en el contexto de prueba; mail y Mercado Pago
+permanecen desactivados. V27, V28 y V29 no se modifican.
+
+Se ejecutan tres recorridos, en escritorio y mobile de 320 px (seis casos): alta con consentimiento
+y sesión reales; pérdida de la primera respuesta tras un POST 201 real y recuperación por replay;
+y corte de red al leer requisitos, que bloquea el formulario sin degradar a registro legacy.
+No se simulan respuestas de API: la pérdida usa `route.fetch()` contra el backend real seguida de
+aborto de la entrega. No se introduce endpoint de control. La coordinación usa las variables
+`ORDENFIX_REGISTRATION_E2E_API_URL`, `ORDENFIX_REGISTRATION_E2E_RUN_ID` y
+`ORDENFIX_REGISTRATION_E2E_REPORT`; el reporte conserva escenario/proyecto/email/revisión/actos/clave,
+sin contraseña ni JWT. El servidor Vite es exclusivo en `127.0.0.1:5175`, un worker y cero retries.
+
+Después del navegador se contrastan baselines y deltas: cuatro nuevas cuentas y ninguna para los
+dos casos bloqueados, identidades/tenant/ADMIN y suscripciones, lotes/actos/documentos/metadata y
+ledger exactos, sin duplicados por replay, y tokens de verificación. El seed inicial del DataLoader
+se observa como baseline. Se acreditan roles físicos distintos para aplicación, escritor y lectores.
+El proceso Node se lanza sin shell desde el frontend; salida a archivo, cola acotada ante fallo,
+plazo global de cinco minutos para Playwright y cierre de descendientes/servidor/PG incluso al fallar.
+
+Gate previsto: compilación y foco explícito de este JUnit con Java 21/PostgreSQL 16 más los seis
+casos Playwright reales. La validación se registra al terminar, sin adjudicar resultados anticipados.
+Los gates ordinarios y defaults permanecen intactos; no hay push ni commit de implementación hasta
+la revisión y cierre coordinados por el agente principal.
+
+
+### Cierre de verificación posterior a 15M — navegador real local
+
+Corte cerrado localmente el **2026-09-09**. Foco final aprobado mediante el runner frontend
+`npm run test:e2e:registration-real`, con JAVA_HOME en Corretto 21.0.10. Compilación de 345 fuentes
+de prueba: 17.871 s; Failsafe focal: 27.601 s, terminado `2026-09-09T07:36:06-03:00`.
+El XML nuevo contiene un caso JUnit, sin fallos, errores, omitidos ni reintentos internos. Ese caso
+exige el éxito de **seis recorridos Playwright** y contrasta sus seis reportes exclusivos con SQL;
+no son siete recorridos ni se suman las corridas anteriores. Playwright terminó passed.
+
+Comandos secuenciales del runner, sin otros procesos Maven sobre target:
+
+```sh
+./mvnw -B -DskipTests test-compile
+./mvnw -B -Dit.test=LegalRegistrationBrowserE2E -Dordenfix.browser.frontend=/ruta/al/frontend failsafe:integration-test failsafe:verify
+```
+
+Se acreditó frontend Vite → aplicación completa Tomcat → PostgreSQL 16.14, en escritorio y móvil
+320 px. El alta devuelve 201 y el frontend obtiene perfil, suscripción y dashboard con sesión JWT
+real, CORS y tenant. El rate limiter está activo con límite de registro de 20 para los seis POST de
+la matriz; no se afirma haber probado el límite productivo de cinco ni un proxy/limitador externo.
+
+Las comprobaciones SQL confirmaron cuatro altas únicas, cada una con su taller, ADMIN y TRIAL,
+lote/revisión, actos/documentos/digests, fingerprint HMAC, metadata cifrada y un token de verificación.
+Los dos escenarios de lectura bloqueada no crearon cuentas; los dos replays no duplicaron altas,
+evidencia ni tokens. Se observaron cuatro roles físicos distintos sin privilegios administrativos;
+la credencial de aplicación carece de INSERT en legal_aceptaciones. Se conservaron todos
+los hashes de V27/V28/V29 y no hubo cambios en src/main, test/resources ni pom.xml.
+
+La primera corrida compiló pero falló antes del contexto por consultar una secuencia id en
+reparacion_fotos, cuya clave no tiene ese nombre. La consulta ahora verifica la columna en pg_catalog
+sobre cada tabla nominal. La segunda pasó navegador y SQL, pero el cierre manual del contexto
+invalidó los callbacks de Spring 7. Se sustituyó por DirtiesContext AFTER_EACH_TEST_METHOD,
+respetando la propiedad del contexto y su cache. Ambos defectos eran del harness; el foco final
+repitió todo después de corregirlos. La revisión de procesos exige startInstant conocido para
+terminar un descendiente y reporta limpieza incompleta ante identidad desconocida sin tocarlo.
+
+La ejecución final liberó los procesos y pools; se comprobó que el contenedor PostgreSQL exclusivo
+ya no existía y los puertos de Vite, Tomcat y PostgreSQL estaban cerrados. No se mataron procesos
+ajenos. Lint/TypeScript y guard loopback del frontend también aprobaron; el control del guard
+rechazó URL ausente/remota y enumeró seis casos con URL local sin abrir servidores.
+
+Se cierra el faltante de conexión local de Cuenta utilizable. Staging continúa pendiente de entorno,
+URLs, configuración y contenido aprobado; estas fixtures no se publican. No acredita HTTPS/proxy,
+entrega SMTP, pagos, otros recorridos operativos ni preparación integral del despliegue.
+No se abrió N/O/P/Q ni se ejecutó un nuevo clean verify: sólo cambiaron pruebas y documentación;
+el integral de 8661 casos de M3C permanece como baseline. Un commit atómico por repositorio, sin push:
+backend `test(legal): acredita registro completo con navegador`; frontend
+`test(registro): verifica alta real y recuperacion`.

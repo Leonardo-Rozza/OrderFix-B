@@ -313,3 +313,22 @@ El contexto escritor usa su rol restringido; JPA emite sesión con la credencial
 best effort sólo sigue a un alta nueva confirmada y una sesión emitida. No se activa producción ni
 se publica contenido en este corte. El cierre local y las pruebas están en el
 [plan del bloque 15](docs/plans/2026-09-06-legal-account-consent-implementation.md).
+
+
+## Registro completo en laboratorio local
+
+La prueba opt-in `LegalRegistrationBrowserE2E` conecta Playwright, la aplicación Spring Boot HTTP
+real y PostgreSQL 16 efímero. Se ejecuta desde el frontend con `npm run test:e2e:registration-real`
+y requiere Java 21, Docker y dependencias npm instaladas. El runner busca este backend como
+`../mvrg-backend`; se puede indicar su ruta mediante `ORDENFIX_BACKEND_DIR`.
+
+El harness reutiliza las migraciones y fixtures técnicas, crea roles separados de aplicación,
+registro y lectura pública, y comprueba las cuentas/evidencias durables después del navegador.
+El frontend usa loopback en 5175 y el backend un puerto aleatorio; las respuestas de negocio no
+se simulan. La pérdida de una respuesta 201 y el corte de lectura se inyectan únicamente en la red
+del navegador. Email y Mercado Pago permanecen deshabilitados.
+
+El sufijo `E2E` queda fuera de las suites Maven habituales: requiere selección explícita y no añade
+Node ni navegadores al gate por defecto. No publicar esta fixture ni usarla sobre bases existentes;
+el harness es dueño de su contenedor descartable. La prueba no acredita staging, HTTPS/proxy,
+contenido legal definitivo ni preparación del despliegue.
