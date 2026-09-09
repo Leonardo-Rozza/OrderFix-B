@@ -328,6 +328,11 @@ El frontend usa loopback en 5175 y el backend un puerto aleatorio; las respuesta
 se simulan. La pérdida de una respuesta 201 y el corte de lectura se inyectan únicamente en la red
 del navegador. Email y Mercado Pago permanecen deshabilitados.
 
+La misma ejecución conserva los seis casos de registro y añade dos recorridos de empleados
+(escritorio y móvil 320 px). Un titular TRIAL crea un USER desde la UI; éste inicia sesión y crea
+un cliente. Se comprueban restricciones por rol, aislamiento de IDs existentes entre talleres y
+revocación al desactivar. PostgreSQL contrasta cuentas, evidencia legal, roles y datos finales.
+
 El sufijo `E2E` queda fuera de las suites Maven habituales: requiere selección explícita y no añade
 Node ni navegadores al gate por defecto. No publicar esta fixture ni usarla sobre bases existentes;
 el harness es dueño de su contenedor descartable. La prueba no acredita staging, HTTPS/proxy,

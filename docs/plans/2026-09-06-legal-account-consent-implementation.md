@@ -4260,3 +4260,77 @@ No se abrió N/O/P/Q ni se ejecutó un nuevo clean verify: sólo cambiaron prueb
 el integral de 8661 casos de M3C permanece como baseline. Un commit atómico por repositorio, sin push:
 backend `test(legal): acredita registro completo con navegador`; frontend
 `test(registro): verifica alta real y recuperacion`.
+
+
+### Verificación de salida inicial — taller y empleados en navegador real local
+
+Apertura sobre backend `a252aba`, autorizada después del cierre del laboratorio de registro.
+El corte amplía el mismo laboratorio para acreditar el criterio «Taller y empleados» de la
+salida inicial. Lista nominal backend, fijada antes de editar Java:
+
+- Modificar `src/test/java/com/leonardorozza/mvgrreparacionesbackend/legal/manifest/persistence/LegalRegistrationBrowserE2E.java`.
+- Este plan, con apertura y cierre pendiente.
+- `README.md`, documentado por el agente principal.
+
+Se conservan los seis recorridos de registro y se agrega uno de empleados por proyecto desktop
+y mobile de 320 px: ocho casos Playwright en total. Cada recorrido nuevo registra por UI un titular
+ADMIN con consentimiento real y taller FREE/TRIAL; el entitlement TRIAL permite crear empleados.
+El titular crea un USER desde la UI; el empleado inicia sesión y crea un cliente por una operación
+permitida. El mismo actor recibe 403 ante funciones reservadas al titular. Promover el empleado
+se rechaza con 400. El ADMIN inicial del DataLoader pertenece a otro taller y recibe 404 al leer
+o modificar el empleado y el cliente nuevos; las relecturas propias conservan los valores.
+Finalmente el titular desactiva al empleado desde la UI: el token previo recibe 403 y un nuevo
+login con sus credenciales recibe 401. Las credenciales y datos son exclusivamente sintéticos.
+
+No se agregan seeds, roles, grants, endpoints, fixtures ni infraestructura: se reutilizan la aplicación
+Tomcat real, PostgreSQL 16 efímero, el ADMIN baseline, los cuatro roles físicos y el proceso
+Playwright ya construidos. No se cambia src/main, configuración productiva, flags por defecto,
+V27/V28/V29, email ni Mercado Pago. Los dos registros adicionales pasan por los mismos controles
+SQL de cuenta, suscripción, lote, actos/documentos/digests, HMAC, metadata cifrada y token que
+los cuatro anteriores. El reporte agrega `case: employees`, `employee: {id,email}`, `client: {id}`,
+`ownerId` y `otherOwnerId`; conserva los campos legales del alta y excluye contraseñas y JWT.
+
+El Java exige ocho entradas exactas y deltas de seis titulares/talleres/suscripciones/tokens y
+agregados de evidencia, más dos empleados y dos clientes: ocho users nuevos en total. Acredita
+roles ADMIN únicos por taller, identidad y tenant de empleados/clientes, valores finales y empleado
+inactivo. Antes del navegador se captura la fila completa y xmin del ADMIN baseline y su taller;
+al terminar deben ser idénticos. Para los objetos creados durante el recorrido se verifican los
+valores durables finales y las relecturas HTTP antes/después de los rechazos; esta observación no
+se presenta como un contador global de DML ni como prueba de ausencia de escrituras no-op.
+Los dos casos de requisitos bloqueados siguen sin crear una cuenta y los replays no duplican alta.
+
+Gate previsto: runner optativo existente, compilación serial y Failsafe focal con Java 21/PostgreSQL
+16, exigiendo los ocho recorridos Playwright sin mocks de API. Se preservan los plazos, cleanup y
+restricción loopback del laboratorio; no se ejecuta Maven concurrente ni se hace push. La matriz
+FREE/ACTIVA y PRO/ACTIVA permanece cubierta por los tests de planes existentes; este foco acredita
+el alta efectiva del empleado durante TRIAL. No se abre N/O/P/Q ni se atribuye evidencia de staging,
+HTTPS/proxy, transporte de email, pagos o preparación integral del despliegue.
+
+### Cierre aprobado — taller y empleados en navegador real local
+
+Ejecución final aprobada el **2026-09-09 a las 09:06:24 -03:00**. Con Java 21 se ejecutaron
+secuencialmente las dos fases del runner existente: `./mvnw -B -DskipTests test-compile`
+(18.368 s) y `./mvnw -B -Dit.test=LegalRegistrationBrowserE2E -Dordenfix.browser.frontend=<frontend> failsafe:integration-test failsafe:verify`
+(42.202 s). El XML acredita un harness JUnit con cero fallos, errores u omisiones que ejecutó y
+verificó ocho recorridos Playwright, sin reintentos; no se cuentan como nueve pruebas de negocio.
+
+Los dos casos de empleados aprobaron en escritorio y móvil 320 px: titular FREE/TRIAL con
+`funciones.empleadosMultiples=true`, creación de USER201, login real y creación de cliente200,
+operaciones de administración prohibidas403, promoción rechazada400 `ROL_USUARIO_INMUTABLE`,
+accesos de otro ADMIN a IDs existentes404 y relecturas propias200 con valores iguales. La UI
+reserva la gestión al titular y permite desactivar al empleado; después el JWT original recibe403
+y un nuevo login401. Las pantallas verificadas no tienen overflow horizontal.
+
+PostgreSQL16.14 confirmó los deltas previstos, todas las pruebas legales anteriores y los nuevos
+controles de pertenencia/ADMIN único/estado final. El titular baseline y su taller conservaron sus
+filas y xmin. El contenedor exclusivo fue eliminado y Vite, Tomcat y PostgreSQL liberaron sus
+puertos. TypeScript, lint, listado exacto de ocho casos y revisión independiente de los helpers
+frontend aprobaron. La revisión corrigió tres rutas de espera del spec antes de ejecutar el foco.
+
+No cambió código productivo, configuración, grants ni migraciones; V27/V28/V29 conservan sus
+hashes congelados. No se repitió clean verify: el integral anterior permanece como baseline,
+no como evidencia nueva. Staging y el acceso comercial de los primeros talleres siguen pendientes;
+este foco acredita la operación durante TRIAL. El próximo recorrido es reparación, presupuesto y
+entrega sin exigir pagos dentro de OrdenFix. Commits de cierre previstos, uno por repositorio y sin
+push: backend `test(usuarios): acredita empleados y aislamiento real`; frontend
+`test(empleados): verifica permisos y acceso real`.

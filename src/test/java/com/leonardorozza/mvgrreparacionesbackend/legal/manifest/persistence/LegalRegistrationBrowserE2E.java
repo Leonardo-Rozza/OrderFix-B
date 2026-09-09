@@ -73,7 +73,7 @@ class LegalRegistrationBrowserE2E {
     private static final List<String> BUSINESS_TABLES = List.of("users", "talleres", "suscripciones", "auth_tokens",
             "clientes", "equipos", "reparaciones", "repuestos", "reparacion_fotos", "presupuestos", "presupuesto_items",
             "articulos", "cobros", "subscription_provider_links", "payment_events", "subscription_payments", "taller_qr_cobro");
-    private static final List<String> COUNTED_TABLES = List.of("users", "talleres", "suscripciones", "auth_tokens",
+    private static final List<String> COUNTED_TABLES = List.of("users", "talleres", "suscripciones", "auth_tokens", "clientes",
             "legal_aceptacion_lotes", "legal_aceptaciones", "legal_aceptacion_documentos", "legal_aceptacion_metadatos",
             "legal_aceptacion_metadatos_cifrados", "legal_idempotencia_resultados", "legal_idempotencia_sin_actos");
     private static LegalRegistrationHttpITSupport fixture;
@@ -149,7 +149,7 @@ class LegalRegistrationBrowserE2E {
         values.forEach((key, value) -> registry.add(key, () -> value));
     }
 
-    @Test void browserCreatesAndRecoversRealRegistrationsWithoutFallback() throws Exception {
+    @Test void browserVerifiesRegistrationAndEmployeePermissions() throws Exception {
         Path frontend = Path.of(System.getProperty("ordenfix.browser.frontend", "../mvgr-reparaciones-frontend")).toRealPath();
         assertThat(frontend.resolve("package.json")).isRegularFile();
         assertThat(frontend.resolve("playwright.registration-real.config.ts")).isRegularFile();
@@ -157,7 +157,7 @@ class LegalRegistrationBrowserE2E {
         assertPhysicalRoles();
         Map<String, Long> baseline = counts();
         assertThat(baseline.get("users")).as("DataLoader baseline exists before any browser request").isPositive();
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM users WHERE email='browser-baseline@ordenfix-e2e.test' AND email_verificado", Long.class)).isEqualTo(1);
+        BaselineAccount otherWorkshop = baselineAccount();
         Instant started = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
         Path report = evidenceDirectory.resolve("browser-evidence.json");
         Path log = evidenceDirectory.resolve("playwright.log");
@@ -180,7 +180,7 @@ class LegalRegistrationBrowserE2E {
             assertThat(finished).as("Playwright exceeded five minutes.\n%s", tail(log)).isTrue();
             assertThat(process.exitValue()).as("Playwright failed.\n%s", tail(log)).isZero();
             Instant finishedAt = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
-            verifyReport(report, baseline, started, finishedAt);
+            verifyReport(report, baseline, otherWorkshop, started, finishedAt);
         } catch (Throwable failure) {
             primary = failure; throw failure;
         } finally {
@@ -189,19 +189,27 @@ class LegalRegistrationBrowserE2E {
         }
     }
 
-    private void verifyReport(Path report, Map<String, Long> baseline, Instant started, Instant finished) throws Exception {
+    private void verifyReport(Path report, Map<String, Long> baseline, BaselineAccount otherWorkshop,
+                              Instant started, Instant finished) throws Exception {
         assertThat(report).isRegularFile();
         assertThat(Files.size(report)).isBetween(1L, 262_144L);
         JsonNode entries = JSON.readTree(Files.readAllBytes(report));
         assertThat(entries.isArray()).isTrue();
-        assertThat(entries).hasSize(6);
+        assertThat(entries).hasSize(8);
         List<String> scenarios = new ArrayList<>();
-        Set<String> emails = new HashSet<>(); Set<Long> users = new HashSet<>(), workshops = new HashSet<>();
+        Set<String> emails = new HashSet<>();
+        Set<Long> users = new HashSet<>(), workshops = new HashSet<>(), employees = new HashSet<>(), clients = new HashSet<>();
         int acts = 0, documents = 0;
         for (JsonNode entry : entries) {
             assertThat(entry.isObject()).isTrue();
-            assertThat(entry.properties()).extracting(Map.Entry::getKey).allMatch(Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey")::contains);
             String scenario = text(entry, "case"), project = text(entry, "project"), email = text(entry, "email");
+            assertThat(scenario).isIn("created", "replayed", "blocked", "employees");
+            assertThat(project).isIn("desktop", "mobile-320");
+            Set<String> fields = scenario.equals("blocked") ? Set.of("case", "project", "email")
+                    : scenario.equals("employees") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances",
+                            "idempotencyKey", "employee", "client", "ownerId", "otherOwnerId")
+                    : Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey");
+            assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrderElementsOf(fields);
             assertThat(email).isEqualTo(scenario + "-" + project + "-" + RUN_ID + "@ordenfix-e2e.test");
             assertThat(emails.add(email)).isTrue(); scenarios.add(scenario + ":" + project);
             if (scenario.equals("blocked")) {
@@ -209,23 +217,91 @@ class LegalRegistrationBrowserE2E {
                 assertThat(entry.has("idempotencyKey")).isFalse();
                 continue;
             }
-            assertThat(scenario).isIn("created", "replayed");
             var accepted = readAcceptances(entry.path("acceptances"));
             acts += accepted.size(); documents += accepted.stream().mapToInt(value -> value.documentos().size()).sum();
             var identity = verifyRegistration(email, text(entry, "requiredSetRevision"), text(entry, "idempotencyKey"), accepted, started, finished);
             assertThat(users.add(identity.userId())).isTrue(); assertThat(workshops.add(identity.tallerId())).isTrue();
+            assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=? AND role='ADMIN'", Long.class,
+                    identity.tallerId())).containsExactly(identity.userId());
+            if (scenario.equals("employees")) {
+                verifyEmployee(entry, project, identity, otherWorkshop);
+                assertThat(employees.add(positiveId(entry.path("employee"), "id"))).isTrue();
+                assertThat(clients.add(positiveId(entry.path("client"), "id"))).isTrue();
+            }
         }
-        assertThat(scenarios).containsExactlyInAnyOrder("created:desktop", "created:mobile-320", "replayed:desktop", "replayed:mobile-320", "blocked:desktop", "blocked:mobile-320");
-        assertThat(users).hasSize(4); assertThat(workshops).hasSize(4);
+        assertThat(scenarios).containsExactlyInAnyOrder("created:desktop", "created:mobile-320", "replayed:desktop",
+                "replayed:mobile-320", "blocked:desktop", "blocked:mobile-320", "employees:desktop", "employees:mobile-320");
+        assertThat(users).hasSize(6); assertThat(workshops).hasSize(6);
+        assertThat(employees).hasSize(2).doesNotContainAnyElementsOf(users);
+        assertThat(clients).hasSize(2);
+        // Login and profile reads must not mutate the pre-existing administrator or workshop.
+        // Newly created objects below are checked by their durable values, not by a global DML counter.
+        assertThat(baselineAccount()).isEqualTo(otherWorkshop);
         Map<String, Long> after = counts();
-        for (String table : List.of("users", "talleres", "suscripciones", "auth_tokens", "legal_aceptacion_lotes",
+        assertThat(after.get("users") - baseline.get("users")).isEqualTo(8);
+        assertThat(after.get("clientes") - baseline.get("clientes")).isEqualTo(2);
+        for (String table : List.of("talleres", "suscripciones", "auth_tokens", "legal_aceptacion_lotes",
                 "legal_aceptacion_metadatos", "legal_idempotencia_resultados")) {
-            assertThat(after.get(table) - baseline.get(table)).as("durable delta for %s", table).isEqualTo(4);
+            assertThat(after.get(table) - baseline.get(table)).as("durable delta for %s", table).isEqualTo(6);
         }
         assertThat(after.get("legal_aceptaciones") - baseline.get("legal_aceptaciones")).isEqualTo(acts);
         assertThat(after.get("legal_aceptacion_documentos") - baseline.get("legal_aceptacion_documentos")).isEqualTo(documents);
-        assertThat(after.get("legal_aceptacion_metadatos_cifrados") - baseline.get("legal_aceptacion_metadatos_cifrados")).isEqualTo(8);
+        assertThat(after.get("legal_aceptacion_metadatos_cifrados") - baseline.get("legal_aceptacion_metadatos_cifrados")).isEqualTo(12);
         assertThat(after.get("legal_idempotencia_sin_actos")).isEqualTo(baseline.get("legal_idempotencia_sin_actos"));
+    }
+
+    private BaselineAccount baselineAccount() {
+        var rows = fixture.owner.queryForList("""
+                SELECT u.id,u.taller_id,to_jsonb(u)::text || ':' || u.xmin::text AS user_row,
+                       to_jsonb(t)::text || ':' || t.xmin::text AS workshop_row
+                  FROM users u JOIN talleres t ON t.id=u.taller_id
+                 WHERE u.email='browser-baseline@ordenfix-e2e.test' AND u.role='ADMIN'
+                   AND u.active AND u.email_verificado AND t.activo
+                """);
+        assertThat(rows).hasSize(1); var row = rows.getFirst();
+        return new BaselineAccount(((Number) row.get("id")).longValue(), ((Number) row.get("taller_id")).longValue(),
+                (String) row.get("user_row"), (String) row.get("workshop_row"));
+    }
+
+    private void verifyEmployee(JsonNode entry, String project, Identity owner, BaselineAccount otherWorkshop) {
+        assertThat(positiveId(entry, "ownerId")).isEqualTo(owner.userId());
+        assertThat(positiveId(entry, "otherOwnerId")).isEqualTo(otherWorkshop.userId());
+        assertThat(owner.tallerId()).isNotEqualTo(otherWorkshop.tallerId());
+        JsonNode employee = entry.path("employee"), client = entry.path("client");
+        assertThat(employee.isObject()).isTrue(); assertThat(client.isObject()).isTrue();
+        assertThat(employee.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrder("id", "email");
+        assertThat(client.properties()).extracting(Map.Entry::getKey).containsExactly("id");
+        long employeeId = positiveId(employee, "id"), clientId = positiveId(client, "id");
+        String employeeEmail = "employee-" + project + "-" + RUN_ID + "@ordenfix-e2e.test";
+        assertThat(text(employee, "email")).isEqualTo(employeeEmail);
+        var rows = fixture.owner.queryForList("""
+                SELECT id,taller_id,username,email,password,role,active,email_verificado,token_version
+                  FROM users WHERE email=?
+                """, employeeEmail);
+        assertThat(rows).hasSize(1); var user = rows.getFirst();
+        assertThat(((Number) user.get("id")).longValue()).isEqualTo(employeeId);
+        assertThat(((Number) user.get("taller_id")).longValue()).isEqualTo(owner.tallerId());
+        assertThat(user.get("username")).isEqualTo("Empleado local");
+        assertThat(user.get("email")).isEqualTo(employeeEmail); assertThat(user.get("role")).isEqualTo("USER");
+        assertThat(user.get("active")).isEqualTo(false); assertThat(user.get("email_verificado")).isEqualTo(true);
+        assertThat(((Number) user.get("token_version")).longValue()).isZero();
+        assertThat(new BCryptPasswordEncoder().matches(PASSWORD, (String) user.get("password"))).isTrue();
+        assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=?", Long.class, owner.tallerId()))
+                .containsExactlyInAnyOrder(owner.userId(), employeeId);
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, employeeId)).isZero();
+        var clients = fixture.owner.queryForList("SELECT id,taller_id,nombre,apellido,telefono,email,direccion FROM clientes WHERE id=?", clientId);
+        assertThat(clients).hasSize(1); var saved = clients.getFirst();
+        assertThat(((Number) saved.get("taller_id")).longValue()).isEqualTo(owner.tallerId());
+        assertThat(saved.get("nombre")).isEqualTo("Cliente empleado"); assertThat(saved.get("apellido")).isEqualTo("Prueba local");
+        assertThat(saved.get("telefono")).isEqualTo(project.equals("desktop") ? "1155000101" : "1155000102");
+        assertThat(saved.get("email")).isNull(); assertThat(saved.get("direccion")).isNull();
+        assertThat(fixture.owner.queryForList("SELECT id FROM clientes WHERE taller_id=?", Long.class, owner.tallerId())).containsExactly(clientId);
+    }
+
+    private static long positiveId(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        assertThat(value.isIntegralNumber() && value.canConvertToLong()).as("report ID %s", field).isTrue();
+        long result = value.longValue(); assertThat(result).isPositive(); return result;
     }
 
     private Identity verifyRegistration(String email, String revision, String key, List<LegalAcceptanceCommand.Acceptance> accepted,
@@ -392,6 +468,7 @@ class LegalRegistrationBrowserE2E {
         }
     }
     private record Identity(long userId, long tallerId) { }
+    private record BaselineAccount(long userId, long tallerId, String userRow, String workshopRow) { }
     private record OwnedProcess(ProcessHandle handle, java.util.Optional<Instant> started) {
         boolean stillOwnedAndAlive() {
             return handle.isAlive() && started.isPresent() && handle.info().startInstant().equals(started);
