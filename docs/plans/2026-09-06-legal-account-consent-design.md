@@ -1249,3 +1249,36 @@ activa, roles, migraciones ni frontend. No se activa el módulo ni se hizo push.
 **Sigue B3C**, emisión con checkpoints y gate transversal; M3C integra HTTP/replay e importa el
 módulo. Último clean verify integral M3A (8227 casos). Commit
 `feat(legal): compone recursos de sesion JPA`.
+
+### Apertura 15M3B3C — 2026-09-08
+
+Se reutiliza K en un núcleo de paquete con checkpoints; login/legacy conservan su entrada anotada
+con NOOP. El emisor legal abre una sola TX REQUIRES_NEW/RC/readOnly dentro del scope B3B, con el
+remanente del owner original. Controla repo/BCrypt/JWT también ante RuntimeException y acredita
+commit/cleanup antes de entregar el resultado. Un JWT ya calculado se descarta ante fallo tardío.
+
+Un módulo explícitamente importable compone policy, recursos y JpaTM del mismo DataSource; no se
+activa HTTP ni se modifica B3A/B3B. Nueve archivos nominales constan en el plan antes del código.
+Primero gate focal, después clean verify integral fresco por el refactor de K. Sin cambios de
+claims, persistencia del alta, roles, migraciones, dependencias o frontend. Sigue M3C después de B3C.
+
+### Ajuste de composición 15M3B3C — 2026-09-08
+
+El foco mostró que Boot publica transactionManager con tipo declarado PlatformTransactionManager.
+La factory consumirá ese contrato y exigirá luego JpaTransactionManager más identidad de DataSource,
+conservando el gate eager y el fixture real. No se relaja la frontera para otros managers.
+
+### Cierre 15M3B3C — 2026-09-08T23:05:41-03:00
+
+K comparte su núcleo con checkpoints; login/legacy conservan su entrada y transacción. La emisión
+legal usa una sola TX nueva readOnly/RC dentro del scope del owner original y acredita su salida
+después de commit/cleanup. Un fallo tardío descarta la entrega del JWT, sin revertir el alta previa.
+La composición es importable y valida DataSource/EMF/JpaTM; no se activa HTTP.
+
+**452 pruebas focales aprobadas**, 79 nuevas; **clean verify fresco de 8591 pruebas**
+(7275 Surefire + 1316 Failsafe, 306 suites). La auditoría de XML, inventarios
+y ambos JAR está aprobada. El plan documenta alcance de dobles/JDBC real, fallos, comando y hashes.
+No cambian B3A/B3B, claims, roles, migraciones ni frontend; no se hizo push.
+
+**M3B completo; sigue M3C**, HTTP/replay, activación y control final de respuesta. M3/15M siguen
+abiertos. Commit `feat(legal): acota emision de sesion al plazo compartido`.

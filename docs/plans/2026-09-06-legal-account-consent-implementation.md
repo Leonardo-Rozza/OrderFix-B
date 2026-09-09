@@ -9,7 +9,7 @@ con clean verify fresco de 6959 pruebas. 15J1 cerrado con 346 pruebas focales; 1
 628 pruebas focales (550 unitarias y 78 PostgreSQL). 15J3 cerrado con 920 pruebas focales y
 clean verify fresco de 7488 pruebas. 15J completo. 15K cerrado con 107 focales y clean verify
 fresco de 7567 pruebas. 15L1 cerrado con 436 pruebas focales; 15L2 con 437 y 15L3 con 651 focales.
-15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; B3B cerrado con 342 focales; siguen B3C y M3C.
+15M3A cerrado con clean verify de 8227 pruebas. M3B1 cerrado con 433 focales y B2 con 410; B3A cerrado con 222 focales; B3B cerrado con 342 focales; B3C cerrado con clean verify de 8591 pruebas; sigue M3C.
 [Diseño y decisiones ratificadas](2026-09-06-legal-account-consent-design.md).
 
 ## Alcance y reglas
@@ -3331,6 +3331,209 @@ transaccional, y su gate transversal. M3C posterior conecta registro HTTP/replay
 bajo sus capacidades/configuración. B3, M3B y M siguen abiertos. El último clean verify integral
 continúa siendo M3A (8227 casos); este corte importable ejecutó su gate focal. Commit atómico
 `feat(legal): compone recursos de sesion JPA`, sin push.
+
+### Apertura 15M3B3C — 2026-09-08
+
+B3C agrega emisión interna de sesión bajo el owner de 30 s ya iniciado. Se conserva el constructor,
+firma y @Transactional de AccountSessionPolicy.issueSession para login/alta legacy. Su cuerpo se
+reutiliza en un método de paquete sin anotación, issueInCurrentTransaction(ids, password, checkpoint).
+La entrada histórica lo llama con NOOP; la legal usa el checkpoint del owner. Así hay una sola
+política de identidad/contraseña/claims y una sola frontera transaccional por emisión legal.
+
+Alternativas consideradas: duplicar K arriesga divergencia de autorización; llamar su método
+anotado desde otra TX agrega una segunda frontera. Se elige un núcleo de paquete compartido y un
+orquestador específico. La composición nueva es importable, no escaneable, e importa B3B; M3C la
+activará con las capacidades HTTP. No se modifican las fuentes de B3A/B3B.
+
+Baseline backend 2daeac6 limpio en codex/lanzamiento-publico-backend; frontend 7545201 y sus rutas
+.agents/ y public/OrdenFix project naming/ preservadas. Nueve archivos nominales antes del código:
+
+- Modificado: service/impl/AccountSessionPolicy.java.
+- Nuevos en service/impl: LegalRegistrationSessionIssuer.java y
+  LegalRegistrationSessionIssuerConfiguration.java.
+- Nuevos tests de service/impl: AccountSessionPolicyCheckpointTest,
+  LegalRegistrationSessionIssuerTest y LegalRegistrationSessionIssuerConfigurationTest.
+- Nuevo legal/manifest/persistence/LegalRegistrationSessionIssuerIT.
+- Este plan y 2026-09-06-legal-account-consent-design.md.
+
+Contrato:
+
+1. El núcleo comprueba antes/después de repo, BCrypt y firma JWT, incluido RuntimeException de cada
+   dependencia. El postcheck corre antes de convertir Optional.empty o matches=false en rechazo.
+   Si ese check falla, domina y conserva el fallo previo como suppressed, sin autosupresión. Error
+   conserva identidad. La entrada histórica NOOP mantiene consultas, orden, valores y excepciones.
+2. LegalRegistrationSessionIssuer tiene constructor de paquete y API pública
+   issueSession(userId, tallerId, password, owner). No crea otro owner ni recupera identidad por email.
+   Resources envuelve el execute completo de un TransactionTemplate nuevo por llamada, con
+   REQUIRES_NEW/READ_COMMITTED/readOnly y timeout ceil(remanente ms/1000). No se muta el manager ni
+   se llama issueSession anotado. El núcleo se ejecuta mediante la policy gestionada.
+3. El scope acredita la salida después de commit/rollback y cleanup tanto al retornar como ante
+   RuntimeException. BadCredentials sólo sobrevive si plazo/recursos siguen sanos; errores operativos
+   se expresan como LegalRegistrationSessionUnavailableException. Un Error propagado por la frontera
+   no se reinterpreta; se conserva la precedencia de Spring ante fallos simultáneos de callback y
+   rollback. Las pruebas de identidad de Error acreditan rollback sano. Un JWT calculado puede
+   descartarse; no se promete impedir toda firma anterior a un fallo tardío.
+   El resultado no determina ni revierte la persistencia del alta previa, ni decide el ACK de su commit.
+4. Configuración sin @Configuration/@Component/autoimport, @Import del módulo B3B y bean @Lazy(false)
+   del emisor dependiente del gate de composición, incluso con lazy global. Inyecta el dataSource y
+   transactionManager nominales del contexto, y comprueba identidad del DataSource entre JpaTM y EntityManagerFactoryInfo. Un manager
+   incompatible se rechaza en composición. Esa composición ordinaria es la vía de construcción; no
+   se promete validar repositorios arbitrarios suministrados fuera del contexto nominal.
+5. No cambian HTTP, DTO, JwtUtils/claims/firma/verificación, AuthService, RegistroService, email,
+   consultas, roles, dependencias, configuración activa ni V27/V28/V29 congeladas. Sin push.
+
+Evidencia prevista: unitarios de checks/precedencia/una frontera/salida/errores y configuración;
+Boot/JPA/PostgreSQL 16 con repository, BCrypt y JWT reales, estado durable actual, lectura aislada,
+remanente compartido, suspensión exterior y veto tras vencimiento/commit/cleanup. La inyección de
+fallos JDBC será exclusiva del fixture y debajo del router para acreditar su captura productiva;
+se documentará dónde hay dobles y dónde operaciones físicas reales.
+
+Gate focal primero con las cuatro suites nuevas y regresiones de K/login/legacy/M2/M3A/B3A/B3B.
+Por modificar K se ejecutará después clean verify integral fresco, con XML contra métodos
+compilados, inventario completo y ambos JAR. Clases productivas previas sólo pueden cambiar por
+AccountSessionPolicy.java; las restantes conservan bytes. El último integral previo es M3A (8227).
+Commit previsto: feat(legal): acota emision de sesion al plazo compartido. Después sigue M3C,
+HTTP/replay y control final de respuesta, con su activación y gate propios.
+
+### Ajuste de composición 15M3B3C — 2026-09-08
+
+El primer foco detectó 23 errores del IT durante refresh, antes de ejecutar sus escenarios: Boot
+JpaBaseConfiguration declara transactionManager como PlatformTransactionManager aunque construye
+un JpaTransactionManager. El bean eager nuevo no podía resolver por el subtipo antes de crearlo.
+
+Decisión antes de corregir producción: la factory importable inyectará el PlatformTransactionManager
+nominal y comprobará instanceof JpaTransactionManager antes de construir el emisor. Se conserva
+el constructor restringido a JpaTM y la identidad DataSource/EMF. Otro manager se rechaza con mensaje
+fijo. Se ajusta el test de configuración y se añade rechazo del tipo incompatible; el fixture Boot
+se mantiene para volver a acreditar el arranque real. El intento fallido queda preservado y se
+repetirá el foco antes del clean verify integral.
+
+### Cierre 15M3B3C — 2026-09-08T23:05:41-03:00
+
+Implementados los nueve archivos nominales. AccountSessionPolicy conserva constructor, entrada
+pública y transacción de login/alta legacy; su núcleo de paquete se comparte con el emisor legal.
+Los checks rodean repo, BCrypt y JWT, incluidos fallos RuntimeException; el camino histórico NOOP
+mantiene política, consultas y valores. No hay otra frontera anotada dentro de la emisión legal.
+
+El emisor crea por llamada una TX REQUIRES_NEW/READ_COMMITTED/readOnly con timeout derivado del
+remanente del owner original. Resources envuelve todo execute, incluido commit/rollback/cleanup;
+su resultado sólo se entrega después de acreditar la salida. Un rechazo de credenciales sano se
+preserva; vencimiento, cleanup y errores operativos impiden entregar la sesión. El emisor no
+reinterpreta Error propagado por la frontera ni altera la precedencia de Spring ante fallo doble
+de callback/rollback; los tests de identidad usan rollback sano. El módulo importable compone el
+emisor con el gate B3B y verifica la referencia común de DataSource/EMF/JpaTM aun con lazy global. M3C conserva la activación HTTP y el replay.
+
+**Gate focal: 452 pruebas aprobadas**, 79 nuevas y 373 de regresión, en 27 suites.
+Duración 89.389 s; sin fallos, errores, omitidas ni reintentos internos.
+
+| Suite focal | Casos |
+| --- | ---: |
+| LegalRegistrationSessionPoolFactoryTest | 68 |
+| LegalRegistrationSessionResourcesTest | 12 |
+| LegalRegistrationSessionDataSourceConfigurationTest | 12 |
+| LegalRegistrationSessionDataSourceTest | 25 |
+| LegalRegistrationSessionCleanupTest | 17 |
+| LegalRegistrationBudgetTest | 17 |
+| AccountSessionPolicyTest | 35 |
+| RegistroServiceTest | 10 |
+| LegacyRegistrationAccountWriterTest | 19 |
+| AccountVerificationTokenIssuerTest | 18 |
+| AccountVerificationNotifierTest | 7 |
+| AuthTests | 8 |
+| JwtSecurityIntegrationTests | 5 |
+| TenantIsolationTests | 6 |
+| AccountSessionPolicyCheckpointTest | 28 |
+| LegalRegistrationSessionIssuerTest | 24 |
+| LegalRegistrationSessionIssuerConfigurationTest | 4 |
+| AuthServiceTest | 12 |
+| JwtUtilsTests | 19 |
+| LegalRegistrationSessionDataSourceWiringIT | 16 |
+| LegalRegistrationSessionDataSourceIT | 17 |
+| AccountSessionPolicyIT | 10 |
+| AccountVerificationPostCommitIT | 17 |
+| LegacyRegistrationPostCommitIT | 14 |
+| LegalRegistrationDatabaseIsolationIT | 6 |
+| LegalManifestCliIsolationIT | 3 |
+| LegalRegistrationSessionIssuerIT | 23 |
+
+
+Alcance de los 79 casos nuevos:
+
+- CheckpointTest (28) usa dobles y checkpoints neutrales para acreditar orden, vencimiento después
+  de cada dependencia, Optional.empty/matches=false, errores Runtime sanos y vencidos, supresión
+  sin autosupresión, Error con salida sana y preservación del contrato NOOP histórico. La única entrada
+  anotada sigue siendo issueSession de K; el núcleo compartido es de paquete y no abre otra TX.
+- IssuerTest (24) usa TransactionTemplate real con manager/policy/scope simulados. Acredita una
+  sola definición RN/RC/readOnly dentro del scope, timeout redondeado desde el mismo owner y sin
+  mutar el manager, rechazo previo, errores de begin/core/commit y descarte tras fallo de salida.
+  Sus simulaciones no se presentan como prueba de cancelación, routing ni commit físico.
+- ConfigurationTest (4) acredita import explícito, qualifiers, DependsOn y Lazy(false), parsing
+  real de Spring detenido antes de crear recursos, delegación de la factory e incompatibilidad de
+  un manager no JPA. Boot declara PlatformTransactionManager; el tipo efectivo debe ser JpaTM.
+- IssuerIT (23) usa Boot 4.0.6, Spring 7.0.7, Hibernate 7.2.12.Final, Hikari 7.0.2, pgjdbc 42.7.10 y
+  PostgreSQL 16 con repositorio, BCrypt y firma/verificación JWT reales. Los observadores delegan
+  cada fase y luego consumen el reloj o lanzan un fallo. Las consultas de diagnóstico agregan SQL
+  dentro de la misma TX: una consulta de usuario no significa una sola sentencia SQL total.
+  Se acredita una conexión y el mismo contexto/aislamiento readOnly/RC durante consulta, BCrypt y
+  JWT; IDs durables con email/contraseña/rol/verificación/tokenVersion actuales, rechazo de actor
+  inactivo, suspensión/restauración exterior y owner consumido con límites de 2 s. Las filas/xmin
+  quedan intactas; no se presenta ese snapshot como un contador global de intentos de DML.
+  Relojes deterministas acreditan controles cooperativos después del trabajo y veto de entrega;
+  no preempción de BCrypt ni una SLA física de adquisición/cancelación/teardown.
+
+El fixture del IT sustituye por reflexión únicamente el delegado privado debajo del router,
+envolviendo el pool real creado por B3B. Conserva el holder, factory, credenciales y configuración
+productivos. Así los fallos de cierre de ResultSet/getQueryTimeout/reset readOnly/return/rollback
+atraviesan la captura productiva del router. El owner conserva su causa original y no vuelve a
+autorizar trabajo. Expiración después de BCrypt false no se transforma en BadCredentials.
+
+El JWT puede estar calculado en memoria antes del commit y descartarse después: expiración tras
+COMMIT conserva commit JDBC=1 y callback COMMITTED; ACK perdido tras COMMIT acredita commit JDBC=1,
+rollback JDBC=0 y notificación Spring ROLLED_BACK. Un error después del rollback JDBC observado
+produce notificación UNKNOWN. No se reinterpretan esos callbacks como persistencia del alta.
+La división por cero real (22012) se revierte sin intoxicar el owner si cleanup es sano. Los tests
+de identidad de Error usan rollback sano; se conserva la precedencia de Spring ante fallo doble.
+
+Se conservó un intento focal fallido de 451 casos: 345 Surefire aprobados y 23 errores de refresh
+en el nuevo IT (las otras 83 integraciones aprobaron). El defecto era el tipo concreto solicitado
+antes de que Boot instanciara el manager. Se documentó y corrigió la factory para inyectar el
+contrato declarado y validar JpaTM; se añadió su rechazo explícito, conservando el fixture Boot.
+El foco final de 452 casos y el integral posterior aprobaron con el mismo código. No se presenta
+el intento fallido como evidencia aprobada ni se suman corridas repetidas como casos diferentes.
+
+La revisión independiente de política, composición, transacciones y fixture no encontró pendientes
+dentro de B3C. El módulo sigue sin activación automática; HTTP/replay y la comprobación final de
+respuesta pertenecen a M3C. Esta emisión de lectura no crea cuenta, no envía email ni determina
+la persistencia del alta ya confirmada.
+
+**clean verify integral fresco: 8591 pruebas aprobadas**, 7275 Surefire + 1316
+Failsafe, 306 suites. Duración 1727.282 s. XML frescos sin fallos,
+errores, omitidas ni reintentos internos, contrastados contra los métodos compilados e inventarios
+completos de fuentes/classes. El resultado integral incluye el foco; no se suman ambas ejecuciones.
+
+Comando con Java 21.0.10, sin Maven concurrente sobre target:
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+  ./mvnw -B -Dstyle.color=never clean verify
+```
+
+Auditoría de ambas ejecuciones y ambos JAR aprobada: 1070 clases productivas y 32 recursos
+coinciden con target, Start-Class web/CLI correctos, sin tests empaquetados ni entradas duplicadas. Sólo el bytecode
+derivado de AccountSessionPolicy cambia entre los fuentes productivos anteriores; B3A/B3B y el
+resto mantienen bytes. Se agregan las clases de emisor/configuración. V27/V28/V29 conservan hashes
+en fuente/target/JAR; dependencias y su procedencia permanecen iguales. El chequeo de nombres de
+archivos secret.properties no se presenta como análisis genérico de secretos. Sin cambios en
+HTTP, claims, email, roles, migraciones, configuración activa ni frontend.
+
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT.jar`: SHA-256 `43b4f257cf6f4120afd60184365514de69abc073178eeed61895a44fc6366aaf`.
+- `mvgr-reparaciones-backend-0.0.1-SNAPSHOT-legal-cli.jar`: SHA-256 `b87e98408c4c804f854139ff7e7f14edd2284a38cb4f4d49b1c480c98e8f8488`.
+
+**15M3B3C cerrado; M3B completo. Sigue M3C**, integración HTTP/replay, activación bajo capacidades
+y control final de respuesta con su gate fresco. Este corte no demuestra todavía el registro HTTP
+de extremo a extremo ni determina la persistencia del alta ante un fallo posterior de sesión.
+M3/15M continúan abiertos. Commit atómico
+`feat(legal): acota emision de sesion al plazo compartido`, sin push.
 
 ## 15N — Enforcement compatible, apagado
 
