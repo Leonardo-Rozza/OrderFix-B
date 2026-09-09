@@ -4514,3 +4514,67 @@ backend `test(cobros): acredita historial y correccion real`; frontend
 Control opcional de cobros queda acreditado localmente. El siguiente criterio es Evidencia y
 documentos; staging, textos definitivos, solicitudes de datos/baja y operación real conservan
 sus pendientes. No se activó email/Mercado Pago ni se publicaron fixtures o contenido legal.
+
+### Verificación de salida inicial — resumen digital y límites de evidencia
+
+Apertura sobre backend `8efa565`, frontend `04dbede`, el 2026-09-09. Se amplían las lecturas de los
+dos recorridos reales de cobros; la matriz conserva catorce casos. El helper frontend verificará el
+resumen canónico por titular y USER propios, 404 para otro titular con Cobros habilitado y rechazo
+sin sesión. Comparará importes/datos de la orden, sólo el cobro activo, ausencia de observaciones
+internas/auditoría y documentoFiscal=false con leyenda informativa. También comprobará la proyección
+mínima del seguimiento público. No se agregan altas, cobros, escrituras, seeds o límites.
+
+Lista nominal backend: este plan y README. No se modifica Java: el harness ya verifica los IDs,
+deltas y valores durables de las órdenes, cobros y cuentas reutilizados. Las pruebas frontend
+observan peticiones sin escrituras adicionales; esto no se presenta como contador global de DML.
+La fuente productiva de resumen/seguimiento utiliza proyecciones y transacciones readOnly.
+El resumen mantiene su requisito actual de Cobros (TRIAL/PRO), cuya política comercial no se cambia.
+
+La revisión detectó un bloqueo separado de Evidencia y documentos: FotoReparacion guarda URL y
+momento y no representa un objeto privado gestionado por backend. La UI sube directamente a
+Cloudinary unsigned y accede por URL; quitar la referencia SQL no elimina el archivo remoto.
+No existen protocolo de upload/finalización, autorización de lectura, borrado remoto ni atestación
+contextual de fotos en el flujo actual. El consentimiento de registro no acredita esa confirmación.
+No se contactó al proveedor ni se accedió a imágenes reales. El aislamiento de la API de reparación
+y la ausencia de fotos en SeguimientoPublicoDTO no acreditan privacidad de una URL conocida.
+BACKEND-HANDOFF 4 y Tarea 9 del plan frontend ya describen el trabajo pendiente; no se simulará su
+cumplimiento ni se modificará V27/V28/V29. El guard frontend de release conserva el bloqueo de unsigned.
+
+Gate previsto: lint/TypeScript/revisión frontend, runner optativo serial existente con Java 21,
+PostgreSQL 16 y catorce casos, aserciones SQL sin cambios y recursos liberados. Un commit por
+repositorio, sin push y preservando cambios ajenos. No se activa SMTP/Mercado Pago ni se acredita
+staging. Fotos privadas/consentimiento aplicable y el criterio completo de evidencia siguen abiertos.
+
+### Cierre local — resumen digital y límites de evidencia
+
+Gate aprobado al primer intento el **2026-09-09 a las 10:44:30 -03:00**, con
+`JAVA_HOME=<Java 21> npm run test:e2e:registration-real` desde frontend y Node 24.14.0.
+Compilación incremental 0.788 s, sin cambios Java; Failsafe aproximadamente 75 s. El XML registra
+un harness JUnit, catorce recorridos Playwright verificados, cero fallos/errores/omitidos y sin
+reintentos. Suite 74.140 s, método 62.841 s. ESLint/TypeScript, listado exacto y revisión aprobaron.
+
+En escritorio y móvil 320 px, ADMIN y USER propios leyeron el resumen desde la UI con 200 y la
+misma proyección estricta de 31 campos; pagos sólo tiene fecha/monto/metodo/referencia. Se acreditaron
+50000/30000/20000, sólo el activo EXTERNO-30000, documentoFiscal=false, leyenda informativa y exclusión
+del anulado, observaciones y motivo. El ADMIN ajeno con capacidad activa obtuvo 404. El anónimo fue
+redirigido a login en UI y obtuvo 403 al consultar la API sin Authorization/cookies: es el fallback
+actual de seguridad, conservado sin cambios. Seguimiento anónimo dio 200 y ocho campos mínimos,
+con presupuesto=null en estas órdenes; no expuso datos de cliente, fotos, credenciales ni notas.
+Esto no acredita privacidad de una URL externa conocida ni proyecciones de presupuestos presentes.
+
+La ampliación no añadió escrituras a las seis originales de cobros. No consultó el resumen antes
+de la fase documental, ni rutas legacy/QR, checkout o proveedores de pagos en esa fase. PostgreSQL
+16.14 volvió a acreditar los IDs, importes, auditoría y deltas exactos anteriores, sin nuevas altas.
+La evidencia HTTP y las consultas durables no se presentan como contador global de DML. Base y
+contenedor auxiliar eliminados; puertos Vite, Tomcat y PostgreSQL cerrados.
+
+Backend sólo cambia documentación; el harness y toda fuente productiva permanecen iguales.
+V27/V28/V29 conservan sus hashes. No se repitió clean verify: sólo cambian pruebas frontend y docs,
+sin fallos ni cambios productivos. Commit backend `docs(lanzamiento): registra verificacion del resumen`;
+frontend `test(documentos): verifica resumen digital real`. Sin push y preservando archivos ajenos.
+
+Resumen digital queda acreditado localmente. Evidencia y documentos permanece abierto por fotos
+privadas, borrado remoto y confirmación contextual. El próximo corte debe abordar ese recorrido
+conforme BACKEND-HANDOFF 4/Tarea 9, reutilizando las primitivas legales existentes y sin abrir otra
+familia de infraestructura como objetivo independiente. No se contactó al proveedor de imágenes
+ni se activó SMTP/Mercado Pago. No se acredita staging.

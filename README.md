@@ -344,6 +344,10 @@ La vista por período incluye sólo activos. PostgreSQL exige los cuatro movimie
 auditoría, conservando sin cambios las demás filas y las tablas de pagos del proveedor. Son catorce
 recorridos en total. El límite de login se fija en 20 sólo en el harness para permitir la matriz;
 el filtro sigue activo y el default productivo de 10 no cambia.
+Esos dos recorridos también leen el resumen digital por titular y USER, comprueban el rechazo al
+acceso ajeno/anónimo, el documento informativo y la exclusión de cobros anulados/datos internos.
+El seguimiento público conserva su proyección mínima. No se agregan escrituras por esas lecturas;
+esta evidencia no acredita el almacenamiento privado ni el borrado remoto de fotos, aún pendientes.
 
 El sufijo `E2E` queda fuera de las suites Maven habituales: requiere selección explícita y no añade
 Node ni navegadores al gate por defecto. No publicar esta fixture ni usarla sobre bases existentes;
