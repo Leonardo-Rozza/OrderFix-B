@@ -49,6 +49,19 @@ public final class LegalAcceptanceCommandValidator {
                 revision(requiredSetRevision), canonicalAcceptances(acceptances));
     }
 
+    /** Photo manifest is part of the protected operation, never authority chosen by the browser. */
+    public static LegalAcceptanceCommand photo(LegalActorSnapshot actor, String revision,
+            List<Acceptance> acceptances, LegalAcceptanceCommand.PhotoContext photo) {
+        LegalAcceptanceCommand canonical=authenticated(actor,revision,acceptances);
+        if(photo==null || photo.reparacionId()<=0 || photo.bytes()<12 || photo.bytes()>8_000_000
+                || !List.of("image/jpeg","image/png").contains(photo.mimeType())
+                || !List.of("INGRESO","POST_REPARACION").contains(photo.momento())) throw invalid();
+        requiredText(photo.nombre(),1,255); digest(photo.sha256());
+        if(photo.nombre().codePoints().anyMatch(c->c<32 || (c>=127 && c<=159))) throw invalid();
+        return new LegalAcceptanceCommand(Operation.AUTHENTICATED_ACCEPTANCE,actor,null,
+                canonical.requiredSetRevision(),canonical.acceptances(),photo);
+    }
+
     public static LegalAcceptanceCommand registration(Registration registration, String requiredSetRevision,
                                                         List<Acceptance> acceptances) {
         if (registration == null) throw invalid();

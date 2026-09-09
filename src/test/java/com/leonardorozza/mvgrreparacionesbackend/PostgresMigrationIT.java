@@ -101,9 +101,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("29");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("30");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -306,7 +306,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV29CreaLaEstructuraLegalComprobableSinDatosSemilla() {
+    void latestV30ConservaLaEstructuraLegalYAgregaFotosPrivadasSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -316,6 +316,17 @@ class PostgresMigrationIT {
                 """, String.class);
         assertThat(tablasLegales).containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_LATEST);
         assertTablasLegalesVacias(jdbcTemplate, "public", TABLAS_LEGALES_LATEST);
+
+        var tablasFotosPrivadas = Set.of("reparacion_fotos_privadas", "reparacion_foto_atestaciones");
+        var tablasFotosMigradas = jdbcTemplate.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_type = 'BASE TABLE'
+                  AND table_name IN ('reparacion_fotos_privadas', 'reparacion_foto_atestaciones')
+                """, String.class);
+        assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
+        assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);
 
         var tiposRepresentativos = jdbcTemplate.queryForList("""
                 SELECT table_name || '.' || column_name || ':' || data_type

@@ -89,7 +89,8 @@ final class LegalIdempotencyResultStore {
                 checkLotMembers(reservation, found.lotId(), found.userId(), found.tallerId(), acts);
                 actIds = ids(acts);
             } else {
-                require(found.candidate().operation() == TipoOperacionIdempotenteLegal.ACEPTACION_LEGAL);
+                require(found.candidate().operation() == TipoOperacionIdempotenteLegal.ACEPTACION_LEGAL
+                        || found.candidate().operation() == TipoOperacionIdempotenteLegal.ATESTACION_FOTOS);
                 validateWithoutShape(found, reservation.command());
                 addAggregate(aggregates, found.aggregate());
                 List<UUID> references = readReferences(reservation, found);

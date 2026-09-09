@@ -7,6 +7,9 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > 📚 Documentación relacionada:
 > - **`FRONTEND_INTEGRATION.md`** — contrato completo de la API (request/response exactos, tipos TS).
 > - **`DEPLOY.md`** — guía de despliegue y variables de entorno.
+> - [Fotos privadas](docs/operations/private-photos.md) — configuración de servidor, rol restringido,
+>   confirmación contextual, retención y borrado; activación apagada y proveedor real pendiente.
+>   El [plan y sus pruebas](docs/plans/2026-09-09-fotos-privadas-implementation.md) describe el recorrido.
 > - **`docs/runbooks/mercadopago-release.md`** — sandbox, operación y go/no-go de suscripciones.
 > - **`docs/runbooks/cobros-consistencia.md`** — auditoría tenant-aware y saneamiento de cobros
 >   manuales históricos.
@@ -216,6 +219,8 @@ El `429` protege login, registro, recuperación/verificación, seguimiento públ
 | V26 | Tenant/roles válidos y un único ADMIN titular por taller |
 | V27 | Persistencia legal append-only para publicaciones, documentos, requisitos, transiciones y proyecciones editoriales internas |
 | V28 | Agregados legales multicontexto inmutables, procedencia exacta, vínculo de lotes nuevos y preservación de evidencia histórica V27; materialización interna sin HTTP |
+| V29 | Resultados idempotentes de aceptación legal y evidencia de cuenta |
+| V30 | Intenciones de fotos privadas, confirmación contextual canónica, leases, retención y protección del borrado de reparaciones |
 
 ---
 

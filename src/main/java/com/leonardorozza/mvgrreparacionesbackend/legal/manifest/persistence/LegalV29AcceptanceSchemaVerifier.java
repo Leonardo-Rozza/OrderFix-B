@@ -51,7 +51,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
     public void verify() {
         verifyImportSurface();
         editorialVerifier.verifyBase();
-        if (compatibleVersion() != RuntimeVersion.V29) {
+        if (compatibleVersion().ordinal() < RuntimeVersion.V29.ordinal()) {
             incompatible();
         }
         verifyV29Surface();
@@ -60,7 +60,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
     /** Import already accredited its own base; V29 additionally requires the editorial base. */
     static void verifyAfterImportBase(JdbcTemplate jdbc, String schema) {
         LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
-        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+        if (verifier.compatibleVersion().ordinal() >= RuntimeVersion.V29.ordinal()) {
             verifier.editorialVerifier.verifyBase();
             verifier.verifyV29Surface();
         }
@@ -69,7 +69,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
     /** Editorial already accredited its own base; V29 additionally requires the import base. */
     static void verifyAfterEditorialBase(JdbcTemplate jdbc, String schema) {
         LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
-        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+        if (verifier.compatibleVersion().ordinal() >= RuntimeVersion.V29.ordinal()) {
             verifier.verifyImportSurface();
             verifier.verifyV29Surface();
         }
@@ -78,7 +78,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
     /** True only after full V29 delta verification; false keeps the caller's exact V28 checks. */
     static boolean verifyAfterAggregateBases(JdbcTemplate jdbc, String schema) {
         LegalV29AcceptanceSchemaVerifier verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, schema);
-        if (verifier.compatibleVersion() == RuntimeVersion.V29) {
+        if (verifier.compatibleVersion().ordinal() >= RuntimeVersion.V29.ordinal()) {
             verifier.verifyV29Surface();
             return true;
         }
@@ -87,10 +87,12 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
 
     private void verifyV29Surface() {
         verifyRelationTopology();
-        if (!catalogFingerprint().equals(LegalV29AcceptanceInventory.EXPECTED_CATALOG)) {
+        boolean photos=compatibleVersion()==RuntimeVersion.V30;
+        if (!catalogFingerprint().equals(photos ? LegalPrivatePhotoSchema.LEGAL_CATALOG : LegalV29AcceptanceInventory.EXPECTED_CATALOG)) {
             incompatible();
         }
         verifySchemaFunctions();
+        if (photos) LegalPrivatePhotoSchema.verify(jdbc);
     }
 
     @Override
@@ -114,7 +116,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
         List<FlywayState> actual = flywayStates();
         for (RuntimeVersion version : RuntimeVersion.values()) {
             if (actual.equals(expectedFlywayStates(version))) {
-                if (version != RuntimeVersion.V29) {
+                if (version.ordinal() < RuntimeVersion.V29.ordinal()) {
                     verifyV29ExtensionAbsent();
                 }
                 return version;
@@ -281,7 +283,9 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                 LegalV29AcceptanceInventory.FLYWAY_SCRIPT_V29,
                 LegalV29AcceptanceInventory.FLYWAY_CHECKSUM_V29,
                 true,
-                true));
+                version == RuntimeVersion.V29));
+        if(version==RuntimeVersion.V30) states.add(new FlywayState("30","SQL",
+                "V30__fotos_privadas_contextuales.sql",-1584212728,true,true));
         return List.copyOf(states);
     }
 
@@ -637,7 +641,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             boolean success,
             boolean latest) { }
 
-    private enum RuntimeVersion { V27, V28, V29 }
+    private enum RuntimeVersion { V27, V28, V29, V30 }
 
     private record RelationTopologyState(
             String relation,

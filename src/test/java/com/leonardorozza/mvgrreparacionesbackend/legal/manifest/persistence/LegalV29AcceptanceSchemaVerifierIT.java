@@ -19,7 +19,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Fresh V29 catalog accreditation; each corruption is isolated by PostgreSQL rollback. */
+/** Frozen V29 catalog accreditation; each corruption is isolated by PostgreSQL rollback.
+ * V30 compatibility is checked separately in its own public-schema PostgreSQL instance. */
 class LegalV29AcceptanceSchemaVerifierIT {
     private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("ordenfix_legal_v29_schema").withUsername("ordenfix").withPassword("ordenfix");
@@ -31,7 +32,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
     static void migrate() {
         POSTGRES.start();
         dataSource = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-        Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").load().migrate();
+        Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").target("29").load().migrate();
         jdbc = new JdbcTemplate(dataSource);
         verifier = new LegalV29AcceptanceSchemaVerifier(jdbc, "public");
     }
@@ -52,12 +53,35 @@ class LegalV29AcceptanceSchemaVerifierIT {
     }
 
     @Test
+    void photosV30CatalogAndAllExistingConsumersAccreditThePublicSchema() {
+        try (var photos = new PostgreSQLContainer("postgres:16-alpine")
+                .withDatabaseName("ordenfix_legal_v30_schema")
+                .withUsername("ordenfix").withPassword("ordenfix")) {
+            photos.start();
+            var photosSource = new DriverManagerDataSource(
+                    photos.getJdbcUrl(), photos.getUsername(), photos.getPassword());
+            var photosFlyway = Flyway.configure().dataSource(photosSource)
+                    .locations("classpath:db/migration").target("30").load();
+            photosFlyway.migrate();
+            assertThat(photosFlyway.info().current().getVersion().toString()).isEqualTo("30");
+            var photosJdbc = new JdbcTemplate(photosSource);
+            var photosVerifier = new LegalV29AcceptanceSchemaVerifier(photosJdbc, "public");
+            assertThat(photosVerifier.snapshot().catalog()).isEqualTo(LegalPrivatePhotoSchema.LEGAL_CATALOG);
+            photosVerifier.verify();
+            new LegalV28AggregateSchemaVerifier(photosJdbc, "public").verify();
+            new LegalEditorialSchemaVerifier(photosJdbc, "public").verify();
+            new LegalV27ImportSchemaVerifier(photosJdbc, "public").verify();
+            new LegalV27SchemaVerifier(photosJdbc, "public").verify();
+        }
+    }
+
+    @Test
     void canonicalInventoryAlsoWorksInAnExplicitAlternativeSchema() {
         String schema = "legal_v29_alternative";
         jdbc.execute("CREATE SCHEMA " + schema);
         try {
             Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema)
-                    .locations("classpath:db/migration").load().migrate();
+                    .locations("classpath:db/migration").target("29").load().migrate();
             var alternative = new JdbcTemplate(new DriverManagerDataSource(
                     POSTGRES.getJdbcUrl() + (POSTGRES.getJdbcUrl().contains("?") ? "&" : "?") + "currentSchema=" + schema,
                     POSTGRES.getUsername(), POSTGRES.getPassword()));

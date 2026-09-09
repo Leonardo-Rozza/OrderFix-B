@@ -85,10 +85,12 @@ class LegalAcceptanceCommandTest {
     @Test void constructionIsNotPublicAndTheCommandHasNoMutableInstanceFields() {
         assertThat(Modifier.isFinal(LegalAcceptanceCommand.class.getModifiers())).isTrue();
         assertThat(LegalAcceptanceCommand.class.getConstructors()).isEmpty();
-        assertThat(LegalAcceptanceCommand.class.getDeclaredConstructors()).hasSize(1);
-        var constructor = LegalAcceptanceCommand.class.getDeclaredConstructors()[0];
-        assertThat(Modifier.isPrivate(constructor.getModifiers())).isFalse();
-        assertThat(Modifier.isProtected(constructor.getModifiers())).isFalse();
+        assertThat(LegalAcceptanceCommand.class.getDeclaredConstructors()).hasSize(2);
+        for (var constructor : LegalAcceptanceCommand.class.getDeclaredConstructors()) {
+            assertThat(Modifier.isPublic(constructor.getModifiers())).isFalse();
+            assertThat(Modifier.isPrivate(constructor.getModifiers())).isFalse();
+            assertThat(Modifier.isProtected(constructor.getModifiers())).isFalse();
+        }
         for (var field : LegalAcceptanceCommand.class.getDeclaredFields()) {
             if (!Modifier.isStatic(field.getModifiers())) {
                 assertThat(Modifier.isPrivate(field.getModifiers())).as(field.getName()).isTrue();

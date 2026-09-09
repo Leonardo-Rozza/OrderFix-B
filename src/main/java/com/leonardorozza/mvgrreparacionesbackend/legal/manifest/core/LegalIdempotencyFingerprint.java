@@ -41,7 +41,7 @@ public record LegalIdempotencyFingerprint(
         if (keyVersion <= 0 || secret == null || secret.length != 32) {
             throw new IllegalArgumentException("La clave de huella idempotente es inválida");
         }
-        TipoOperacionIdempotenteLegal operation = switch (command.operation()) {
+        TipoOperacionIdempotenteLegal operation = command.photo()!=null ? TipoOperacionIdempotenteLegal.ATESTACION_FOTOS : switch (command.operation()) {
             case REGISTRATION -> TipoOperacionIdempotenteLegal.REGISTRO;
             case AUTHENTICATED_ACCEPTANCE -> TipoOperacionIdempotenteLegal.ACEPTACION_LEGAL;
         };
@@ -99,6 +99,7 @@ public record LegalIdempotencyFingerprint(
         return switch (operation) {
             case REGISTRO -> REGISTRATION_PATH;
             case ACEPTACION_LEGAL -> ACCEPTANCE_PATH;
+            case ATESTACION_FOTOS -> "/api/reparaciones/{reparacionId}/cargas-foto";
         };
     }
 
@@ -147,6 +148,16 @@ public record LegalIdempotencyFingerprint(
             output.ascii("}");
         }
         output.ascii("]");
+        if (command.photo()!=null) {
+            var photo=command.photo();
+            output.ascii(",\"foto\":{\"atestacionConfirmada\":true,\"bytes\":");
+            output.ascii(Long.toString(photo.bytes()));
+            output.ascii(",\"mimeType\":"); output.string(photo.mimeType());
+            output.ascii(",\"momento\":"); output.string(photo.momento());
+            output.ascii(",\"nombre\":"); output.string(photo.nombre());
+            output.ascii(",\"reparacionId\":"); output.string(Long.toString(photo.reparacionId()));
+            output.ascii(",\"sha256\":"); output.string(photo.sha256()); output.ascii("}");
+        }
         LegalAcceptanceCommand.Registration registration = command.registration();
         if (registration != null) {
             output.ascii(",\"email\":");

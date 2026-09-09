@@ -535,7 +535,7 @@ class LegalPrivateRequirementsReadServiceIT {
             org.flywaydb.core.Flyway.configure().dataSource(historyDataSource)
                     .locations("classpath:db/migration").load().migrate();
             assertThat(historyOwner.queryForObject(
-                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(29);
+                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(30);
             assertThat(historyOwner.queryForMap("""
                     SELECT revision_scheme, perfil, agregado_id FROM legal_aceptacion_lotes WHERE id=?
                     """, legacyLot)).containsEntry("revision_scheme", "SCOPE_V1")

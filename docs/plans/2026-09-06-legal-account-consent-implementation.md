@@ -4578,3 +4578,12 @@ privadas, borrado remoto y confirmación contextual. El próximo corte debe abor
 conforme BACKEND-HANDOFF 4/Tarea 9, reutilizando las primitivas legales existentes y sin abrir otra
 familia de infraestructura como objetivo independiente. No se contactó al proveedor de imágenes
 ni se activó SMTP/Mercado Pago. No se acredita staging.
+
+## Continuación — fotos privadas verificadas localmente (2026-09-09)
+
+El corte de fotos agrega V30, confirmación contextual canónica, carga/lectura autenticada y borrado
+reintentable. El [plan específico](2026-09-09-fotos-privadas-implementation.md) conserva el contrato,
+los resultados del integral y su revalidación focal, cuatro recorridos de fotos V30 y la regresión
+de catorce recorridos previos V29. La [guía operativa](../operations/private-photos.md) documenta
+activación, rol y retención. V27–V29 no cambiaron; sin push. Proveedor real, referencias legacy,
+Confianza y cuenta y Operación real mantienen sus pendientes de salida.

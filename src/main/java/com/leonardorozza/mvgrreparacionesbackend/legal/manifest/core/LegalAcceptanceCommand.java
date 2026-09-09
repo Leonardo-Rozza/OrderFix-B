@@ -14,6 +14,7 @@ import java.util.UUID;
 public final class LegalAcceptanceCommand {
     public enum Operation { REGISTRATION, AUTHENTICATED_ACCEPTANCE }
 
+    private final PhotoContext photo;
     private final Operation operation;
     private final LegalActorSnapshot actor;
     private final Registration registration;
@@ -23,11 +24,22 @@ public final class LegalAcceptanceCommand {
     /** Package construction belongs to the validator, after checking and copying the complete input. */
     LegalAcceptanceCommand(Operation operation, LegalActorSnapshot actor, Registration registration,
                            String requiredSetRevision, List<Acceptance> acceptances) {
+        this(operation, actor, registration, requiredSetRevision, acceptances, null);
+    }
+
+    LegalAcceptanceCommand(Operation operation, LegalActorSnapshot actor, Registration registration,
+            String requiredSetRevision, List<Acceptance> acceptances, PhotoContext photo) {
+        this.photo = photo;
         this.operation = operation;
         this.actor = actor;
         this.registration = registration;
         this.requiredSetRevision = requiredSetRevision;
         this.acceptances = List.copyOf(acceptances);
+    }
+
+    public PhotoContext photo() { return photo; }
+    public record PhotoContext(long reparacionId, String nombre, String mimeType, long bytes, String sha256, String momento) {
+        @Override public String toString() { return "PhotoContext[redacted]"; }
     }
 
     public Operation operation() { return operation; }

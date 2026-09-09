@@ -255,6 +255,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException ex,
                                                         HttpServletRequest request) {
 
+        if (privatePhotoDeletionPending(ex)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(
+                    LocalDateTime.now(), HttpStatus.CONFLICT.value(), "Conflicto de datos",
+                    "Eliminá primero las fotos privadas de la reparación e intentá nuevamente.",
+                    request.getRequestURI(), "FOTOS_PRIVADAS_PENDIENTES", null));
+        }
         // Los mensajes del driver pueden incluir valores del registro; no se vuelcan a logs.
         log.warn("Violación de integridad de datos en {}.", request.getRequestURI());
 
@@ -267,6 +273,30 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    private static boolean privatePhotoDeletionPending(Throwable failure) {
+        var seen=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable,Boolean>());
+        for (Throwable current=failure; current!=null && seen.add(current); current=current.getCause()) {
+            if(current instanceof org.hibernate.exception.ConstraintViolationException sql
+                    && "23514".equals(sql.getSQLState())
+                    && "foto_privada_borrado_pendiente".equals(sql.getConstraintName())) return true;
+            if (privatePhotoDriverConstraint(current)) return true;
+        }
+        return false;
+    }
+
+    /** Driver is runtime-scoped: use only its typed diagnostic field, never its SQL/message text. */
+    private static boolean privatePhotoDriverConstraint(Throwable failure) {
+        if (!(failure instanceof java.sql.SQLException sql) || !"23514".equals(sql.getSQLState())
+                || !"org.postgresql.util.PSQLException".equals(failure.getClass().getName())) return false;
+        try {
+            Object server=failure.getClass().getMethod("getServerErrorMessage").invoke(failure);
+            if (server==null || !"org.postgresql.util.ServerErrorMessage".equals(server.getClass().getName())) return false;
+            return "foto_privada_borrado_pendiente".equals(server.getClass().getMethod("getConstraint").invoke(server));
+        } catch (ReflectiveOperationException | RuntimeException unavailable) {
+            return false;
+        }
     }
 
     // ================================

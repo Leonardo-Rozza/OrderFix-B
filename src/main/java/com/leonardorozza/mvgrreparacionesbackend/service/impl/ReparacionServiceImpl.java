@@ -80,12 +80,16 @@ public class ReparacionServiceImpl implements ReparacionService {
     @Value("${garantia.dias-default:90}")
     private int garantiaDiasDefault;
 
+    @Value("${photos.private.enabled:false}")
+    private boolean privatePhotosEnabled;
+
     private static final SecureRandom RANDOM = new SecureRandom();
     // Sin caracteres ambiguos (O/0, I/1) para dictarlo por teléfono
     private static final String ALFABETO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     @Override
     public ReparacionResponseDTO crear(ReparacionRequestDTO request) {
+        requireNoNewLegacyPhotos(request.getFotos(), List.of());
         Long tallerId = tenantService.currentTallerId();
 
         // Gating freemium: respeta el tope del plan / suscripción vigente
@@ -201,6 +205,8 @@ public class ReparacionServiceImpl implements ReparacionService {
         Reparacion reparacion = reparacionRepository.findByIdAndTallerIdForUpdate(id, tallerId)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Reparación no encontrada con ID: " + id));
+
+        requireNoNewLegacyPhotos(request.getFotos(), reparacion.getFotos());
 
         Equipo equipo = equipoRepository.findByIdAndTallerId(request.getEquipoId(), tallerId)
                 .orElseThrow(() ->
@@ -498,6 +504,21 @@ public class ReparacionServiceImpl implements ReparacionService {
             codigo = sb.toString();
         } while (reparacionRepository.existsByCodigoSeguimiento(codigo));
         return codigo;
+    }
+
+    /** Preserve exact legacy references during edits, but never associate a new public URL. */
+    private void requireNoNewLegacyPhotos(List<FotoDTO> requested, List<FotoReparacion> existing) {
+        if (!privatePhotosEnabled || requested == null || requested.isEmpty()) return;
+        Map<FotoDTO, Integer> available = new HashMap<>();
+        if (existing != null) existing.forEach(photo -> available.merge(
+                new FotoDTO(photo.getUrl(), photo.getMomento() == null ? MomentoFoto.INGRESO : photo.getMomento()), 1, Integer::sum));
+        for (FotoDTO photo : requested) {
+            if (photo == null) throw new BadRequestException("FOTO_PRIVADA_REQUERIDA", "Las fotos nuevas requieren una carga privada.");
+            FotoDTO normalized = new FotoDTO(photo.url(), photo.momento() == null ? MomentoFoto.INGRESO : photo.momento());
+            int remaining = available.getOrDefault(normalized, 0);
+            if (remaining < 1) throw new BadRequestException("FOTO_PRIVADA_REQUERIDA", "Las fotos nuevas requieren una carga privada.");
+            available.put(normalized, remaining - 1);
+        }
     }
 
     /** Mapea las fotos del request a entidad; momento default INGRESO si no vino. */

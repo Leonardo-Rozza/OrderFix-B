@@ -101,6 +101,12 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
     private static final String LEGAL_GRAPH_TABLE_NAMES = sqlStrings(
             LegalV29AcceptanceInventory.LEGAL_GRAPH_TABLES);
 
+    private final Set<String> readTables;
+    private final Set<String> insertTables;
+    private final Map<String,Set<String>> selectColumns;
+    private final Map<String,Set<String>> updateColumns;
+    private final Set<String> schemaFunctions;
+    private final Set<String> privilegedFunctions;
     private final JdbcTemplate jdbc;
     private final String expectedRole;
     private final String expectedSchema;
@@ -109,6 +115,28 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
             JdbcTemplate jdbc,
             String expectedRole,
             String expectedSchema) {
+        this(jdbc,expectedRole,expectedSchema,false);
+    }
+
+    LegalAcceptancePrivilegeVerifier(JdbcTemplate jdbc,String expectedRole,String expectedSchema,boolean photos) {
+        readTables=new HashSet<>(READ_TABLES);
+        insertTables=new HashSet<>(INSERT_TABLES);
+        selectColumns=new java.util.HashMap<>(SELECT_COLUMNS);
+        updateColumns=new java.util.HashMap<>(UPDATE_COLUMNS);
+        schemaFunctions=new HashSet<>(SCHEMA_FUNCTIONS);
+        privilegedFunctions=new HashSet<>(PRIVILEGED_FUNCTIONS);
+        if(photos) {
+            readTables.addAll(Set.of("reparacion_fotos_privadas","reparacion_foto_atestaciones"));
+            insertTables.addAll(Set.of("reparacion_fotos_privadas","reparacion_foto_atestaciones"));
+            selectColumns.put("reparaciones",Set.of("id","taller_id"));
+            updateColumns.put("reparaciones",Set.of("id"));
+            updateColumns.put("reparacion_fotos_privadas",Set.of("estado","asset_id","asset_version","lease_id","lease_hasta","asociada_en"));
+            Set<String> extra=Set.of("foto_privada_insert_guard_v30()","foto_atestacion_insert_guard_v30()",
+                    "foto_privada_completa_v30()","foto_privada_conservar_objetos_v30()","foto_privada_update_guard_v30()");
+            schemaFunctions.addAll(extra); privilegedFunctions.addAll(extra);
+            // Referential trigger runs without granting callers an executable SECURITY DEFINER capability.
+            privilegedFunctions.remove("foto_privada_conservar_objetos_v30()");
+        }
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.expectedRole = requireText(expectedRole, "expectedRole");
         this.expectedSchema = requireText(expectedSchema, "expectedSchema");
@@ -555,13 +583,13 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
                 resultSet.getBoolean("public_acl")),
                 repeated(roleOid, 11));
 
-        Set<String> expectedRelations = new HashSet<>(READ_TABLES);
-        expectedRelations.addAll(SELECT_COLUMNS.keySet());
+        Set<String> expectedRelations = new HashSet<>(readTables);
+        expectedRelations.addAll(selectColumns.keySet());
         Set<String> foundRelations = new HashSet<>();
         for (RelationState relation : relations) {
             boolean targetSchema = expectedSchema.equals(relation.schema());
             boolean editorialTable = targetSchema
-                    && READ_TABLES.contains(relation.name());
+                    && readTables.contains(relation.name());
             boolean history = targetSchema
                     && LegalV28AggregateInventory.FLYWAY_HISTORY_TABLE.equals(relation.name());
             if (targetSchema && expectedRelations.contains(relation.name())) {
@@ -569,7 +597,7 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
             }
             boolean allowedRead = editorialTable || history;
             boolean allowedInsert = targetSchema
-                    && INSERT_TABLES.contains(relation.name());
+                    && insertTables.contains(relation.name());
             boolean allowedDelete = false;
             if (relation.owner()
                     || relation.canSelect() != allowedRead
@@ -636,24 +664,24 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
                 resultSet.getBoolean("public_acl")),
                 repeated(roleOid, 7));
         Set<String> expectedNominalColumns = new HashSet<>();
-        SELECT_COLUMNS.forEach((table, names) -> names.forEach(name ->
+        selectColumns.forEach((table, names) -> names.forEach(name ->
                 expectedNominalColumns.add(table + "." + name)));
-        UPDATE_COLUMNS.forEach((table, names) -> names.forEach(name ->
+        updateColumns.forEach((table, names) -> names.forEach(name ->
                 expectedNominalColumns.add(table + "." + name)));
         Set<String> foundNominalColumns = new HashSet<>();
         for (ColumnState column : columns) {
             boolean targetSchema = expectedSchema.equals(column.schema());
             boolean editorialTable = targetSchema
-                    && READ_TABLES.contains(column.table());
+                    && readTables.contains(column.table());
             boolean history = targetSchema
                     && LegalV28AggregateInventory.FLYWAY_HISTORY_TABLE.equals(column.table());
             boolean allowedInsert = targetSchema
-                    && INSERT_TABLES.contains(column.table());
+                    && insertTables.contains(column.table());
             boolean allowedUpdate = targetSchema
-                    && UPDATE_COLUMNS
+                    && updateColumns
                             .getOrDefault(column.table(), Set.of())
                             .contains(column.name());
-            boolean allowedColumnRead = targetSchema && SELECT_COLUMNS
+            boolean allowedColumnRead = targetSchema && selectColumns
                     .getOrDefault(column.table(), Set.of()).contains(column.name());
             String nominal = column.table() + "." + column.name();
             if (targetSchema && expectedNominalColumns.contains(nominal)) {
@@ -895,12 +923,12 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
         Set<String> foundAllowed = new HashSet<>();
         for (FunctionPrivilege function : functions) {
             boolean known = expectedSchema.equals(function.schema())
-                    && SCHEMA_FUNCTIONS.contains(function.signature());
+                    && schemaFunctions.contains(function.signature());
             if (known) {
                 foundSchema.add(function.signature());
             }
             boolean allowed = expectedSchema.equals(function.schema())
-                    && PRIVILEGED_FUNCTIONS.contains(function.signature());
+                    && privilegedFunctions.contains(function.signature());
             if (allowed) foundAllowed.add(function.signature());
             if (function.owner()
                     || function.canExecute() != allowed
@@ -909,7 +937,7 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
                 incompatible();
             }
         }
-        if (!foundSchema.equals(SCHEMA_FUNCTIONS) || !foundAllowed.equals(PRIVILEGED_FUNCTIONS)) {
+        if (!foundSchema.equals(schemaFunctions) || !foundAllowed.equals(privilegedFunctions)) {
             incompatible();
         }
     }
