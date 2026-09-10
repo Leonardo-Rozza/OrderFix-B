@@ -25,7 +25,7 @@ class CuentaVerificationSchedulingTest {
     private final PasswordEncoder encoder = mock(PasswordEncoder.class);
     private final EmailSender sender = mock(EmailSender.class);
     private final AccountVerificationNotifier notifier = mock(AccountVerificationNotifier.class);
-    private final CuentaService cuenta = new CuentaService(users, tokens, encoder, sender, notifier);
+    private final CuentaService cuenta = new CuentaService(users, tokens, encoder, sender, notifier, mock(UserSecurityStateLock.class));
 
     @AfterEach void releaseSyntheticTransactionState() {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {

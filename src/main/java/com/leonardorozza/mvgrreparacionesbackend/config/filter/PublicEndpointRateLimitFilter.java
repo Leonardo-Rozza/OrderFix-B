@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.config.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.leonardorozza.mvgrreparacionesbackend.controller.AccountAccessExitController;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.RateLimitProperties;
@@ -71,6 +72,7 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
+        if (isPersonalAccessExit(request)) response.setHeader("Cache-Control", "private, no-store");
         long now = clock.millis();
         String key = policy.name() + ':' + clientAddress(request);
         SlidingWindow window = windows.computeIfAbsent(key, ignored -> new SlidingWindow());
@@ -108,6 +110,9 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
         if (legalPublicRequirementsRequestMatcher.matches(request)) {
             return new Policy("public-legal-requirements", properties.getPublicLegalRequirements());
         }
+        if (isPersonalAccessExit(request)) {
+            return new Policy("personal-access-exit", properties.getAccountRecovery());
+        }
         String path = request.getRequestURI();
         String method = request.getMethod();
         if ("POST".equals(method) && "/api/auth/login".equals(path)) {
@@ -130,6 +135,15 @@ public class PublicEndpointRateLimitFilter extends OncePerRequestFilter {
             return new Policy("mp-webhook", properties.getMercadoPagoWebhook());
         }
         return null;
+    }
+
+    private boolean isPersonalAccessExit(HttpServletRequest request) {
+        if (!"POST".equals(request.getMethod())) return false;
+        String context = request.getContextPath();
+        String path = request.getRequestURI();
+        return context != null && path != null
+                && (context.isEmpty() || (context.startsWith("/") && !context.endsWith("/")))
+                && (context + AccountAccessExitController.PATH).equals(path);
     }
 
     private String clientAddress(HttpServletRequest request) {

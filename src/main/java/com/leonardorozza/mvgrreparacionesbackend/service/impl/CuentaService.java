@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoAu
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.AuthTokenRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.email.EmailSender;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,6 +41,7 @@ public class CuentaService {
     private final PasswordEncoder passwordEncoder;
     private final EmailSender emailSender;
     private final AccountVerificationNotifier verificationNotifier;
+    private final UserSecurityStateLock securityState;
 
     @Value("${app.public-url:http://localhost:5173}")
     private String publicUrl;
@@ -73,7 +75,7 @@ public class CuentaService {
     @Transactional
     public void resetPassword(String token, String nuevaPassword) {
         AuthToken authToken = tokenUsable(token, TipoAuthToken.RESET_PASSWORD);
-        User user = authToken.getUser();
+        User user = lockUsableTokenOwner(authToken);
         user.cambiarPassword(passwordEncoder.encode(nuevaPassword));
         userRepository.save(user);
         authToken.setUsadoEn(LocalDateTime.now());
@@ -107,7 +109,7 @@ public class CuentaService {
     @Transactional
     public void verificarEmail(String token) {
         AuthToken authToken = tokenUsable(token, TipoAuthToken.VERIFICACION_EMAIL);
-        User user = authToken.getUser();
+        User user = lockUsableTokenOwner(authToken);
         user.setEmailVerificado(true);
         userRepository.save(user);
         authToken.setUsadoEn(LocalDateTime.now());
@@ -145,6 +147,21 @@ public class CuentaService {
         return authTokenRepository.findByTokenHashAndTipo(sha256(token), tipo)
                 .filter(AuthToken::isUsable)
                 .orElseThrow(() -> new BadRequestException("El link no es válido o ya venció. Pedí uno nuevo."));
+    }
+
+    private User lockUsableTokenOwner(AuthToken token) {
+        User user = token.getUser();
+        securityState.refreshAndLock(user);
+        // A second request may have consumed this token while we were waiting for the user lock.
+        try { securityState.refreshToken(token); }
+        catch (EntityNotFoundException expired) {
+            throw new BadRequestException("El link no es válido o ya venció. Pedí uno nuevo.");
+        }
+        if (!token.isUsable() || !Boolean.TRUE.equals(user.getActive())
+                || user.getTaller() == null || !Boolean.TRUE.equals(user.getTaller().getActivo())) {
+            throw new BadRequestException("El link no es válido o ya venció. Pedí uno nuevo.");
+        }
+        return user;
     }
 
     private static String sha256(String valor) {

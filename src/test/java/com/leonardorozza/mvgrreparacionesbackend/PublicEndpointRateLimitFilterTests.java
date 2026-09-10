@@ -276,6 +276,35 @@ class PublicEndpointRateLimitFilterTests {
         return request;
     }
 
+    @Test
+    void personalExitUsesItsOwnExactAccountQuotaAndNeverCachesResponses() throws Exception {
+        RateLimitProperties properties = new RateLimitProperties();
+        properties.setAccountRecovery(new RateLimitProperties.Limit(2, Duration.ofMinutes(1)));
+        MutableClock clock = new MutableClock();
+        var target = new PublicEndpointRateLimitFilter(properties, clock);
+        String path = "/api/cuenta/baja-acceso";
+        for (String other : new String[]{path + "/", path + "/extra", path + "-extra"}) {
+            assertThat(run(target, documentRequest("POST", other, "10.0.4.1"))
+                    .getHeader("X-RateLimit-Limit")).isNull();
+        }
+        assertThat(run(target, documentRequest("GET", path, "10.0.4.1")).getHeader("X-RateLimit-Limit")).isNull();
+        assertThat(run(target, documentRequest("POST", "/api/auth/password/reset", "10.0.4.1"))
+                .getHeader("X-RateLimit-Remaining")).isEqualTo("1");
+        var first = run(target, documentRequest("POST", path, "10.0.4.1"));
+        assertThat(first.getHeader("X-RateLimit-Remaining")).isEqualTo("1");
+        assertThat(first.getHeader("Cache-Control")).isEqualTo("private, no-store");
+        var contextual = documentRequest("POST", "/ordenfix" + path, "10.0.4.1");
+        contextual.setContextPath("/ordenfix");
+        assertThat(run(target, contextual).getHeader("X-RateLimit-Remaining")).isEqualTo("0");
+        var rejected = run(target, documentRequest("POST", path, "10.0.4.1"));
+        assertThat(rejected.getStatus()).isEqualTo(429);
+        assertThat(rejected.getHeader("Retry-After")).isEqualTo("60");
+        assertThat(rejected.getHeader("Cache-Control")).isEqualTo("private, no-store");
+        assertThat(run(target, documentRequest("POST", path, "10.0.4.2")).getStatus()).isEqualTo(200);
+        clock.advance(Duration.ofMinutes(1));
+        assertThat(run(target, documentRequest("POST", path, "10.0.4.1")).getStatus()).isEqualTo(200);
+    }
+
     private static MockHttpServletResponse run(PublicEndpointRateLimitFilter target, MockHttpServletRequest request)
             throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();

@@ -33,6 +33,7 @@ public class UsuarioService {
     private final PasswordEncoder passwordEncoder;
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
+    private final UserSecurityStateLock securityState;
 
     public UsuarioResponseDTO crear(CrearUsuarioRequestDTO request) {
         validarRolDeEmpleado(request.getRole());
@@ -78,6 +79,9 @@ public class UsuarioService {
     public UsuarioResponseDTO actualizar(Long id, ActualizarUsuarioRequestDTO request) {
         User user = userRepository.findByIdAndTallerId(id, tenantService.currentTallerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + id));
+
+        // A request may have loaded this entity before a concurrent personal exit committed.
+        securityState.refreshAndLock(user);
 
         // El rol refleja titular vs empleado y no es una preferencia editable.
         if (request.getRole() != null && request.getRole() != user.getRole()) {
