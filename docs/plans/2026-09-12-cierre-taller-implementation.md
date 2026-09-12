@@ -1,0 +1,172 @@
+# Cierre coordinado del taller — implementación por cortes
+
+Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
+Estado: corte A cerrado localmente. B–E pendientes. No hay cierre de taller disponible.
+
+## Objetivo y decisiones ya acordadas
+
+Continúa Tarea 16 / BACKEND-HANDOFF 9 del diseño de Confianza y cuenta, después de
+cerrar exportación A–D. La continuación fue autorizada por el usuario. Se mantiene:
+ADMIN con email verificado, contraseña/confirmación específica, referencia durable,
+exportación opcional previa, cuenta restringida, recuperación durante siete días y
+eliminación posterior con reintentos. Restaurar acceso no reactiva automáticamente
+una renovación. OrdenFix no procesa los cobros taller–cliente.
+
+Se aplica brainstorming al diseño aprobado. Se compararon tres entradas: cambiar
+`talleres.activo`, implementar toda la operación en un corte, y comenzar por una
+preparación consistente para fijar las dependencias. Se elige la última: la bandera
+actual también corta al titular el login y la exportación/restauración; por sí sola
+no detiene escrituras admitidas antes del cambio ni una renovación remota. Tampoco
+solicita borrado al proveedor de fotos. La implementación completa necesita resolver
+esas coordinaciones antes de exponer un comando de cierre.
+
+No se introduce una aprobación adicional para estas decisiones internas. Los plazos
+de siete y treinta días concretan la propuesta técnica del diseño existente, no un
+plazo legal universal. Identidad/alta/contactos, conservación de evidencia, backups y
+texto contractual definitivo conservan la etapa final acordada. El borrador legal no
+se publica ni se habilita cierre real en estos cortes internos.
+
+## Secuencia acotada
+
+| Corte | Resultado | Criterio de cierre |
+| --- | --- | --- |
+| A — Preparación consistente y reglas | Resumen interno autorizado de usuarios, trabajos y evidencia de renovación; política temporal pura. Sin cambios de estado ni endpoints. | JWT/ADMIN/email, dos talleres, cero DML, captura coherente y clasificación conservadora probados. |
+| B — Estado durable y coordinación | Referencia/estado propios del cierre, protocolo por taller y acceso restringido. Integrar todos los escritores que deban quedar bloqueados y admisión pública. | Escrituras en curso vs transición, aislamiento/rollback, sesiones y ausencia de bypass acreditados; transición aún no expuesta hasta C. |
+| C — Solicitud y restauración | Propósitos CERRAR/RESTAURAR, idempotencia, confirmación escrita y transiciones atómicas; intención durable/outbox de renovación y notificación. | Replay no renueva plazos ni repite efectos; gracia exacta; respuestas tardías MP no reactivan acceso/renovación. Proveedores sintéticos en local. |
+| D — Eliminación y recuperación operativa | Trabajo acotado por categorías, archivos remotos, excepciones de retención, reintentos/alerta y restauración de backups. | No declara completado sin acreditar cada efecto; fallos mantienen restricción. Políticas reales pendientes impiden activar borrado productivo. |
+| E — API, pantalla y gate integral | Página ADMIN, cuenta restringida, estado/referencia/fechas y restauración, con descargas permitidas y constancia durable. | Navegador/HTTP/PG; errores y sesiones; integral final. Activación y ensayo real separados según dependencias del despliegue. |
+
+Un commit atómico por corte y repositorio afectado, sin push ni merge. No dividir en
+subcortes por defecto: si una dependencia obliga a hacerlo, se documenta su frontera
+concreta. Tests focalizados por corte; integral al cierre E o cambio transversal real.
+No se repite un integral para el servicio aislado A: no modifica consumidores,
+seguridad compartida, migraciones ni contratos HTTP.
+
+## Fronteras que B–E deben resolver
+
+- La cuenta en cierre necesita estado distinto de la inactividad actual para permitir
+  sesión restringida del ADMIN. No basta aceptar JWT con taller inactivo.
+- Mantener el estado individual `users.active`: restaurar no debe reactivar empleados
+  que ya estaban dados de baja. Revocar versiones sin revivir JWT anteriores y sin
+  repetir incrementos por replay; comprobar overflow antes de cualquier cambio.
+- El gate debe cubrir transacciones, no sólo el inicio de HTTP: CRUD ordinario,
+  presupuesto/seguimiento públicos, seguridad, fotos y tareas internas. Hoy existen
+  órdenes de lock distintos en usuario/taller/exportaciones; definir uno compatible
+  y probarlo antes de incorporar una transición exclusiva.
+- Fotos alternan transacciones y acceso remoto. Una carga en curso puede terminar en
+  un objeto huérfano que exige limpieza aunque se rechace su finalización.
+- La cancelación MP actual combina llamada remota y actualización local sin estado
+  durable de cierre. FREE, ID vacío o un flag apagado no prueban cancelación. Hay
+  checkouts `creating/retryable`, históricos, webhooks y conciliación que coordinar.
+- Conservar descarga de ZIP ya disponible durante la gracia según el diseño, sin
+  generar nuevos ZIP/Excel operativos ni ampliar su caducidad. Inactivar taller o
+  cambiar época del actor hoy revoca esos archivos: B/C deben resolverlo de forma
+  explícita. No extender silenciosamente los 24 h de exportación a siete días.
+- `ExportJobService.cleanup()` usa REQUIRES_NEW y el bean puede estar apagado.
+  Invocarlo desde una transacción de cierre no acredita purga atómica con ese cierre.
+- El borrado legal/fotos respeta restricciones V27–V32; nunca sortearlas con cascadas
+  o alterando migraciones congeladas. Retención de evidencia y eliminación de activos
+  requieren categorías y fundamento/plazo antes de activarse.
+
+## Diseño del corte A
+
+`WorkshopClosurePreparationService.prepare(accessToken)` es un servicio interno,
+sin controller, ruta, bandera de cierre ni efecto ejecutable. Obtiene identidad
+verificada mediante el lector existente de reautenticación: JWT criptográfico,
+usuario/taller activos, ADMIN, email verificado y versión actual. Reutiliza únicamente
+`authorize`; no emite/consume ninguna prueba ni reutiliza EXPORTAR para autorizar un
+cierre. CERRAR/RESTAURAR siguen sin existir en el contrato de V31.
+
+La preparación usa REQUIRES_NEW/REPEATABLE_READ con JpaTransactionManager y JDBC.
+La transacción es de escritura sólo porque la autorización actual obtiene locks;
+el servicio no ejecuta INSERT/UPDATE/DELETE ni cleanup. Relee y bloquea el taller
+FOR SHARE, comprueba de nuevo la identidad y el vencimiento JWT al finalizar.
+El snapshot no incorpora escrituras pendientes del llamador. Deadline transaccional
+de 10 s, lock_timeout de 2 s y statement_timeout de 5 s: acotan esperas SQL; no se
+presentan como un plazo duro de adquisición del pool o toda la JVM.
+
+Devuelve IDs internos de vínculo, versión, nombre, momento observado, cantidades de
+empleados activos/inactivos, metadata agregada de fotos/leases/limpieza,
+trabajos de exportación pendientes/READY y clasificación de renovación. No recibe
+taller/actor por separado ni necesita un TenantContext para resolverlos. No devuelve
+emails, contraseñas, hashes, JWT, proof, URLs, claves o IDs externos; toString del
+resumen es redactado. El contrato HTTP futuro deberá seleccionar campos visibles.
+
+V26 garantiza un único ADMIN por taller, incluyendo titulares inactivos; no se modela
+un segundo titular en este resumen.
+
+Las cantidades de recursos describen filas persistidas; READY no acredita descarga
+autorizada, lease no acredita I/O actual y estado de foto no demuestra borrado remoto.
+No incluye blobs, fotos en claro, referencias legacy o payloads de proveedores. No
+es un inventario de eliminación ni un conteo de todas las categorías del taller.
+
+Renovación consulta la suscripción y todos sus vínculos históricos del taller, hasta
+1.000 (LIMIT 1001 rechaza exceso completo). SQL sólo entrega enums/booleans al
+clasificador; detecta IDs/estados contradictorios del vínculo actual dentro de la DB.
+
+- NO_LOCAL_EVIDENCE: suscripción FREE presente y sin indicios locales ni vínculos.
+  No afirma que no exista una suscripción remota.
+- PROVIDER_COORDINATION_REQUIRED: evidencia comercial coherente, incluido historial
+  local cancelado; no confirma una cancelación remota.
+- UNCERTAIN: falta de suscripción, PRO sin respaldo vigente (el historial cancelado
+  no lo sustituye), creación/reintento pendiente,
+  estados/proveedor desconocidos, contradicción, más de un vínculo actual o
+  historial anterior todavía no cancelado.
+
+La lectura no congela escrituras después del commit ni concede permiso para cerrar.
+La futura solicitud volverá a comprobar la evidencia dentro de su protocolo. Errores
+son códigos internos SESSION_INVALID/FORBIDDEN/SOURCE_INVALID/CAPACITY_EXCEEDED/
+UNAVAILABLE con mensaje fijo sin causas SQL ni valores de origen.
+
+`WorkshopClosurePolicy` define `ordenfix-cierre/1`: siete días corridos (168 h UTC)
+desde confirmación durable; treinta días de procesamiento (720 h) desde fin de
+gracia. La preparación sólo informa duraciones, sin iniciar plazos ni fijar fechas
+de una solicitud inexistente. `scheduleAt` normaliza a microsegundos para futura
+persistencia; restaura en [confirmación, fin de gracia) y considera vencida la gracia
+desde el límite exacto. Validación de null/overflow y constructor evita calendarios
+inconsistentes. El cálculo no acredita eliminación ni sustituye reglas de estado.
+
+## Validación y cierre A
+
+Aprobado el 2026-09-12 a las 19:20:08 -03. Java 21, PostgreSQL 16 sintético,
+JpaTransactionManager real, Flyway hasta V32 y JWT/BCrypt reales de prueba.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' \
+./mvnw -B \
+  -Dtest=WorkshopClosurePolicyTest,ClosureRenewalAssessmentTest \
+  -Dit.test=WorkshopClosurePreparationIT,ExportReauthenticationServiceIT verify
+```
+
+- 57 unitarias: política temporal 19; evidencia de renovación 38.
+- 41 IT: preparación PostgreSQL 20; regresión de reautenticación existente 21.
+- Cero fallos, errores u omisiones; BUILD SUCCESS en 58,435 s. Verificación de
+  empaquetado sin propiedades secretas aprobada. Log local descartable:
+  `/private/tmp/ordenfix-closure-a-verified.log`.
+- Preparación: dos talleres, contexto ajeno ignorado, ADMIN/email/JWT/época activos,
+  rechazo de empleado/revocación/inactividad, huella de todas las tablas sin DML y
+  prueba de descarga sin consumir. Captura REPEATABLE_READ frente a commit concurrente
+  real y REQUIRES_NEW frente a escritura pendiente del llamador; límite 1001,
+  evidencia contradictoria/histórica, fallo final saneado y datos privados omitidos.
+- Política: límites exactos, microsegundos, cambios de horario, null/overflow y
+  constructor coherente. No inicia una solicitud ni acredita recuperación o borrado.
+
+El primer pase detectó tres problemas de pruebas: un segundo ADMIN incompatible con
+V26 y dos stubs configurados por delante del proxy MANDATORY. Se corrigieron los
+fixtures y se configura el spy detrás del proxy, conservando autorización real.
+La revisión adicional agregó la regresión de PRO sin respaldo vigente con historial
+cancelado; permanece UNCERTAIN. Los resultados anteriores no sustituyen el pase final.
+Las fotos de prueba sólo acreditan conteos de metadata (se suspenden dos triggers de
+atestación para sembrarlas); los ZIP sintéticos no acreditan el codec ni descargas.
+
+No se repitió clean verify: el cambio es un servicio aislado y clases nuevas, sin
+modificar consumidores o seguridad compartida. El integral de exportación previo
+continúa documentado en su acta; el integral de cierre corresponde a E. Frontend sólo
+actualiza documentación, por lo que no requiere build ni navegador para este corte.
+
+Revisión final y diff --check aprobados. V27–V32 conservan sus SHA-256; tampoco cambia
+V26 ni se crea una migración. Se preservan los 77 archivos ajenos no versionados del
+frontend. No hay cambios en secretos, configuración real, cuentas, proveedores,
+frontend funcional ni texto legal publicado. Commit atómico por repositorio, sin
+push ni merge. Próximo: B, estado durable y coordinación de escrituras/sesiones.

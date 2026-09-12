@@ -99,6 +99,13 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   recuperación. No habilita a soporte a pedir una contraseña por correo ni acredita
   atención o entrega real de solicitudes. La secuencia se documenta en el
   [plan de exportación integral](../plans/2026-09-12-exportacion-integral-implementation.md).
+- Cierre A agrega preparación interna de ADMIN: resumen consistente de usuarios,
+  trabajos y evidencia de renovación, sin iniciar una solicitud ni modificar datos.
+  No es una autorización de cierre ni una prueba de cancelación remota. El plan
+  [de cierre coordinado](../plans/2026-09-12-cierre-taller-implementation.md) separa
+  estado/restricción, solicitud/restauración, eliminación y entrega mediante UI.
+  El cierre del taller sigue sin estar disponible. Los plazos técnicos de su política
+  no sustituyen decisiones reales de retención ni habilitan publicación del borrador.
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
   Un cierre deberá comprobar almacenamiento, retenciones y restauración de backups
   antes de afirmar eliminación. Las decisiones reales sobre esas categorías siguen
