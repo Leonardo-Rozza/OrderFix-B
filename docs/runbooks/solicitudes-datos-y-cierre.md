@@ -87,9 +87,13 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   respuesta automática a una solicitud individual de un empleado o cliente.
 - El corte A de exportación agrega reautenticación interna ADMIN con contraseña
   actual y email verificado: prueba temporal de un solo uso ligada a la sesión,
-  consumida junto con el efecto en la misma transacción. No ofrece todavía API,
-  paquete ni entrega; no habilita a soporte a pedir una contraseña por correo.
-  La secuencia pendiente se documenta en el
+  consumida junto con el efecto en la misma transacción. El corte B agrega captura
+  consistente y escritura de un paquete local privado con JSON, textos legales
+  propios y QR. Su manifiesto declara entrega incompleta y fotos remotas pendientes;
+  no tiene todavía trabajo durable, cifrado, vencimiento, API ni descarga para el
+  usuario. No se debe enviar ese staging a una persona ni marcar su pedido resuelto.
+  No habilita a soporte a pedir una contraseña por correo. C/D completan generación
+  temporal y entrega autorizada. La secuencia se documenta en el
   [plan de exportación integral](../plans/2026-09-12-exportacion-integral-implementation.md).
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
   Un cierre deberá comprobar almacenamiento, retenciones y restauración de backups

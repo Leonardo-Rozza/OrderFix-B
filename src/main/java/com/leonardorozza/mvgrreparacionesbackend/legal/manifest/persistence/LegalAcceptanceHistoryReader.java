@@ -92,14 +92,25 @@ final class LegalAcceptanceHistoryReader {
     /** The caller holds both shared editorial and actor gates, including the final commit. */
     LegalAcceptanceHistoryPage read(LegalActorSnapshot actor, ContextoLegal context, int page, int size,
                                    LegalEditorialTimeBoundary boundary, LegalPrivateRequirementsDeadline deadline) {
+        return readInTransaction(actor, context, page, size, boundary, deadline, false);
+    }
+
+    /** An already-authorized internal export sees all committed evidence in one MVCC snapshot. */
+    LegalAcceptanceHistoryPage readExportSnapshot(LegalActorSnapshot actor, int page, int size,
+            LegalEditorialTimeBoundary boundary, LegalPrivateRequirementsDeadline deadline) {
+        return readInTransaction(actor, null, page, size, boundary, deadline, true);
+    }
+
+    private LegalAcceptanceHistoryPage readInTransaction(LegalActorSnapshot actor, ContextoLegal context, int page,
+            int size, LegalEditorialTimeBoundary boundary, LegalPrivateRequirementsDeadline deadline, boolean exportSnapshot) {
         long offset = LegalAcceptanceHistoryPage.pageOffset(page, size);
         Objects.requireNonNull(actor, "actor").requireEnabled();
         Objects.requireNonNull(boundary, "boundary");
         Objects.requireNonNull(deadline, "deadline").check();
-        requireTransaction();
+        requireTransaction(exportSnapshot);
         try {
             return Objects.requireNonNull(jdbc.execute((ConnectionCallback<LegalAcceptanceHistoryPage>) connection -> {
-                requireBoundConnection(connection);
+                requireBoundConnection(connection, exportSnapshot);
                 long total = readCount(connection, actor, context, deadline);
                 long pages = LegalAcceptanceHistoryPage.pagesFor(total, size);
                 if (offset >= total) return new LegalAcceptanceHistoryPage(List.of(), page, size, total, pages);
@@ -480,17 +491,17 @@ final class LegalAcceptanceHistoryReader {
         }
     }
 
-    private void requireTransaction() {
+    private void requireTransaction(boolean exportSnapshot) {
         require(TransactionSynchronizationManager.isActualTransactionActive()
-                && !TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                && TransactionSynchronizationManager.isCurrentTransactionReadOnly() == exportSnapshot
                 && Objects.equals(TransactionSynchronizationManager.getCurrentTransactionIsolationLevel(),
-                        Connection.TRANSACTION_READ_COMMITTED)
+                        (exportSnapshot ? Connection.TRANSACTION_REPEATABLE_READ : Connection.TRANSACTION_READ_COMMITTED))
                 && TransactionSynchronizationManager.hasResource(dataSource));
     }
 
-    private void requireBoundConnection(Connection connection) throws SQLException {
-        require(!connection.getAutoCommit() && !connection.isReadOnly()
-                && connection.getTransactionIsolation() == Connection.TRANSACTION_READ_COMMITTED
+    private void requireBoundConnection(Connection connection, boolean exportSnapshot) throws SQLException {
+        require(!connection.getAutoCommit() && connection.isReadOnly() == exportSnapshot
+                && connection.getTransactionIsolation() == (exportSnapshot ? Connection.TRANSACTION_REPEATABLE_READ : Connection.TRANSACTION_READ_COMMITTED)
                 && DataSourceUtils.isConnectionTransactional(DataSourceUtils.getTargetConnection(connection), dataSource));
     }
 
