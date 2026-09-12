@@ -2,7 +2,8 @@
 
 Fecha: 2026-09-12. Baselines: backend `e7c203f`, frontend `4b46cd5`.
 Ramas conservadas: `codex/lanzamiento-publico-backend` y
-`codex/frontend-refactor-checkpoint`. Corte A cerrado localmente; B/C pendientes.
+`codex/frontend-refactor-checkpoint`. Corte A cerrado localmente. El avance del corte B
+se acredita en [su cierre](2026-09-12-email-dominio-entrega-implementation.md); C conserva staging.
 
 ## Objetivo y alcance
 
@@ -73,8 +74,8 @@ que justifiquen ampliarlo.
 
 ## Continuación finita
 
-- **Email B:** seleccionar/verificar dominio de envío, copiar registros Resend en
-  Vercel, configurar remitente y acreditar entrega a una casilla autorizada.
+- **Email B:** dominio Verified y entrega al servidor receptor acreditados en el
+  [cierre B](2026-09-12-email-dominio-entrega-implementation.md); confirmación visual de la casilla pendiente.
 - **Email C:** al disponer de staging, comprobar registro/verificación/recuperación
   con enlaces HTTPS reales, errores recuperables y configuración del entorno.
 

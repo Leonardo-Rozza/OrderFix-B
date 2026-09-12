@@ -6,20 +6,31 @@ notificaciones de reparaciones, cobros, endpoints de prueba ni infraestructura d
 
 ## Estado comprobado
 
-- El usuario posee `orden-fix.com.ar`. La consulta DNS pública del 2026-09-12 devuelve
-  `ns1.vercel-dns.com` y `ns2.vercel-dns.com`: la zona ya está delegada a Vercel.
-  Esto no acredita asignación al proyecto, certificado, deploy ni remitente verificado.
-- La nueva `API_KEY_RESEND`, guardada en el archivo ignorado de secretos, autenticó por
-  SMTP con STARTTLS y respondió `250` a NOOP. Se cerró con QUIT; **cero correos enviados**.
-- El valor anterior de `MAIL_PASSWORD` fue rechazado como clave inválida. En el archivo
-  privado se reemplazó sólo ese valor por `${API_KEY_RESEND}`, conservando la nueva clave
-  en un único lugar. Ningún secreto se copia a esta documentación, Git o frontend.
-- La clave tiene permiso de envío: la consulta de dominios devuelve `restricted_api_key`.
-  Es una limitación esperada de ese permiso; no se amplía a Full access para inspeccionar
-  dominios. La verificación debe acreditarse desde el panel de Resend.
-- El remitente local sigue siendo `OrdenFix <onboarding@resend.dev>` y la activación local
-  existente se conserva. Ese remitente de prueba sólo permite enviar al correo propio
-  de la cuenta Resend. Autenticación SMTP no equivale a entrega de un mensaje.
+**Corte B, 2026-09-12:** `cuenta.orden-fix.com.ar` está Verified en Resend,
+región São Paulo (`sa-east-1`). Los tres registros pedidos por el proveedor se
+publicaron manualmente en Vercel y respondieron en DNS público. El usuario autorizó
+expresamente esos registros y un único envío de prueba a su propia casilla.
+
+- El remitente local es `OrdenFix <notificaciones@cuenta.orden-fix.com.ar>`.
+  Se modificó únicamente `MAIL_FROM` en el archivo privado ignorado; claves y otras
+  propiedades se preservaron. No se cambió la configuración de un backend desplegado.
+- El adaptador Java real obtuvo una única aceptación SMTP observada, sin arrancar
+  la app, DB o Flyway. Resend registró **Sent y Delivered**, 2026-09-12 10:12 -03:00,
+  para el mensaje `78e024f6-261e-4269-a464-05f2f9472706`.
+  La confirmación visual de Recibidos/Spam por el titular sigue pendiente.
+- No se configuró dominio de tracking, no se habilitó recepción de correo ni se dio
+  acceso automático a Resend sobre Vercel. El enlace backend → Resend exige STARTTLS;
+  la política Resend → servidor receptor conserva el valor `Opportunistic` observado
+  en el panel. No se acredita TLS obligatorio en ese segundo tramo para todo destino.
+- Vercel muestra `orden-fix.com.ar` conectado al proyecto `order-fix`, redirigiendo a
+  `www.orden-fix.com.ar`, también conectado; certificados administrados por Vercel.
+  Esto acredita la configuración del panel, no el repositorio/rama desplegado ni el
+  funcionamiento del frontend/backend de este plan en esa URL. No hubo deploy.
+
+En el corte A se comprobó la nueva clave con SMTP AUTH/NOOP sin enviar correos, se
+corrigió `MAIL_PASSWORD=${API_KEY_RESEND}` y se aprobaron 61 tests focalizados. La clave
+conserva permiso de envío; no se amplió a Full access. La evidencia de DNS, remitente
+y mensaje está en el [cierre del corte B](../plans/2026-09-12-email-dominio-entrega-implementation.md).
 
 ## Arranque local
 
@@ -66,28 +77,34 @@ commit; si hay rollback no se envía. Una falla de correo conserva la respuesta 
 para evitar revelar si existe la cuenta. No hay reintento durable ni garantía de entrega;
 el usuario puede volver a solicitar un enlace dentro de los límites existentes.
 
-## Configuración de dominio y producción
+## Dominio configurado y siguiente entorno
 
-1. En Resend, agregar/verificar un dominio de envío. Propuesta pendiente de aplicar:
-   `cuenta.orden-fix.com.ar`, para separar estos correos transaccionales. Un remitente
-   posible es `OrdenFix <notificaciones@cuenta.orden-fix.com.ar>`; no es todavía una
-   dirección operativa ni sustituye soporte/privacidad/legal.
-2. Copiar en la zona DNS de Vercel los registros exactos que entregue Resend para ese
-   dominio: DKIM y SPF/Return-Path, incluyendo su MX de rebotes. No inventar valores,
-   región ni selectores, ni reemplazar registros de recepción ajenos. Conservar apagado
-   el seguimiento de aperturas/clics para enlaces con tokens. Acreditar estado Verified.
-3. Configurar `MAIL_FROM` con ese dominio y comprobar que la clave de envío permite
-   usarlo. Mantener la clave sólo en el servicio backend. El frontend Vite no necesita
-   la API key; cualquier variable `VITE_*` se expone al navegador.
-4. Agregar el dominio web al proyecto de Vercel y aplicar los registros que indique el
-   proyecto. La delegación DNS ya existente no prueba que esté vinculado. Elegir el
-   origen canónico y alinear `APP_PUBLIC_URL` y `CORS_ORIGINS` en backend; configurar
-   `VITE_API_BASE_URL` con la API HTTPS real. No hace falta editar CorsConfig para cambiar
-   la variable de orígenes. Conservar sólo los orígenes exactos necesarios.
-5. Acreditar un envío controlado a una casilla autorizada, recepción y enlace utilizable;
-   luego repetir registro/verificación/recuperación en staging. Un ACK SMTP sólo acredita
-   aceptación del proveedor, no recepción en inbox. Antes de habilitar talleres reales,
-   cerrar ese recorrido, credenciales del entorno y remitente definitivo.
+El dominio de envío ya configurado es `cuenta.orden-fix.com.ar`, con remitente
+`OrdenFix <notificaciones@cuenta.orden-fix.com.ar>`. Los registros de su zona Vercel son:
+
+| Nombre relativo a orden-fix.com.ar | Tipo | Valor | TTL / prioridad |
+| --- | --- | --- | --- |
+| `resend._domainkey.cuenta` | TXT | Clave pública DKIM emitida por Resend; huella en el cierre B | 60 |
+| `send.cuenta` | TXT | `v=spf1 include:amazonses.com ~all` | 60 |
+| `send.cuenta` | MX | `feedback-smtp.sa-east-1.amazonses.com.` | 60 / 10 |
+
+El MX pertenece al Return-Path de rebotes; no crea una casilla atendida. No se modificó
+el MX raíz, DMARC, registros web, nameservers ni configuración de otros dominios.
+
+Para el **corte C**:
+
+1. Identificar el despliegue real de frontend y backend y comprobar que corresponde a
+   estas ramas/cambios. El proyecto `order-fix` y su redirección ya existen: no duplicarlos
+   ni asumir que su versión desplegada coincide con la versión local sin comprobarlo.
+2. Configurar en el servicio backend del entorno `MAIL_ENABLED`, la clave de envío y
+   el mismo `MAIL_FROM` verificado. No copiar secretos a Vercel/Vite ni a Git.
+3. Alinear el origen HTTPS realmente usado con `APP_PUBLIC_URL` y `CORS_ORIGINS`;
+   configurar `VITE_API_BASE_URL` con la API HTTPS del entorno. La redirección actual
+   apunta a `www`, pero no se reemplaza la URL local por una URL pública sin probar el
+   recorrido desplegado. `CorsConfig` consume la variable; no requiere editar Java.
+4. Probar registro/verificación, reenvío y recuperación hasta consumir enlaces reales,
+   con cuenta propia de prueba y permisos para esos envíos. La prueba del corte B usó
+   texto sintético sin enlaces ni tokens, y no valida esos recorridos.
 
 El correo de soporte y los canales de privacidad/legal requieren una recepción atendida;
 verificar un remitente transaccional no crea ese circuito. Su definición y la identidad
@@ -97,7 +114,7 @@ registral siguen diferidas hasta después de MP y Email, por decisión del usuar
 
 - **Email A:** configuración local, SMTP seguro y regresión de cuenta. Evidencia en el
   [plan del corte](../plans/2026-09-12-email-transaccional-implementation.md).
-- **Email B:** dominio Resend/DNS, remitente y entrega controlada a una casilla autorizada.
+- **Email B:** dominio, DNS y entrega al servidor receptor acreditados; confirmación visual de la casilla pendiente.
 - **Email C:** recorrido con frontend y backend de staging, enlaces HTTPS y operación del envío.
 
 ## Referencias oficiales consultadas
