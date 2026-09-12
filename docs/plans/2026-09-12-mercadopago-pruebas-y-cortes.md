@@ -1,7 +1,8 @@
 # Mercado Pago — prueba de la suscripción de OrdenFix
 
 Fecha: 2026-09-12. Base revisada: backend `39a0890`, frontend `8547f3a`.
-Estado: MP-A terminado como preparación local; conexión al proveedor pendiente.
+Estado: MP-A terminado; MP-B en curso. Token de cuenta de prueba verificado;
+ciclo de suscripción con el proveedor pendiente.
 
 ## Alcance y cortes
 
@@ -30,7 +31,7 @@ su etapa posterior acordada; no son requisitos para esta preparación local.
   entorno no están confirmados. No se encontraron secreto de webhook ni IDs de
   collector/aplicación en los dos archivos privados revisados o el entorno del proceso
   de diagnóstico. Esto no inspecciona configuración de un despliegue remoto.
-- El archivo privado de recursos contiene `mercadopago.enabled=true`; el archivo local
+- El archivo privado de recursos contiene `MP_ENABLED=true`; el archivo local
   contiene `enabled=false` y `checkout-enabled=false`. No se modificaron. No inferir
   la configuración de otro proceso sin conocer qué archivos y overrides carga.
 - Encender MP también permite que los schedulers procesen vínculos/eventos previos,
@@ -111,5 +112,24 @@ Documentación oficial consultada el 2026-09-12:
 [compra de prueba](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/integration-test/payment-approval)
 y [Webhooks](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/additional-content/your-integrations/notifications/webhooks).
 
-Siguiente paso: identificar las cuentas de prueba y la procedencia del token guardado.
-La consulta al titular está pendiente; no se asume la respuesta ni se crean cargos.
+## Avance MP-B — token verificado el 2026-09-12
+
+El titular confirmó que la credencial guardada es de prueba y autorizó continuar.
+Una consulta autenticada **GET `/users/me`** a `https://api.mercadopago.com` obtuvo
+**HTTP 200**, `site_id=MLA` y presencia del tag `test_user`. El token guardado pertenece
+a una cuenta de prueba argentina. La familia `APP_USR` es compatible con este resultado:
+no se clasificó la cuenta sólo por el prefijo. Se conservaron únicamente estos datos
+sanitizados; no se versionan credenciales, respuesta de perfil ni identificadores.
+
+La respuesta incluye el ID de cuenta, pero no `application_id`. El panel de Mercado
+Pago en el navegador disponible solicita iniciar sesión. Siguen pendientes
+`MP_APPLICATION_ID` y `MP_WEBHOOK_SECRET`, identificar al comprador de prueba, las URLs HTTPS
+y la instancia/base aisladas. No se habilitó MP, no se creó una suscripción ni se
+realizaron cargos. El ciclo MP-B y la matriz MP-C permanecen abiertos.
+
+En paralelo se reprodujo, con respuestas HTTP simuladas, un fallo del frontend al
+volver por historial a un resultado confirmado después de simular una baja PRO → FREE:
+conserva PRO en caché y no vuelve a consultar.
+La corrección local del retorno se documenta en el frontend en
+`docs/plans/2026-09-12-mercadopago-retorno-implementation.md`; no acredita por sí sola
+el ciclo contra Mercado Pago.
