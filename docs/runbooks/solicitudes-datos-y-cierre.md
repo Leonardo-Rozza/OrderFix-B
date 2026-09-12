@@ -1,6 +1,7 @@
 # Atención de solicitudes de datos y cierre
 
-Estado al 2026-09-12: procedimiento preparado, pendiente de habilitación operativa.
+Estado al 2026-09-12: procedimiento preparado, con ensayo técnico local aprobado;
+pendiente de habilitación operativa para solicitudes reales.
 No es un texto contractual ni una constancia de cierre. La referencia técnica del
 corte es `docs/plans/2026-09-12-taller-inactivo-enlaces-publicos-implementation.md`.
 
@@ -107,3 +108,24 @@ en el registro privado. En Git sólo se documenta el resultado sin datos de pers
 Hasta cumplir estas condiciones, Confianza y cuenta sigue pendiente en la lista de
 salida. No omitir los gates de publicación ni publicar documentos de ejemplo para salvar
 esa falta de evidencia.
+
+## Resultado del ensayo técnico local — 2026-09-12
+
+El [acta del ensayo](../plans/2026-09-12-solicitudes-datos-baja-ensayo-local.md)
+registra 14 recorridos de navegador → HTTP → PostgreSQL 16 aprobados. En escritorio
+y 320 px, el empleado confirma su baja con contraseña: 204, sesiones rechazadas y
+logout persistente, conservando el usuario, cliente y taller. ADMIN no puede usar
+esa operación. También se descargaron y contrastaron los dos reportes operativos
+reales; USER y anónimo no pueden obtenerlos. Este ensayo no elimina datos.
+
+La matriz documental ENSAYO-01 a ENSAYO-05 aplica este procedimiento a pedidos
+sintéticos. Baja personal verificada se distingue de solicitud integral de datos,
+cierre del taller, cliente sin cuenta e identidad/destinatario no verificables.
+Estos últimos conservan verificación, revisión o ejecución pendientes. No se
+crearon expedientes reales ni se acreditó recepción/respuesta del buzón.
+
+Para continuar faltan herramientas de exportación integral y cierre coordinado,
+con decisiones de retención y entrega, además de la atención real ya prevista.
+No se reemplazan con el Excel operativo ni con SQL sobre `talleres.activo`.
+Identidad/alta/contactos definitivos mantienen su etapa acordada; este resultado
+no autoriza anunciar un cierre integral disponible ni omitir el gate de salida.
