@@ -1,12 +1,15 @@
 # Runbook de salida — Mercado Pago Suscripciones
 
-Fecha: 2026-08-20
+Fecha inicial: 2026-08-20. Revisión de preparación: 2026-09-12.
 Integración: suscripción sin plan asociado (`preapproval`) + facturas autorizadas + conciliación
 disparada por eventos `payment`.
 
 ## Estado seguro por defecto
 
-- Mantener `MP_ENABLED=false` hasta completar todas las puertas de este documento.
+- En producción, mantener `MP_ENABLED=false` hasta completar las puertas de salida.
+- El ensayo con cuentas de prueba usa una instancia y base dedicadas. Ver el
+  [plan MP-A–MP-C](../plans/2026-09-12-mercadopago-pruebas-y-cortes.md); no encender MP
+  sobre la base local habitual: también reactiva reintentos y conciliación históricos.
 - El checkout también inicia apagado: `MP_CHECKOUT_ENABLED=false` es el default seguro.
 - Para detener altas sin perder eventos ni conciliación, mantener `MP_ENABLED=true` y usar `MP_CHECKOUT_ENABLED=false`.
 - Nunca copiar tokens o secretos al repositorio, JAR, imagen, logs, tickets o capturas.
@@ -34,18 +37,33 @@ El arranque falla de forma segura si MP está activo y faltan credenciales, IDs 
 
 ## Panel de Mercado Pago
 
-1. Usar una aplicación separada por ambiente y verificar propietario/collector.
-2. Configurar `https://<backend>/api/pagos/webhook`.
-3. Suscribir los tópicos `subscription_preapproval`, `subscription_authorized_payment` y `payment`.
-4. Copiar la clave secreta al gestor de secretos del ambiente.
+1. Usar aplicación y cuentas de prueba separadas; verificar propietario/collector y
+   Application ID. El prefijo del token no acredita que la cuenta sea de prueba.
+2. Verificar el mecanismo de notificación disponible para esa aplicación y producto
+   antes de configurar `https://<backend-prueba>/api/pagos/webhook`.
+3. Acreditar recepción de `subscription_preapproval`, `subscription_authorized_payment`
+   y `payment`; no basta con que los tópicos aparezcan seleccionados.
+4. Guardar la clave secreta de esa aplicación en el gestor de secretos del ambiente.
 5. Confirmar que el proxy conserva `x-signature`, `x-request-id`, query `data.id` y el cuerpo sin reescribirlos.
 6. Si se activa confianza en `X-Forwarded-For`, el proxy debe eliminar el header aportado por el cliente y establecer uno propio.
 
+**Incertidumbre a resolver en MP-B:** la guía oficial de Webhooks consultada el
+2026-09-12 advierte que la configuración mediante Tus integraciones no está disponible
+para Suscripciones y remite a configurar durante la creación de un pago. La misma guía
+lista los tópicos de suscripción y la validación por firma. El request actual de
+preapproval pendiente no envía `notification_url`. Este diagnóstico documental no
+prueba un fallo de la integración: hay que verificar la opción efectiva de la aplicación
+y un evento real antes de acreditar este punto. No agregar campos por suposición ni
+aceptar IPN o quitar HMAC para superar la prueba.
+
 El API puede correr en `http://localhost` para pruebas sin MP. Para sandbox, el retorno del frontend y
 el webhook del backend deben exponerse mediante URLs HTTPS públicas (túnel o staging); el proveedor no
-puede acceder a direcciones `localhost`.
+puede acceder a direcciones `localhost`. Iniciar sesión y checkout desde el mismo origen
+HTTPS configurado en `MP_BACK_URL`, con ruta `/suscripcion/resultado`, para conservar
+la sesión al volver. Verificar recarga directa de esa ruta y CORS del API. Si se usa
+Vite mediante túnel, autorizar sólo su host exacto o usar un proxy configurado.
 
-Referencias oficiales: [notificaciones de suscripciones](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/additional-content/your-integrations/notifications), [validación de firma Webhooks](https://www.mercadopago.com.ar/developers/es/docs/checkout-bricks/additional-content/your-integrations/notifications/webhooks), [crear preapproval](https://www.mercadopago.com.ar/developers/es/reference/online-payments/subscriptions/create-preapproval/post) y [buscar facturas autorizadas](https://www.mercadopago.com.ar/developers/es/reference/online-payments/subscriptions/authorized-payment-search/get).
+Referencias oficiales: [notificaciones de suscripciones](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/additional-content/your-integrations/notifications), [validación de firma Webhooks](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/additional-content/your-integrations/notifications/webhooks), [crear preapproval](https://www.mercadopago.com.ar/developers/es/reference/online-payments/subscriptions/create-preapproval/post) y [buscar facturas autorizadas](https://www.mercadopago.com.ar/developers/es/reference/online-payments/subscriptions/authorized-payment-search/get).
 
 ## Matriz de sandbox obligatoria
 
@@ -75,6 +93,11 @@ Ejecutar con usuarios y medios de pago de prueba de Mercado Pago. Guardar ID de 
 | Cancelación repetida | idempotente y sin pérdida de auditoría |
 
 ## Verificación técnica previa
+
+La preparación MP-A ejecutó 53 pruebas focalizadas con transporte simulado/H2; el
+[acta](../plans/2026-09-12-mercadopago-pruebas-y-cortes.md#evidencia-local) conserva
+comando y límites. No acredita sandbox ni reemplaza el integral siguiente, reservado
+para el cierre coordinado de lanzamiento o un cambio transversal/fallo que lo justifique.
 
 ```bash
 JAVA_HOME=/ruta/a/jdk-21 ./mvnw clean verify
@@ -128,4 +151,5 @@ Solo habilitar producción cuando estén verdes:
 - términos, privacidad, DPA, baja y reembolsos aprobados por abogado;
 - responsable de guardia y rollback ensayado.
 
-Esta documentación de Mercado Pago se actualizó el 2026-08-20 y debe revisarse nuevamente antes del lanzamiento.
+Esta revisión del 2026-09-12 prepara el ensayo; no acredita conexión ni cobros reales.
+Revisar nuevamente configuración y documentación del proveedor antes del lanzamiento.
