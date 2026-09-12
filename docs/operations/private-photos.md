@@ -24,6 +24,40 @@ ordenfix.legal.account-metadata.active-write-version=<version>
 ordenfix.legal.account-metadata.retention=<duracion-ISO-8601-aprobada>
 ```
 
+### Credenciales del entorno y comprobación de septiembre
+
+`application.properties` vincula `CLOUD_NAME`, `API_KEY` y `API_SECRET` con las tres
+propiedades `photos.private.cloudinary.*`. Los valores predeterminados son vacíos:
+el almacenamiento deshabilitado no necesita credenciales y la activación exige que
+sean válidas. Definir sólo propiedades llamadas `API_KEY=${API_KEY}` no configura
+el adapter, porque éste lee los nombres canónicos de fotos privadas.
+
+Para configurar los valores se pueden usar variables de entorno o un archivo
+externo importado mediante `SPRING_CONFIG_IMPORT`, como indica el README. Un archivo
+`application-secret.properties` ignorado por Git no se carga por su mera presencia;
+también está excluido del JAR. Para despliegue, usar secretos del servidor. Evitar
+colocar archivos con credenciales en los recursos que se empaquetan. Esta corrección
+no cambia perfiles ni importa automáticamente otros secretos locales.
+
+La comprobación de las credenciales añadidas por el titular del proyecto devolvió
+HTTP 200 y `status=ok` en `GET /ping` de Cloudinary el 2026-09-12, usando el cliente
+HTTPS del sistema. No se registraron valores, cabeceras de autenticación ni cuerpo
+completo de respuesta. El primer intento con Python falló en la conexión y no se
+considera una validación. No se subió, leyó ni eliminó ningún asset.
+
+Esta prueba acredita autenticación de Admin API y conectividad; no acredita por sí
+sola permisos efectivos de carga/borrado, privacidad de archivos, configuración de
+backups ni el recorrido completo de fotos. El flag privado y los demás requisitos
+de esta página conservan su estado; no se activa el servicio con sólo estas claves.
+
+Verificación local adicional: `PrivatePhotoStorageConfigurationTest`, 9 pruebas
+aprobadas con Java 21, sin fallos ni omisiones. Se comprobó que el diff versionado
+no contiene ninguno de los tres valores reales y que el archivo secreto sigue
+ignorado. No se modificó dicho archivo ni se copiaron sus secretos; se conserva
+la carga explícita por entorno/importación. Commit sin push.
+
+Referencia: [Cloudinary Admin API, ping](https://cloudinary.com/documentation/admin_api#ping).
+
 El indicador admite `true` o `false` exactos. La URL debe ser PostgreSQL TCP, sin fragmento; sus únicos parámetros admitidos son `sslmode`, `sslrootcert`, `sslcert`, `sslkey` y `sslpassword`. Usuario/contraseña no van en la URL. No hay fallback a credenciales de aplicación. Cada keyring contiene entre una y ocho versiones positivas, con claves distintas de 32 bytes; HMAC y AES tampoco pueden coincidir entre sí. Mantener las versiones históricas necesarias según la política de rotación legal existente. Usar fuentes de propiedades enumerables con los nombres canónicos anteriores; no asumir que cualquier alias de variable de entorno será descubierto como entrada del keyring.
 
 `photos.private.retention` debe representar segundos enteros, superar 15 minutos y no superar 315.360.000 segundos. Se guarda el vencimiento por intención al crearla; cambiar la configuración no recalcula filas existentes. La retención AES de metadata legal es independiente. `ordenfix.legal.idempotency.result-ttl` es opcional: predeterminado `PT25H`, mínimo 24 horas; no es el plazo de retención del archivo ni el vencimiento de la intención.
