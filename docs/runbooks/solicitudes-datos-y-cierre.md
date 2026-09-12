@@ -85,6 +85,12 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   cobros y presupuestos. No incluye todas las categorías/archivos ni incorpora la
   reautenticación y entrega previstas para la exportación integral. No sirve como
   respuesta automática a una solicitud individual de un empleado o cliente.
+- El corte A de exportación agrega reautenticación interna ADMIN con contraseña
+  actual y email verificado: prueba temporal de un solo uso ligada a la sesión,
+  consumida junto con el efecto en la misma transacción. No ofrece todavía API,
+  paquete ni entrega; no habilita a soporte a pedir una contraseña por correo.
+  La secuencia pendiente se documenta en el
+  [plan de exportación integral](../plans/2026-09-12-exportacion-integral-implementation.md).
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
   Un cierre deberá comprobar almacenamiento, retenciones y restauración de backups
   antes de afirmar eliminación. Las decisiones reales sobre esas categorías siguen

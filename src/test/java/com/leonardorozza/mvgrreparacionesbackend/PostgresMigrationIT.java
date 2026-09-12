@@ -101,9 +101,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("30");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("31");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -306,7 +306,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV30ConservaLaEstructuraLegalYAgregaFotosPrivadasSinDatosSemilla() {
+    void latestV31ConservaLaEstructuraLegalFotosYReautenticacionesSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -327,6 +327,7 @@ class PostgresMigrationIT {
                 """, String.class);
         assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
         assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);
+        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones"));
 
         var tiposRepresentativos = jdbcTemplate.queryForList("""
                 SELECT table_name || '.' || column_name || ':' || data_type
@@ -633,6 +634,31 @@ class PostgresMigrationIT {
         assertThat(tablasLegalesV28)
                 .containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_V28);
         assertTablasLegalesVacias(schemaJdbc, schema, TABLAS_LEGALES_V28);
+    }
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void v31ExigeQueLaReautenticacionPertenezcaAlTallerDelUsuario() {
+        Long tallerPropio = jdbcTemplate.queryForObject(
+                "INSERT INTO talleres (nombre) VALUES ('Taller reauth propio') RETURNING id", Long.class);
+        Long tallerAjeno = jdbcTemplate.queryForObject(
+                "INSERT INTO talleres (nombre) VALUES ('Taller reauth ajeno') RETURNING id", Long.class);
+        Long actor = jdbcTemplate.queryForObject("""
+                INSERT INTO users (username, password, email, role, active, taller_id)
+                VALUES ('Titular reauth', 'hash de prueba', 'reauth-fk@example.invalid', 'ADMIN', TRUE, ?)
+                RETURNING id
+                """, Long.class, tallerPropio);
+        String insert = """
+                INSERT INTO cuenta_reautenticaciones
+                    (token_hash, user_id, taller_id, token_version, session_hash, proposito, creada_en, expira_en)
+                VALUES (?, ?, ?, 0, ?, 'EXPORTAR', now(), now() + INTERVAL '1 minute')
+                """;
+        assertThat(jdbcTemplate.update(insert, "a".repeat(64), actor, tallerPropio, "c".repeat(64)))
+                .isOne();
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                insert, "b".repeat(64), actor, tallerAjeno, "d".repeat(64)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .rootCause().hasMessageContaining("fk_cuenta_reauth_actor");
     }
 
     @Test

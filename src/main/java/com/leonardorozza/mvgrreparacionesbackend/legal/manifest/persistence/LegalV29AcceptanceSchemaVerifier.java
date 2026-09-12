@@ -87,7 +87,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
 
     private void verifyV29Surface() {
         verifyRelationTopology();
-        boolean photos=compatibleVersion()==RuntimeVersion.V30;
+        boolean photos = compatibleVersion().ordinal() >= RuntimeVersion.V30.ordinal();
         if (!catalogFingerprint().equals(photos ? LegalPrivatePhotoSchema.LEGAL_CATALOG : LegalV29AcceptanceInventory.EXPECTED_CATALOG)) {
             incompatible();
         }
@@ -111,7 +111,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
         return new CatalogSnapshot(catalogFingerprint(), functionStates(), flywayStates());
     }
 
-    /** Exact ordered history since V27; the fourth row is a bounded incompatibility sentinel. */
+    /** Exact ordered history since V27; the sixth row is a bounded incompatibility sentinel. */
     private RuntimeVersion compatibleVersion() {
         List<FlywayState> actual = flywayStates();
         for (RuntimeVersion version : RuntimeVersion.values()) {
@@ -233,14 +233,14 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                                      FROM %s candidate
                                ) AS latest
                           FROM %s history
-                         WHERE history.version IN (?, ?, ?)
+                         WHERE history.version IN (?, ?, ?, ?, ?)
                             OR history.installed_rank >= (
                                 SELECT pg_catalog.min(first_v27.installed_rank)
                                   FROM %s first_v27
                                  WHERE first_v27.version = ?
                             )
                          ORDER BY history.installed_rank
-                         LIMIT 4
+                         LIMIT 6
                         """.formatted(history, history, history),
                 (resultSet, rowNumber) -> new FlywayState(
                         resultSet.getString("version"),
@@ -252,6 +252,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V28,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V29,
+                "30", "31",
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27);
     }
 
@@ -284,8 +285,15 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                 LegalV29AcceptanceInventory.FLYWAY_CHECKSUM_V29,
                 true,
                 version == RuntimeVersion.V29));
-        if(version==RuntimeVersion.V30) states.add(new FlywayState("30","SQL",
-                "V30__fotos_privadas_contextuales.sql",-1584212728,true,true));
+        if (version.ordinal() >= RuntimeVersion.V30.ordinal()) {
+            states.add(new FlywayState("30", "SQL", "V30__fotos_privadas_contextuales.sql",
+                    -1584212728, true, version == RuntimeVersion.V30));
+        }
+        // V31 adds an independent account table. Its legal and photo catalogs remain exactly V30.
+        if (version == RuntimeVersion.V31) {
+            states.add(new FlywayState("31", "SQL", "V31__reautenticacion_exportaciones.sql",
+                    518186831, true, true));
+        }
         return List.copyOf(states);
     }
 
@@ -641,7 +649,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             boolean success,
             boolean latest) { }
 
-    private enum RuntimeVersion { V27, V28, V29, V30 }
+    private enum RuntimeVersion { V27, V28, V29, V30, V31 }
 
     private record RelationTopologyState(
             String relation,

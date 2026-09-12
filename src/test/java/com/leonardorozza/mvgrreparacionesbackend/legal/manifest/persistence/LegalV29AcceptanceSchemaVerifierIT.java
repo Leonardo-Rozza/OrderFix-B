@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Frozen V29 catalog accreditation; each corruption is isolated by PostgreSQL rollback.
- * V30 compatibility is checked separately in its own public-schema PostgreSQL instance. */
+ * V30/V31 compatibility is checked separately in each public-schema PostgreSQL instance. */
 class LegalV29AcceptanceSchemaVerifierIT {
     private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("ordenfix_legal_v29_schema").withUsername("ordenfix").withPassword("ordenfix");
@@ -52,18 +52,19 @@ class LegalV29AcceptanceSchemaVerifierIT {
         new LegalV27SchemaVerifier(jdbc, "public").verify();
     }
 
-    @Test
-    void photosV30CatalogAndAllExistingConsumersAccreditThePublicSchema() {
+    @ParameterizedTest
+    @ValueSource(strings = {"30", "31"})
+    void photoAndReauthenticationMigrationsPreserveExistingLegalConsumers(String version) {
         try (var photos = new PostgreSQLContainer("postgres:16-alpine")
-                .withDatabaseName("ordenfix_legal_v30_schema")
+                .withDatabaseName("ordenfix_legal_compat_schema")
                 .withUsername("ordenfix").withPassword("ordenfix")) {
             photos.start();
             var photosSource = new DriverManagerDataSource(
                     photos.getJdbcUrl(), photos.getUsername(), photos.getPassword());
             var photosFlyway = Flyway.configure().dataSource(photosSource)
-                    .locations("classpath:db/migration").target("30").load();
+                    .locations("classpath:db/migration").target(version).load();
             photosFlyway.migrate();
-            assertThat(photosFlyway.info().current().getVersion().toString()).isEqualTo("30");
+            assertThat(photosFlyway.info().current().getVersion().toString()).isEqualTo(version);
             var photosJdbc = new JdbcTemplate(photosSource);
             var photosVerifier = new LegalV29AcceptanceSchemaVerifier(photosJdbc, "public");
             assertThat(photosVerifier.snapshot().catalog()).isEqualTo(LegalPrivatePhotoSchema.LEGAL_CATALOG);
@@ -72,6 +73,56 @@ class LegalV29AcceptanceSchemaVerifierIT {
             new LegalEditorialSchemaVerifier(photosJdbc, "public").verify();
             new LegalV27ImportSchemaVerifier(photosJdbc, "public").verify();
             new LegalV27SchemaVerifier(photosJdbc, "public").verify();
+            if (version.equals("31")) {
+                for (String requiredVersion : List.of("30", "31")) {
+                    for (String mutation : List.of(
+                            "UPDATE flyway_schema_history SET checksum = checksum + 1 WHERE version = '%s'",
+                            "UPDATE flyway_schema_history SET success = false WHERE version = '%s'",
+                            "UPDATE flyway_schema_history SET script = 'unexpected.sql' WHERE version = '%s'")) {
+                        assertDrift(mutation.formatted(requiredVersion), photosSource, photosJdbc, photosVerifier);
+                    }
+                }
+                assertDrift("DELETE FROM flyway_schema_history WHERE version = '30'",
+                        photosSource, photosJdbc, photosVerifier);
+                // The legal preflight owns only the legal/photo boundary, not the independent account table.
+                // A V30 history plus that unrelated table remains legal-compatible; application startup
+                // still validates and migrates the complete Flyway history before using reauthentication.
+                var historyTransaction = new TransactionTemplate(new DataSourceTransactionManager(photosSource));
+                historyTransaction.executeWithoutResult(status -> {
+                    photosJdbc.update("DELETE FROM flyway_schema_history WHERE version = '31'");
+                    photosVerifier.verify();
+                    new LegalV28AggregateSchemaVerifier(photosJdbc, "public").verify();
+                    new LegalEditorialSchemaVerifier(photosJdbc, "public").verify();
+                    new LegalV27ImportSchemaVerifier(photosJdbc, "public").verify();
+                    new LegalV27SchemaVerifier(photosJdbc, "public").verify();
+                    status.setRollbackOnly();
+                });
+                assertDrift("ALTER TABLE users ALTER COLUMN token_version DROP NOT NULL",
+                        photosSource, photosJdbc, photosVerifier);
+                var photoTransaction = new TransactionTemplate(new DataSourceTransactionManager(photosSource));
+                photoTransaction.executeWithoutResult(status -> {
+                    photosJdbc.execute("ALTER TABLE reparacion_fotos_privadas ENABLE ROW LEVEL SECURITY");
+                    for (Runnable consumer : List.<Runnable>of(photosVerifier::verify,
+                            () -> new LegalV28AggregateSchemaVerifier(photosJdbc, "public").verify(),
+                            () -> new LegalEditorialSchemaVerifier(photosJdbc, "public").verify(),
+                            () -> new LegalV27ImportSchemaVerifier(photosJdbc, "public").verify(),
+                            () -> new LegalV27SchemaVerifier(photosJdbc, "public").verify())) {
+                        assertThatThrownBy(consumer::run).isInstanceOf(IllegalStateException.class)
+                                .hasMessage("Esquema de fotos privadas incompatible");
+                    }
+                    status.setRollbackOnly();
+                });
+                photosVerifier.verify();
+                assertDrift("UPDATE flyway_schema_history SET installed_rank = 0 WHERE version = '31'",
+                        photosSource, photosJdbc, photosVerifier);
+                assertDrift("""
+                        INSERT INTO flyway_schema_history
+                            (installed_rank, version, description, type, script, checksum,
+                             installed_by, installed_on, execution_time, success)
+                        SELECT max(installed_rank) + 1, '32', 'unknown', 'SQL', 'V32__unknown.sql', 1,
+                               current_user, now(), 0, true FROM flyway_schema_history
+                        """, photosSource, photosJdbc, photosVerifier);
+            }
         }
     }
 
@@ -155,7 +206,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
                     FROM (SELECT max(installed_rank) AS rank FROM flyway_schema_history) previous
                     CROSS JOIN generate_series(1, 16) AS candidate(ordinal)
                     """);
-            assertThat(verifier.snapshot().flyway()).hasSize(4);
+            assertThat(verifier.snapshot().flyway()).hasSize(6);
             assertThatThrownBy(verifier::verify).isInstanceOf(LegalEditorialOperationalException.class);
             status.setRollbackOnly();
         });
@@ -181,26 +232,31 @@ class LegalV29AcceptanceSchemaVerifierIT {
     }
 
     private static void assertDrift(String mutation) {
-        var transaction = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        assertDrift(mutation, dataSource, jdbc, verifier);
+    }
+
+    private static void assertDrift(String mutation, DataSource source, JdbcTemplate selectedJdbc,
+                                    LegalV29AcceptanceSchemaVerifier selectedVerifier) {
+        var transaction = new TransactionTemplate(new DataSourceTransactionManager(source));
         transaction.executeWithoutResult(status -> {
-            jdbc.execute(mutation);
-            assertThatThrownBy(verifier::verify)
+            selectedJdbc.execute(mutation);
+            assertThatThrownBy(selectedVerifier::verify)
                     .isInstanceOfSatisfying(LegalEditorialOperationalException.class,
                             error -> assertThat(error.issue().code()).isEqualTo(LegalManifestIssueCode.SCHEMA_DRIFT));
-            assertThatThrownBy(() -> new LegalV28AggregateSchemaVerifier(jdbc, "public").verify())
+            assertThatThrownBy(() -> new LegalV28AggregateSchemaVerifier(selectedJdbc, "public").verify())
                     .isInstanceOf(LegalEditorialOperationalException.class);
-            assertThatThrownBy(() -> new LegalEditorialSchemaVerifier(jdbc, "public").verify())
+            assertThatThrownBy(() -> new LegalEditorialSchemaVerifier(selectedJdbc, "public").verify())
                     .isInstanceOf(LegalEditorialOperationalException.class);
-            assertThatThrownBy(() -> new LegalV27ImportSchemaVerifier(jdbc, "public").verify())
+            assertThatThrownBy(() -> new LegalV27ImportSchemaVerifier(selectedJdbc, "public").verify())
                     .isInstanceOfSatisfying(LegalImportOperationalException.class,
                             error -> assertThat(error.issue().code())
                                     .isEqualTo(LegalManifestIssueCode.IMPORT_DB_SCHEMA_INCOMPATIBLE));
-            assertThatThrownBy(() -> new LegalV27SchemaVerifier(jdbc, "public").verify())
+            assertThatThrownBy(() -> new LegalV27SchemaVerifier(selectedJdbc, "public").verify())
                     .isInstanceOfSatisfying(LegalDryRunOperationalException.class,
                             error -> assertThat(error.issue().code())
                                     .isEqualTo(LegalManifestIssueCode.DB_SCHEMA_INCOMPATIBLE));
             status.setRollbackOnly();
         });
-        verifier.verify();
+        selectedVerifier.verify();
     }
 }
