@@ -108,7 +108,7 @@ public class PresupuestoService {
     // ===== Lado cliente (público, vía código de seguimiento) =====
 
     public PresupuestoResponseDTO responderPorCodigo(String codigo, boolean aprobar) {
-        Reparacion reparacion = reparacionRepository.findByCodigoSeguimiento(codigo)
+        Reparacion reparacion = reparacionRepository.findByCodigoSeguimientoAndTallerActivoTrue(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("No encontramos una reparación con ese código."));
 
         Presupuesto presupuesto = presupuestoRepository

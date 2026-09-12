@@ -22,7 +22,7 @@ public class SeguimientoService {
 
     @Transactional(readOnly = true)
     public SeguimientoPublicoDTO consultar(String codigo) {
-        Reparacion r = reparacionRepository.findByCodigoSeguimiento(codigo)
+        Reparacion r = reparacionRepository.findByCodigoSeguimientoAndTallerActivoTrue(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("No encontramos una reparación con ese código."));
 
         return new SeguimientoPublicoDTO(

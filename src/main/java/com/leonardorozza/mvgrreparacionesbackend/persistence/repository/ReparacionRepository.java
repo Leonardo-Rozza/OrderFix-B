@@ -27,7 +27,8 @@ public interface ReparacionRepository extends JpaRepository<Reparacion, Long> {
     Optional<Reparacion> findByIdAndTallerIdForUpdate(
             @Param("id") Long id, @Param("tallerId") Long tallerId);
 
-    Optional<Reparacion> findByCodigoSeguimiento(String codigoSeguimiento);
+    /** Public codes only resolve while their workshop is active. */
+    Optional<Reparacion> findByCodigoSeguimientoAndTallerActivoTrue(String codigoSeguimiento);
 
     boolean existsByCodigoSeguimiento(String codigoSeguimiento);
 
