@@ -35,12 +35,12 @@ public class SmtpEmailSender implements EmailSender {
             log.info("Email transaccional omitido: mail.enabled=false.");
             return;
         }
-        JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
-        if (mailSender == null) {
-            log.warn("Email transaccional omitido: SMTP no configurado.");
-            return;
-        }
         try {
+            JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
+            if (mailSender == null) {
+                log.warn("Email transaccional omitido: SMTP no configurado.");
+                return;
+            }
             MimeMessage mensaje = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mensaje, "UTF-8");
             helper.setFrom(from);

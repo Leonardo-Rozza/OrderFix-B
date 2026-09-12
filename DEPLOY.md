@@ -94,11 +94,15 @@ cualquier `X-Forwarded-For` recibido del cliente y escribe uno confiable. De lo 
 
 ### Email, plan y runtime
 
+Ver [Email transaccional](docs/operations/email.md) para arranque local, evidencia de
+credenciales y dominio `orden-fix.com.ar`. La clave va en backend, nunca en `VITE_*`.
+SMTP usa STARTTLS obligatorio con validación de certificado y timeouts 5/10/10 segundos.
+
 | Variable | Obligatoria | Default | Para qué |
 |----------|:--:|---------|----------|
 | `MAIL_ENABLED` | ⬜ | `false` | Habilita emails reales; desactivado no registra destinatario ni contenido |
 | `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` | ⬜ | `smtp.resend.com` / `587` / `resend` | Conexión SMTP |
-| `MAIL_PASSWORD` | ✅ si mail está activo | — | API key/password SMTP |
+| `MAIL_PASSWORD` / `API_KEY_RESEND` | ✅ una si mail está activo | — | Clave SMTP; `MAIL_PASSWORD` tiene prioridad y admite referencia al segundo nombre en el archivo privado |
 | `MAIL_FROM` | ⬜ | `OrdenFix <onboarding@resend.dev>` | Remitente; usar dominio verificado en producción |
 | `FREE_MAX_REPARACIONES` | ⬜ | `25` | Tope mensual del plan FREE |
 

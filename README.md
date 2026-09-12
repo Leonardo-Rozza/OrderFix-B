@@ -7,6 +7,7 @@ seguimiento público para el cliente y suscripción **freemium (FREE/PRO)** con 
 > 📚 Documentación relacionada:
 > - **`FRONTEND_INTEGRATION.md`** — contrato completo de la API (request/response exactos, tipos TS).
 > - **`DEPLOY.md`** — guía de despliegue y variables de entorno.
+> - [Email transaccional](docs/operations/email.md) — Resend, arranque local explícito, DNS y cortes pendientes.
 > - [Fotos privadas](docs/operations/private-photos.md) — configuración de servidor, rol restringido,
 >   confirmación contextual, retención y borrado; activación apagada y proveedor real pendiente.
 >   El [plan y sus pruebas](docs/plans/2026-09-09-fotos-privadas-implementation.md) describe el recorrido.
@@ -236,7 +237,12 @@ export SPRING_CONFIG_IMPORT=optional:file:/ruta/segura/ordenfix-secrets.properti
 ./mvnw spring-boot:run        # levanta en http://localhost:8080
 ```
 
-No guardes secretos dentro de `src/main/resources`. El build excluye explícitamente
+Si ya existe el archivo local ignorado, `./scripts/run-local.sh` lo importa sólo para
+arrancar; también admite `./scripts/run-local.sh /ruta/privada/config.properties`.
+`SPRING_CONFIG_IMPORT` se configura en el entorno del proceso o del IDE, no como una
+línea dentro de `application.properties`. Ver [Email](docs/operations/email.md).
+
+Para nueva configuración, preferí secretos fuera de `src/main/resources`. El build excluye explícitamente
 `application-secret.properties`; `./mvnw clean verify` y el build Docker fallan si el recurso
 aparece en el JAR.
 `JWT_SECRET` debe tener al menos 32 bytes; `JWT_AUDIENCE` identifica a esta API y por defecto es

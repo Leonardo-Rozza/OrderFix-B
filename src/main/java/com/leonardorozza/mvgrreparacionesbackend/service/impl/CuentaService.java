@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.util.HtmlUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -61,15 +62,36 @@ public class CuentaService {
                 .filter(u -> Boolean.TRUE.equals(u.getActive()))
                 .ifPresentOrElse(user -> {
                     String token = emitirToken(user, TipoAuthToken.RESET_PASSWORD, resetHoras);
-                    String link = publicUrl + "/reset-password?token=" + token;
-                    emailSender.enviar(email, "Restablecer tu contraseña de OrdenFix",
-                            """
-                            <p>Hola %s,</p>
-                            <p>Pediste restablecer tu contraseña. Hacé clic en el link (vence en %d hora/s):</p>
-                            <p><a href="%s">%s</a></p>
-                            <p>Si no fuiste vos, ignorá este email: tu contraseña sigue igual.</p>
-                            """.formatted(user.getUsername(), resetHoras, link, link));
+                    enviarResetDespuesDelCommit(email, user.getUsername(), token);
                 }, () -> log.info("Olvido de contraseña para email no registrado o inactivo (no se revela)"));
+    }
+
+    private void enviarResetDespuesDelCommit(String recipient, String displayName, String token) {
+        // Unlike verification, this token belongs to the caller's transaction.
+        // Without its commit callback, no delivery can be accredited.
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            log.warn("Recuperación de contraseña omitida: COMMIT_CALLBACK_UNAVAILABLE.");
+            return;
+        }
+        String link = HtmlUtils.htmlEscape(publicUrl + "/reset-password?token=" + token);
+        String html = """
+                <p>Hola %s,</p>
+                <p>Pediste restablecer tu contraseña. Hacé clic en el link (vence en %d hora/s):</p>
+                <p><a href="%s">%s</a></p>
+                <p>Si no fuiste vos, ignorá este email: tu contraseña sigue igual.</p>
+                """.formatted(HtmlUtils.htmlEscape(displayName), resetHoras, link, link);
+        // Capture immutable delivery strings, never a managed User or AuthToken.
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() {
+                try {
+                    emailSender.enviar(recipient, "Restablecer tu contraseña de OrdenFix", html);
+                } catch (RuntimeException deliveryFailure) {
+                    // The token is already committed; preserve the generic account response.
+                    log.warn("Recuperación de contraseña omitida: DELIVERY_FAILED.");
+                }
+            }
+        });
     }
 
     @Transactional
