@@ -57,6 +57,14 @@ El proceso actual no expone una operación HTTP administrativa de limpieza ni m�
 
 ## Legacy y acreditación pendiente
 
+Decisión del titular del proyecto, 2026-09-12: las cuentas y datos históricos
+existentes son de prueba y pueden descartarse. Se preparará una limpieza del
+conjunto identificado en lugar de una migración legacy: base/cuentas y objetos
+concretos del proveedor, preservando esquemas y migraciones congelados. Todavía
+no se ejecutó esa limpieza. Borrar cuentas o referencias de base no demuestra
+borrado remoto, y esta decisión no fija la retención de futuros datos de clientes.
+
+
 Con el flag activo, crear/actualizar una reparación no puede introducir URLs legacy nuevas, duplicarlas ni cambiarles el momento. Se preserva la lectura de URLs ya existentes y su eliminación de la lista; no hay migración automática ni privatización/borrado remoto de esos objetos históricos. Con el flag apagado, permanece el comportamiento legacy anterior: el flag no es una medida para cerrar las referencias antiguas en el proveedor.
 
 El laboratorio local usa PostgreSQL y HTTP reales, con un almacenamiento de pruebas que conserva bytes. Los tests del adapter acreditan su contrato contra un servidor controlado; ninguno demuestra las ACL de una cuenta Cloudinary real. Queda pendiente staging con credenciales propias: confirmar tipo autenticado del asset, imposibilidad de acceso anónimo/original/derivados, lectura sólo vía backend y borrado real/reintento del objeto. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. No activar MP ni transporte de email para acreditar este flujo.

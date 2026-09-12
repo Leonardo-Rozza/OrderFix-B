@@ -4,6 +4,11 @@ Estado al 2026-09-12: procedimiento preparado, pendiente de habilitación operat
 No es un texto contractual ni una constancia de cierre. La referencia técnica del
 corte es `docs/plans/2026-09-12-taller-inactivo-enlaces-publicos-implementation.md`.
 
+Prioridad confirmada por el titular del proyecto el 2026-09-12: la identidad del
+prestador, su alta y los contactos definitivos se completarán al final, después de
+MP y Email. No bloquean los cortes técnicos independientes; sí siguen pendientes
+antes de anunciar este canal como operativo o habilitar la salida pública.
+
 ## Preparación del canal
 
 Antes de anunciarlo como atendido, registrar fuera del repositorio:
