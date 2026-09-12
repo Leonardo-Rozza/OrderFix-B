@@ -114,20 +114,20 @@ class ExportTests extends IntegrationTestBase {
                     .contains("Pendiente de cobro", "Excedente", "Requiere revisión");
 
             Row ordenParcial = filaPorValor(hojaOrdenes, 0, numeroOrden);
-            assertThat(valor(ordenParcial, 11)).isEqualTo("50000");
-            assertThat(valor(ordenParcial, 12)).isEqualTo("0");
+            assertThat(ordenParcial.getCell(11).getNumericCellValue()).isEqualTo(50000);
+            assertThat(ordenParcial.getCell(12).getNumericCellValue()).isEqualTo(0);
             assertThat(valor(ordenParcial, 13)).isEqualTo("No");
             assertThat(valor(ordenParcial, 14)).isEqualTo("PARCIAL");
 
             Row ordenLegacy = filaPorValor(hojaOrdenes, 0, numeroOrdenLegacy);
-            assertThat(valor(ordenLegacy, 11)).isEqualTo("0");
-            assertThat(valor(ordenLegacy, 12)).isEqualTo("10000");
+            assertThat(ordenLegacy.getCell(11).getNumericCellValue()).isEqualTo(0);
+            assertThat(ordenLegacy.getCell(12).getNumericCellValue()).isEqualTo(10000);
             assertThat(valor(ordenLegacy, 13)).isEqualTo("Sí");
             assertThat(valor(ordenLegacy, 14)).isEqualTo("PAGADO");
 
             Row ordenAnulada = filaPorValor(hojaOrdenes, 0, numeroOrdenAnulada);
-            assertThat(valor(ordenAnulada, 10)).isEqualTo("0");
-            assertThat(valor(ordenAnulada, 11)).isEqualTo("15000");
+            assertThat(ordenAnulada.getCell(10).getNumericCellValue()).isEqualTo(0);
+            assertThat(ordenAnulada.getCell(11).getNumericCellValue()).isEqualTo(15000);
             assertThat(valor(ordenAnulada, 14)).isEqualTo("SIN_COBRAR");
 
             Sheet hojaCobros = wb.getSheet("Cobros");

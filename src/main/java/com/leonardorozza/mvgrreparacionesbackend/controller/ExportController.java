@@ -26,7 +26,7 @@ public class ExportController {
 
     private final ExportService exportService;
 
-    @Operation(summary = "Descargar todos los datos del taller en un Excel (.xlsx): clientes, órdenes, cobros y presupuestos")
+    @Operation(summary = "Descargar un reporte operativo en Excel (.xlsx): clientes, órdenes, cobros y presupuestos")
     @GetMapping("/excel")
     public ResponseEntity<byte[]> excel() {
         byte[] xlsx = exportService.exportarExcel();
