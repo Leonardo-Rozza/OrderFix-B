@@ -58,6 +58,26 @@ la carga explícita por entorno/importación. Commit sin push.
 
 Referencia: [Cloudinary Admin API, ping](https://cloudinary.com/documentation/admin_api#ping).
 
+### Verificación real con imágenes sintéticas — 2026-09-12
+
+Después del ping se ejecutó `CloudinaryPrivatePhotoStorageLiveE2E` con el adapter
+productivo y la misma cuenta: **2 casos aprobados (PNG/JPEG)**. Ambos comprobaron
+carga autenticada, lectura de bytes originales, HTTP 401 anónimo al original y al
+intento de transformación, y borrado confirmado con lectura posterior `MISSING`.
+Los dos assets sintéticos quedaron eliminados; no se tocaron objetos históricos.
+
+La prueba exige `ORDENFIX_CLOUDINARY_LIVE_CHECK=synthetic-only` y la ruta privada
+`ORDENFIX_CLOUDINARY_CREDENTIALS_FILE`. Corre en un contexto que sólo construye el
+almacenamiento: no inicia la app, DB, schedulers, email ni MP y no cambia sus flags.
+Su nombre `*E2E` la excluye de las suites predeterminadas; debe seleccionarse
+explícitamente. El [acta de almacenamiento real](../plans/2026-09-12-cloudinary-almacenamiento-real-implementation.md)
+registra comandos, resultado, limpieza y límites para repetirla deliberadamente.
+
+Esto acredita el adapter con esa cuenta, no el recorrido desplegado ni la política
+de backups/CDN. El intento de transformación denegado no prueba una variante
+preexistente; el adapter no crea derivados. Continúan los requisitos operativos que
+siguen y la acreditación completa en staging.
+
 El indicador admite `true` o `false` exactos. La URL debe ser PostgreSQL TCP, sin fragmento; sus únicos parámetros admitidos son `sslmode`, `sslrootcert`, `sslcert`, `sslkey` y `sslpassword`. Usuario/contraseña no van en la URL. No hay fallback a credenciales de aplicación. Cada keyring contiene entre una y ocho versiones positivas, con claves distintas de 32 bytes; HMAC y AES tampoco pueden coincidir entre sí. Mantener las versiones históricas necesarias según la política de rotación legal existente. Usar fuentes de propiedades enumerables con los nombres canónicos anteriores; no asumir que cualquier alias de variable de entorno será descubierto como entrada del keyring.
 
 `photos.private.retention` debe representar segundos enteros, superar 15 minutos y no superar 315.360.000 segundos. Se guarda el vencimiento por intención al crearla; cambiar la configuración no recalcula filas existentes. La retención AES de metadata legal es independiente. `ordenfix.legal.idempotency.result-ttl` es opcional: predeterminado `PT25H`, mínimo 24 horas; no es el plazo de retención del archivo ni el vencimiento de la intención.
@@ -101,4 +121,4 @@ borrado remoto, y esta decisión no fija la retención de futuros datos de clien
 
 Con el flag activo, crear/actualizar una reparación no puede introducir URLs legacy nuevas, duplicarlas ni cambiarles el momento. Se preserva la lectura de URLs ya existentes y su eliminación de la lista; no hay migración automática ni privatización/borrado remoto de esos objetos históricos. Con el flag apagado, permanece el comportamiento legacy anterior: el flag no es una medida para cerrar las referencias antiguas en el proveedor.
 
-El laboratorio local usa PostgreSQL y HTTP reales, con un almacenamiento de pruebas que conserva bytes. Los tests del adapter acreditan su contrato contra un servidor controlado; ninguno demuestra las ACL de una cuenta Cloudinary real. Queda pendiente staging con credenciales propias: confirmar tipo autenticado del asset, imposibilidad de acceso anónimo/original/derivados, lectura sólo vía backend y borrado real/reintento del objeto. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. No activar MP ni transporte de email para acreditar este flujo.
+El laboratorio local de navegador usa PostgreSQL y HTTP reales con almacenamiento de pruebas que conserva bytes. Los tests predeterminados del adapter usan un servidor controlado. El ensayo opt-in del 2026-09-12 acredita por separado la cuenta Cloudinary real y el adapter productivo, según la sección anterior; sumar ambos resultados no equivale a una corrida navegador → HTTP → PostgreSQL → Cloudinary. Queda pendiente staging con el rol/configuración reales y el recorrido completo: acceso por taller, lectura sólo vía backend, denegación anónima, borrado y reintento. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. La ausencia del asset en Admin API no acredita destrucción de todas las copias de backup ni invalidación de cachés CDN. No activar MP ni transporte de email para acreditar este flujo.
