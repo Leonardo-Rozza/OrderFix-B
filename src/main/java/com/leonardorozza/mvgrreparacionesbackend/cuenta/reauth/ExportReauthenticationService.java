@@ -138,6 +138,22 @@ public class ExportReauthenticationService {
         }
     }
 
+    /** Verified binding for internal job replay; must share its writable transaction. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ExportSession authorize(String accessToken) {
+        requireWritableTransaction();
+        try {
+            LockedSession session = lockSession(accessToken);
+            return new ExportSession(session.user().getId(), session.user().getTaller().getId(),
+                    session.user().getTokenVersion(), session.hash());
+        } catch (UnauthorizedException | AccessDeniedException rejected) { throw rejected; }
+        catch (RuntimeException failure) { throw unavailable(); }
+    }
+
+    public record ExportSession(long userId, long tallerId, long tokenVersion, String sessionHash) {
+        @Override public String toString() { return "ExportSession[redacted]"; }
+    }
+
     private LockedSession lockSession(String accessToken) {
         if (accessToken == null || accessToken.isBlank() || accessToken.length() > MAX_ACCESS_TOKEN_LENGTH) {
             throw invalidSession();

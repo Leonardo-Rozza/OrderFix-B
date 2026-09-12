@@ -1,7 +1,7 @@
 # Exportación integral del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `bf9b6d9`, frontend `0d76348`.
-Estado: cortes A y B cerrados localmente. C–D pendientes; la exportación integral todavía no está disponible.
+Estado: cortes A, B y C cerrados localmente. D pendiente; la exportación integral todavía no está disponible para el usuario.
 
 ## Alcance acordado y secuencia
 
@@ -336,3 +336,161 @@ remotos permitidos, cifrado, vencimiento y limpieza**. D conecta reautenticació
 solicitud/consulta/descarga y pantalla, y protege o retira el Excel directo. La
 exportación integral para el usuario continúa pendiente de C/D; el cierre ADMIN
 permanece separado y MP conserva su pausa acordada.
+
+## Diseño del corte C — generación y conservación temporal
+
+Continuación autorizada el 2026-09-12. Baselines backend `f7beecd`, frontend `b2e625e`.
+Se aplica brainstorming sobre el alcance A–D ya acordado, sin abrir otra aprobación
+para las decisiones internas. Se elige una tabla PostgreSQL de trabajos con BYTEA
+cifrado temporal: permite confirmar prueba y pedido juntos, conservar una captura
+entre reintentos y eliminar contenido transaccionalmente. Archivos cifrados en disco
+requerirían reconciliar publicaciones/huérfanos entre dos sistemas; almacenamiento
+remoto requeriría otro proveedor. No se agregan esas dependencias en C. El escritor
+local de B conserva su contrato, pero el worker de C trabaja en memoria y no crea
+staging ni ZIP en claro en el filesystem.
+
+V32 agrega `cuenta_exportaciones`, sin alterar V27–V31. Identidad del trabajo UUID,
+actor/taller/versión y hash de sesión/clave de idempotencia; nunca JWT o contraseña.
+La reautenticación de A verifica criptográficamente y bloquea el usuario dentro de
+la transacción nueva READ_COMMITTED que crea el trabajo. Replay se resuelve antes
+de consumir otra prueba, ligado al actor y la misma sesión de solicitud. Otro pedido
+mientras existe uno activo del taller o capacidad global ocupada conserva la prueba.
+Estado, descarga y pertenencia se verifican desde la sesión actual del mismo titular
+y versión; otra sesión válida puede confirmar una descarga con su propia prueba.
+
+Estados: QUEUED, RUNNING, READY, FAILED, EXPIRED y REVOKED. Transacciones cortas
+serializan los cambios de trabajos mediante un advisory lock propio. Una reserva
+con UUID y vencimiento de cinco minutos identifica al worker; escrituras posteriores
+vuelven a comprobarla, por lo que un proceso atrasado no modifica al sucesor.
+Recuperación y errores temporales admiten hasta tres intentos. Después de guardar
+la primera captura cifrada se reutiliza exactamente; antes de ese commit se puede
+recapturar todo, sin combinar categorías de instantes diferentes. La captura usa
+el REQUIRES_NEW/REPEATABLE_READ de B. Nunca hay I/O de proveedor dentro de una
+transacción de trabajos.
+
+El ZIP contiene los archivos del snapshot y todas sus fotos pendientes elegibles,
+con nombres generados y verificación de bytes/MIME/SHA-256. Se reutiliza
+`PrivatePhotoService.content`, que relee estado/actor/retención después del acceso
+al proveedor. Las fotos deben seguir asociadas, pertenecer al taller y conservar
+reparación/autor coherentes. Se revalida el conjunto antes de READY y de devolver
+contenido; revocación o borrado veta el paquete, sin omitir una foto silenciosamente.
+La versión del manifiesto permanece `ordenfix-export/1`; el ZIP reemplaza el LEEME
+de preparación y marca archivos incorporados, conservando explícitas las exclusiones
+acordadas de B. «Completa» refiere a ese alcance, no a restauración de fotos vencidas,
+URLs legacy o secretos. No incluye aceptaciones personales de empleados.
+
+Snapshot y ZIP se cifran con AES-256-GCM y clave exclusiva de exportación. AAD liga
+versión del formato, tipo de artefacto, trabajo, taller y actor; nonce aleatorio por
+cifrado. Descifrado sólo devuelve bytes después de autenticar el tag completo.
+Header versionado y keyring permiten lectura de claves anteriores mientras existan
+trabajos vivos; no reutilizan claves PIN, fotos o metadata legal. Sin claves válidas
+la configuración opt-in falla sin imprimirlas.
+
+Capacidad inicial: cuatro trabajos activos globales y uno por taller, un worker
+reservado globalmente, hasta 256 fotos y 64 MiB de fotos, hasta 128 MiB de contenido
+de ZIP. Snapshot serializado hasta 72 MiB, cifrado hasta 80 MiB y archivo cifrado hasta 140 MiB. Son límites
+de contenido; cifrado/descifrado y JDBC consumen copias proporcionales en heap.
+El worker tiene presupuesto cooperativo de tres minutos, dentro de una reserva de
+cinco; no se promete un timeout duro de toda la JVM. Antes de producción D debe
+acreditar memoria/disco de PostgreSQL y rendimiento con la capacidad del despliegue.
+
+Caducidad máxima: 24 horas desde solicitud, acortada por la retención de sus fotos.
+Limpieza elimina ciphertext y referencias al vencer o revocar usuario/taller/versión,
+o quedar inválida una foto. Conservar metadata técnica de estado por siete días
+permite replay sin renovar autorizaciones; después se vuelve elegible para purga de
+hasta 100 filas por paso. Apagar el worker detiene la limpieza periódica; el acceso
+fuera de plazo sigue vetado y el borrado ocurre en una pasada exitosa. Credenciales
+de A vencidas se eliminan en lotes acotados. Borrado lógico en PostgreSQL no prueba
+purga inmediata de WAL/backups: sus retenciones y recuperación siguen en el gate
+operativo. No se borran datos de negocio ni fotos del proveedor en esta limpieza.
+
+La configuración `exports.jobs.enabled` queda ausente/deshabilitada. Al habilitarla,
+un executor dedicado de un hilo ejecuta un paso y limpieza cada 60 segundos después
+del paso anterior; no ocupa el scheduler de fotos. C agrega servicios internos,
+incluida recuperación autenticada del archivo con prueba DESCARGAR_EXPORTACION,
+sin controller, ruta, UI, URLs públicas, envío de email ni activación de proveedores.
+D implementará límites HTTP, pantalla y consumo por el usuario.
+
+Pruebas focalizadas: PostgreSQL/JWT/BCrypt para atomicidad, replay, consumo de descarga,
+roles/tenants/revocación, concurrencia, leases y recuperación; codec para manipulación
+criptográfica/contexto y ZIP exacto; fotos sintéticas sin proveedor real. La nueva
+versión de historia requiere compatibilidad legal y el integral después de esos
+casos por tratarse de un verificador compartido.
+
+Referencias: [locks PostgreSQL 16](https://www.postgresql.org/docs/16/explicit-locking.html)
+y [Cipher Java 21](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/javax/crypto/Cipher.html).
+
+
+La revisión de concurrencia de C incorporó locks compartidos sobre creadores,
+reparaciones y fotos hasta confirmar READY o recuperar el ZIP; una eliminación no
+puede intercalarse después del último chequeo y antes de ese commit. No se mantienen
+esos locks durante las lecturas remotas. Operación, configuración, rotación y límites
+en [exports.md](../operations/exports.md). El verificador legal reconoce la historia
+exacta V32 con checksum `-1414907070` y límite de siete filas incluida la fila testigo;
+no amplía su catálogo legal/fotos ni acredita el esquema independiente de trabajos.
+Flyway sigue acreditando/migrando el conjunto al arrancar.
+
+
+## Acta de validación del corte C
+
+Las pruebas focalizadas finales acreditan **45 unitarias y 133 de integración**, sin
+fallos, errores ni omisiones. C incorpora 38 unitarias nuevas y 22 casos de
+integración nuevos: trabajos (19), lectura de fotos con el protocolo real (2) e
+historia V32 (1). El resto es regresión A/B/legal y migración.
+
+- Codec y configuración: 30 + 8 casos; el escritor local B aporta 7 unitarias.
+- Trabajos PostgreSQL: solicitud/prueba atómicas, replay, permisos, descarga de un
+  solo uso, revocación, caducidad, capacidad, reintentos y recuperación de reservas.
+- Una prueba concurrente bloquea el commit READY y acredita que el borrado de la
+  foto espera los locks compartidos. Otra deja un worker atrasado durante el acceso
+  remoto y comprueba que no puede alterar el archivo del sucesor.
+- Fotos: se agrega el recorrido real de autorización privada con almacenamiento
+  sintético, más revocación entre captura y lectura. No se llama a Cloudinary.
+
+Evidencia focalizada en `/private/tmp/ordenfix-export-c-focused.log`,
+`/private/tmp/ordenfix-export-c-corrected.log` y
+`/private/tmp/ordenfix-export-c-config.log`. Los primeros intentos detectaron una
+clave HMAC duplicada en la fixture, expectativas anteriores de versión/fila testigo
+y la llamada normal de inicialización de Spring en una verificación del mock;
+se corrigieron y se repitieron los grupos afectados completos.
+
+El integral `clean verify` es necesario en C porque reconocer V32 extiende un
+verificador compartido. Durante esa corrida se detectaron otras dos expectativas
+históricas de versión actual 31 (historial de aceptación y lectura de requisitos);
+se actualizan a 32 y se mantienen todas las verificaciones de evidencia histórica.
+No cambió el comportamiento productivo después de iniciar el integral; sólo esas
+expectativas y el comentario de la séptima fila testigo.
+
+El comando `./mvnw -B clean verify` terminó en **28:03 min**: **7.537 unitarias sin
+fallos** y **1.446 casos de integración con dos fallos**, únicamente las expectativas
+V31/V32 anteriores; no hubo errores ni omisiones. El log íntegro queda en
+`/private/tmp/ordenfix-export-c-clean-verify.log` y el resumen por suite, sin
+propiedades ni datos de pruebas, en `/private/tmp/ordenfix-export-c-integral-summary.json`.
+No se presenta esa corrida como un `clean verify` verde. La corrección no modifica
+comportamiento productivo, por lo que se reejecutan ambas clases históricas completas
+con `verify` y la comprobación de empaquetado, sin repetir todo el integral.
+
+La revalidación final usa `./mvnw -B
+-Dtest=ExportArtifactCodecTest,ExportJobConfigurationTest
+-Dit.test=LegalAcceptanceHistoryReaderIT,LegalPrivateRequirementsReadServiceIT verify`
+(argumentos en una misma línea), con el mismo Corretto 21.0.10 y PostgreSQL 16
+Testcontainers. **BUILD SUCCESS en 02:55 min: 38 unitarias y 41 de integración**
+(18 del historial y 23 de requisitos), sin fallos, errores ni omisiones. Pasó además
+`verify-no-secret-properties-in-jar`. Evidencia en
+`/private/tmp/ordenfix-export-c-history-final.log`.
+
+La evidencia consolidada cubre **7.537 unitarias y 1.446 casos de integración distintos**,
+con los dos casos corregidos y sus clases completas revalidados. Ese total combina
+el integral y la revalidación focalizada; no representa otra corrida completa.
+V27–V31 permanecen idénticas a los baselines. `git diff --check` aprobado en ambos
+repositorios; frontend sólo registra seguimiento documental y conserva los 77
+archivos ajenos no versionados. No se modificaron secretos, configuración real,
+cuentas ni bases productivas; no hubo llamadas a MP/Cloudinary ni envío de correo.
+
+**C queda cerrado localmente**, con un commit atómico backend y otro documental
+frontend, sin push ni merge. El worker sigue deshabilitado por defecto y no existe
+un endpoint o pantalla de exportación integral. El siguiente corte de esta secuencia
+es **D: API, pantalla, límites HTTP, confirmación nueva por descarga y protección o
+retiro del Excel directo**. El gate de capacidad del despliegue, la operación de
+retención/recuperación y los pendientes independientes de lanzamiento permanecen
+abiertos; C no habilita por sí solo publicación ni entrega al usuario.

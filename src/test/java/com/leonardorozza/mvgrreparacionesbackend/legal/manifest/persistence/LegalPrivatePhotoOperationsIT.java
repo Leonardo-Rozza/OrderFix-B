@@ -1,6 +1,10 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportArtifactCodec;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPackageException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPhotoReader;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.WorkshopExportSnapshotService;
 import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.*;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.*;
 import com.leonardorozza.mvgrreparacionesbackend.photos.*;
@@ -10,6 +14,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.env.MockEnvironment;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -17,6 +22,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.zip.ZipInputStream;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.*;
@@ -112,6 +120,54 @@ class LegalPrivatePhotoOperationsIT {
     long count(String table){return owner.queryForObject("SELECT count(*) FROM public."+table,Long.class);}
     String state(UUID id){return owner.queryForObject("SELECT estado FROM public.reparacion_fotos_privadas WHERE id=?",String.class,id);}
     static void code(Throwable failure,String code){assertThat(failure).isInstanceOf(PrivatePhotoException.class);assertThat(((PrivatePhotoException)failure).code()).isEqualTo(code);}
+
+    @Test void anAuthorizedPhotoFromTheRealProtocolIsIncludedInTheEncryptedExport() throws Exception {
+        owner.update("UPDATE users SET email_verificado=true WHERE id=?",actor.userId());
+        var photo=associate();
+        var snapshots=new WorkshopExportSnapshotService(owner,new DataSourceTransactionManager(owner.getDataSource()));
+        var snapshot=snapshots.capture(actor.userId(),actor.tallerId(),actor.tokenVersion());
+        assertThat(snapshot.pendingPhotos()).hasSize(1);
+        assertThat(snapshot.pendingPhotos().getFirst().id()).isEqualTo(photo.id());
+        var checkpoints=new AtomicInteger();
+        var files=new ExportPhotoReader(()->service).read(snapshot,actor.tokenVersion(),checkpoints::incrementAndGet);
+        var codec=new ExportArtifactCodec(Map.of(1,Base64.getEncoder().encodeToString(new byte[32])),1);
+        var context=new ExportArtifactCodec.Context(UUID.randomUUID(),actor.tallerId(),actor.userId());
+        byte[] encrypted=codec.archive(context,snapshot,files);
+        Map<String,byte[]> entries=new HashMap<>();
+        try(var zip=new ZipInputStream(new ByteArrayInputStream(codec.decryptArchive(context,encrypted)),StandardCharsets.UTF_8)) {
+            java.util.zip.ZipEntry entry;
+            while((entry=zip.getNextEntry())!=null) {assertThat(entries.put(entry.getName(),zip.readAllBytes())).isNull();zip.closeEntry();}
+        }
+        String photoPath="archivos/fotos/"+photo.id()+".png";
+        assertThat(entries.get(photoPath)).containsExactly(image);
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var manifest=mapper.readTree(entries.get("manifest.json"));
+        assertThat(manifest.path("exportacion_integral_completa").asBoolean()).isTrue();
+        assertThat(manifest.path("archivos_pendientes").isEmpty()).isTrue();
+        assertThat(mapper.readTree(entries.get("datos/fotos_privadas.json")).get(0).path("archivo_estado").asText()).isEqualTo("INCLUIDA");
+        assertThat(checkpoints.get()).isGreaterThanOrEqualTo(2);
+        assertThat(storage.uploads.get()).isEqualTo(1);
+        assertThat(state(photo.id())).isEqualTo("ASOCIADA");
+    }
+
+    @Test void deletingAPhotoAfterTheSnapshotVetoesExportThroughTheRealReadProtocol() throws Exception {
+        owner.update("UPDATE users SET email_verificado=true WHERE id=?",actor.userId());
+        var photo=associate();
+        var snapshots=new WorkshopExportSnapshotService(owner,new DataSourceTransactionManager(owner.getDataSource()));
+        var snapshot=snapshots.capture(actor.userId(),actor.tallerId(),actor.tokenVersion());
+        assertThat(snapshot.pendingPhotos()).hasSize(1);
+        service.delete(principal(employee),repair,photo.id());
+        assertThat(state(photo.id())).isEqualTo("ELIMINADA");
+        assertThat(storage.assets).isEmpty();
+        var codec=new ExportArtifactCodec(Map.of(1,Base64.getEncoder().encodeToString(new byte[32])),1);
+        var context=new ExportArtifactCodec.Context(UUID.randomUUID(),actor.tallerId(),actor.userId());
+        var artifact=new java.util.concurrent.atomic.AtomicReference<byte[]>();
+        assertThatThrownBy(()-> {
+            var files=new ExportPhotoReader(()->service).read(snapshot,actor.tokenVersion(),()->{});
+            artifact.set(codec.archive(context,snapshot,files));
+        }).isInstanceOf(ExportPackageException.class).hasNoCause();
+        assertThat(artifact.get()).isNull();
+    }
 
     @Test void declarationAndIntentionCommitTogetherAndOnlyFinalizeAssociates() throws Exception {
         var intention=create();assertThat(intention.estado()).isEqualTo("AUTORIZADA");

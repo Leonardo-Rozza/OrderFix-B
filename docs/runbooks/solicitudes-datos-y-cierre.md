@@ -90,10 +90,13 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   consumida junto con el efecto en la misma transacción. El corte B agrega captura
   consistente y escritura de un paquete local privado con JSON, textos legales
   propios y QR. Su manifiesto declara entrega incompleta y fotos remotas pendientes;
-  no tiene todavía trabajo durable, cifrado, vencimiento, API ni descarga para el
-  usuario. No se debe enviar ese staging a una persona ni marcar su pedido resuelto.
-  No habilita a soporte a pedir una contraseña por correo. C/D completan generación
-  temporal y entrega autorizada. La secuencia se documenta en el
+  no se debe enviar ese staging a una persona ni marcar su pedido resuelto.
+  El corte C agrega el trabajo durable, ZIP con fotos permitidas, cifrado y
+  vencimiento/limpieza en PostgreSQL. Permanece deshabilitado por defecto y ofrece
+  sólo servicios internos; D debe conectar API, pantalla y descarga autorizada.
+  El runbook [de exportaciones](../operations/exports.md) detalla sus límites y
+  recuperación. No habilita a soporte a pedir una contraseña por correo ni acredita
+  atención o entrega real de solicitudes. La secuencia se documenta en el
   [plan de exportación integral](../plans/2026-09-12-exportacion-integral-implementation.md).
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
   Un cierre deberá comprobar almacenamiento, retenciones y restauración de backups

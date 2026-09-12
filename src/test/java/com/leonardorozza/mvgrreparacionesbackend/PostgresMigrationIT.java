@@ -103,7 +103,7 @@ class PostgresMigrationIT {
                 .map(Object::toString))
                 .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("31");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("32");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -306,7 +306,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV31ConservaLaEstructuraLegalFotosYReautenticacionesSinDatosSemilla() {
+    void latestV32ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -327,7 +327,7 @@ class PostgresMigrationIT {
                 """, String.class);
         assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
         assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);
-        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones"));
+        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones", "cuenta_exportaciones"));
 
         var tiposRepresentativos = jdbcTemplate.queryForList("""
                 SELECT table_name || '.' || column_name || ':' || data_type

@@ -111,7 +111,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
         return new CatalogSnapshot(catalogFingerprint(), functionStates(), flywayStates());
     }
 
-    /** Exact ordered history since V27; the sixth row is a bounded incompatibility sentinel. */
+    /** Exact ordered history since V27; the seventh row is a bounded incompatibility sentinel. */
     private RuntimeVersion compatibleVersion() {
         List<FlywayState> actual = flywayStates();
         for (RuntimeVersion version : RuntimeVersion.values()) {
@@ -233,14 +233,14 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                                      FROM %s candidate
                                ) AS latest
                           FROM %s history
-                         WHERE history.version IN (?, ?, ?, ?, ?)
+                         WHERE history.version IN (?, ?, ?, ?, ?, ?)
                             OR history.installed_rank >= (
                                 SELECT pg_catalog.min(first_v27.installed_rank)
                                   FROM %s first_v27
                                  WHERE first_v27.version = ?
                             )
                          ORDER BY history.installed_rank
-                         LIMIT 6
+                         LIMIT 7
                         """.formatted(history, history, history),
                 (resultSet, rowNumber) -> new FlywayState(
                         resultSet.getString("version"),
@@ -252,7 +252,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V28,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V29,
-                "30", "31",
+                "30", "31", "32",
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27);
     }
 
@@ -290,9 +290,12 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                     -1584212728, true, version == RuntimeVersion.V30));
         }
         // V31 adds an independent account table. Its legal and photo catalogs remain exactly V30.
-        if (version == RuntimeVersion.V31) {
+        if (version.ordinal() >= RuntimeVersion.V31.ordinal()) {
             states.add(new FlywayState("31", "SQL", "V31__reautenticacion_exportaciones.sql",
-                    518186831, true, true));
+                    518186831, true, version == RuntimeVersion.V31));
+        }
+        if (version == RuntimeVersion.V32) {
+            states.add(new FlywayState("32", "SQL", "V32__trabajos_exportacion_temporal.sql", -1414907070, true, true));
         }
         return List.copyOf(states);
     }
@@ -649,7 +652,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             boolean success,
             boolean latest) { }
 
-    private enum RuntimeVersion { V27, V28, V29, V30, V31 }
+    private enum RuntimeVersion { V27, V28, V29, V30, V31, V32 }
 
     private record RelationTopologyState(
             String relation,

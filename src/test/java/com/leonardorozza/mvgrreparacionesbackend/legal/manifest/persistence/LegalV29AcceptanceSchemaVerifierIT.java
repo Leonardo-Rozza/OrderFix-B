@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Frozen V29 catalog accreditation; each corruption is isolated by PostgreSQL rollback.
- * V30/V31 compatibility is checked separately in each public-schema PostgreSQL instance. */
+ * V30/V31/V32 compatibility is checked separately in each public-schema PostgreSQL instance. */
 class LegalV29AcceptanceSchemaVerifierIT {
     private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("ordenfix_legal_v29_schema").withUsername("ordenfix").withPassword("ordenfix");
@@ -53,7 +53,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"30", "31"})
+    @ValueSource(strings = {"30", "31", "32"})
     void photoAndReauthenticationMigrationsPreserveExistingLegalConsumers(String version) {
         try (var photos = new PostgreSQLContainer("postgres:16-alpine")
                 .withDatabaseName("ordenfix_legal_compat_schema")
@@ -73,8 +73,8 @@ class LegalV29AcceptanceSchemaVerifierIT {
             new LegalEditorialSchemaVerifier(photosJdbc, "public").verify();
             new LegalV27ImportSchemaVerifier(photosJdbc, "public").verify();
             new LegalV27SchemaVerifier(photosJdbc, "public").verify();
-            if (version.equals("31")) {
-                for (String requiredVersion : List.of("30", "31")) {
+            if (!version.equals("30")) {
+                for (String requiredVersion : version.equals("32") ? List.of("30", "31", "32") : List.of("30", "31")) {
                     for (String mutation : List.of(
                             "UPDATE flyway_schema_history SET checksum = checksum + 1 WHERE version = '%s'",
                             "UPDATE flyway_schema_history SET success = false WHERE version = '%s'",
@@ -85,11 +85,11 @@ class LegalV29AcceptanceSchemaVerifierIT {
                 assertDrift("DELETE FROM flyway_schema_history WHERE version = '30'",
                         photosSource, photosJdbc, photosVerifier);
                 // The legal preflight owns only the legal/photo boundary, not the independent account table.
-                // A V30 history plus that unrelated table remains legal-compatible; application startup
+                // The previous exact history plus an unrelated account table stays compatible; application startup
                 // still validates and migrates the complete Flyway history before using reauthentication.
                 var historyTransaction = new TransactionTemplate(new DataSourceTransactionManager(photosSource));
                 historyTransaction.executeWithoutResult(status -> {
-                    photosJdbc.update("DELETE FROM flyway_schema_history WHERE version = '31'");
+                    photosJdbc.update("DELETE FROM flyway_schema_history WHERE version = ?", version);
                     photosVerifier.verify();
                     new LegalV28AggregateSchemaVerifier(photosJdbc, "public").verify();
                     new LegalEditorialSchemaVerifier(photosJdbc, "public").verify();
@@ -119,7 +119,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
                         INSERT INTO flyway_schema_history
                             (installed_rank, version, description, type, script, checksum,
                              installed_by, installed_on, execution_time, success)
-                        SELECT max(installed_rank) + 1, '32', 'unknown', 'SQL', 'V32__unknown.sql', 1,
+                        SELECT max(installed_rank) + 1, '33', 'unknown', 'SQL', 'V33__unknown.sql', 1,
                                current_user, now(), 0, true FROM flyway_schema_history
                         """, photosSource, photosJdbc, photosVerifier);
             }
@@ -206,7 +206,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
                     FROM (SELECT max(installed_rank) AS rank FROM flyway_schema_history) previous
                     CROSS JOIN generate_series(1, 16) AS candidate(ordinal)
                     """);
-            assertThat(verifier.snapshot().flyway()).hasSize(6);
+            assertThat(verifier.snapshot().flyway()).hasSize(7);
             assertThatThrownBy(verifier::verify).isInstanceOf(LegalEditorialOperationalException.class);
             status.setRollbackOnly();
         });
