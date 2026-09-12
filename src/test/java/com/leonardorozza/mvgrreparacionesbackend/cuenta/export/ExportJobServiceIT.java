@@ -246,6 +246,43 @@ class ExportJobServiceIT {
         } finally { jdbc.execute("DROP TRIGGER export_publish_barrier_fixture ON cuenta_exportaciones"); jdbc.execute("DROP FUNCTION export_publish_barrier_fixture()"); }
         jobs.cleanup(); assertPurged(job.id(),"REVOKED");
     }
+    @Test void latestRecoversOnlyTheCurrentOwnersJobAcrossSessions() {
+        String access=token(own);
+        assertThat(jobs.latest(access)).isEmpty();
+        var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());
+        assertThat(jobs.latest(token(own))).contains(job);
+        assertThat(jobs.latest(token(actor()))).isEmpty();
+        jobs.runNext();
+        assertThat(jobs.latest(access).orElseThrow().state()).isEqualTo("READY");
+        jdbc.update("UPDATE users SET token_version=1 WHERE id=?",own.user());
+        assertThat(jobs.latest(token(own))).isEmpty();
+    }
+    @Test void invalidProofCannotReadTheArchiveByteaOrStartDecryption() {
+        String access=token(own);
+        var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID()); jobs.runNext();
+        var observedJdbc=spy(jdbc); var observedCodec=spy(codec);
+        var guarded=new ExportJobService(observedJdbc,manager,reauth,snapshots,observedCodec,new ExportPhotoReader(()->null));
+        assertThatThrownBy(()->guarded.authorizedArchive(access,"A".repeat(43),job.id()))
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException.class);
+        verify(observedJdbc,never()).queryForObject(eq("SELECT archive_cipher FROM public.cuenta_exportaciones WHERE id=?"),eq(byte[].class),eq(job.id()));
+        verify(observedCodec,never()).decryptArchive(any(),any());
+    }
+    @Test void sessionIsRecheckedAfterDecryptionAndFailedDeliveryRollsBackProof() {
+        String access=token(own);
+        var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID()); jobs.runNext();
+        String proof=grant(access,DESCARGAR_EXPORTACION); var observed=spy(codec);
+        var plaintextSeen=new java.util.concurrent.atomic.AtomicReference<byte[]>();
+        doAnswer(invocation->{
+            byte[] plaintext=(byte[])invocation.callRealMethod(); plaintextSeen.set(plaintext);
+            jdbc.update("UPDATE users SET token_version=1 WHERE id=?",own.user());
+            return plaintext;
+        }).when(observed).decryptArchive(any(),any());
+        var guarded=new ExportJobService(jdbc,manager,reauth,snapshots,observed,new ExportPhotoReader(()->null));
+        assertThatThrownBy(()->guarded.authorizedArchive(access,proof,job.id()))
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.exceptions.UnauthorizedException.class);
+        assertUsed(proof,false);
+        assertThat(plaintextSeen.get()).isNotEmpty().containsOnly((byte)0);
+    }
     private void awaitDatabaseWait(String query) throws Exception {
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
         while(System.nanoTime()<deadline) {

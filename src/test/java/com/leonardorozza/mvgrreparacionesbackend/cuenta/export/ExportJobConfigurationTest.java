@@ -40,8 +40,30 @@ class ExportJobConfigurationTest {
                     verify(jdbc).afterPropertiesSet(); verifyNoMoreInteractions(jdbc);
                 });
     }
+    @Test void workerDoesNotLoadAnArtifactWhileTheHttpResponseOwnsCapacity() {
+        var permit=new ExportWorkPermit();
+        var jobs=mock(ExportJobService.class);
+        try(var worker=new ExportJobConfiguration.Worker(jobs,permit)) {
+            var download=permit.tryAcquire();
+            assertThat(download).isNotNull();
+            worker.runPass(); verifyNoInteractions(jobs);
+            download.close(); download.close();
+            worker.runPass(); verify(jobs).runNext();
+            try(var next=permit.tryAcquire()) {
+                assertThat(next).isNotNull(); assertThat(permit.tryAcquire()).isNull();
+            }
+        }
+    }
+    @Test void failedWorkerReleasesCapacityForTheNextDownload() {
+        var permit=new ExportWorkPermit(); var jobs=mock(ExportJobService.class);
+        when(jobs.runNext()).thenThrow(new IllegalStateException("synthetic worker failure"));
+        try(var worker=new ExportJobConfiguration.Worker(jobs,permit)) {
+            worker.runPass(); verify(jobs).runNext();
+            try(var download=permit.tryAcquire()) { assertThat(download).isNotNull(); }
+        }
+    }
     private ApplicationContextRunner dependencies(JdbcTemplate jdbc) {
-        return runner.withBean(JdbcTemplate.class,()->jdbc)
+        return runner.withBean(ExportWorkPermit.class,ExportWorkPermit::new).withBean(JdbcTemplate.class,()->jdbc)
                 .withBean(PlatformTransactionManager.class,()->mock(PlatformTransactionManager.class))
                 .withBean(ExportReauthenticationService.class,()->mock(ExportReauthenticationService.class))
                 .withBean(WorkshopExportSnapshotService.class,()->mock(WorkshopExportSnapshotService.class));

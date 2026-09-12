@@ -2,6 +2,8 @@ package com.leonardorozza.mvgrreparacionesbackend.flows;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
+import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
+import com.leonardorozza.mvgrreparacionesbackend.service.impl.ExportService;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
@@ -16,14 +18,14 @@ import java.util.Map;
 import java.util.StringJoiner;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class ExportTests extends IntegrationTestBase {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired private ExportService exportService;
 
     @Test
     void adminExportaExcelConSusDatosYSoloLosSuyos() throws Exception {
@@ -90,10 +92,12 @@ class ExportTests extends IntegrationTestBase {
                 "equipoMarca", "Xiaomi", "equipoModelo", "Note12",
                 "descripcionProblema", "no enciende"))).andExpect(status().isCreated());
 
-        byte[] xlsx = authGet("/api/export/excel", a)
-                .andExpect(status().isOk())
-                .andExpect(header().string("Content-Disposition", containsString(".xlsx")))
-                .andReturn().getResponse().getContentAsByteArray();
+        authGet("/api/export/excel", a).andExpect(status().isGone());
+        // This H2 regression covers workbook content. The protected HTTP/reauth flow runs on PostgreSQL in ExportHttpIT.
+        byte[] xlsx;
+        TenantContext.setTallerId(jdbcTemplate.queryForObject("SELECT taller_id FROM users WHERE email=?",Long.class,"exp-a@test.com"));
+        try { xlsx=exportService.exportarExcel(); }
+        finally { TenantContext.clear(); }
 
         try (XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(xlsx))) {
             assertThat(wb.getSheet("Clientes")).isNotNull();

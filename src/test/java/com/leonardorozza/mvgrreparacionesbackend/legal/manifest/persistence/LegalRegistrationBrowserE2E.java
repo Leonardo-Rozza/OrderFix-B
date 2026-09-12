@@ -12,8 +12,6 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalIdempo
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoActoLegal;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.RegisterRequestDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.LegacyRegistrationAccountWriter;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -264,7 +262,7 @@ class LegalRegistrationBrowserE2E {
             assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=? AND role='ADMIN'", Long.class,
                     identity.tallerId())).containsExactly(identity.userId());
             if (scenario.equals("employees")) {
-                verifyEmployee(entry, project, identity, otherWorkshop, report);
+                verifyEmployee(entry, project, identity, otherWorkshop);
                 assertThat(employees.add(positiveId(entry.path("employee"), "id"))).isTrue();
                 assertThat(clients.add(positiveId(entry.path("client"), "id"))).isTrue();
             } else if (scenario.equals("collections")) {
@@ -555,7 +553,7 @@ class LegalRegistrationBrowserE2E {
                 (String) row.get("user_row"), (String) row.get("workshop_row"));
     }
 
-    private void verifyEmployee(JsonNode entry, String project, Identity owner, BaselineAccount otherWorkshop, Path report) throws IOException {
+    private void verifyEmployee(JsonNode entry, String project, Identity owner, BaselineAccount otherWorkshop) {
         assertThat(positiveId(entry, "ownerId")).isEqualTo(owner.userId());
         assertThat(positiveId(entry, "otherOwnerId")).isEqualTo(otherWorkshop.userId());
         assertThat(owner.tallerId()).isNotEqualTo(otherWorkshop.tallerId());
@@ -589,37 +587,8 @@ class LegalRegistrationBrowserE2E {
         assertThat(saved.get("telefono")).isEqualTo(project.equals("desktop") ? "1155000101" : "1155000102");
         assertThat(saved.get("email")).isNull(); assertThat(saved.get("direccion")).isNull();
         assertThat(fixture.owner.queryForList("SELECT id FROM clientes WHERE taller_id=?", Long.class, owner.tallerId())).containsExactly(clientId);
-        verifyOperationalDownload(Path.of(report + "." + project + ".xlsx"), owner.tallerId(), clientId, saved);
-    }
-
-    private void verifyOperationalDownload(Path download, long workshopId, long clientId, Map<String, Object> saved) throws IOException {
-        // Bytes were downloaded by the real browser through the ADMIN UI, never generated in this assertion.
-        assertThat(download).isRegularFile();
-        assertThat(Files.size(download)).isBetween(1L, 1_048_576L);
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM clientes WHERE taller_id<>?", Long.class, workshopId))
-                .as("foreign client rows exist, so isolation is not an empty-database assertion").isPositive();
-        try (var input = Files.newInputStream(download); var workbook = new XSSFWorkbook(input)) {
-            assertThat(workbook.getNumberOfSheets()).isEqualTo(4);
-            assertThat(List.of(workbook.getSheetName(0), workbook.getSheetName(1), workbook.getSheetName(2), workbook.getSheetName(3)))
-                    .containsExactly("Clientes", "Órdenes", "Cobros", "Presupuestos");
-            var clients = workbook.getSheet("Clientes");
-            assertThat(clients.getPhysicalNumberOfRows()).isEqualTo(2);
-            var row = clients.getRow(1);
-            assertThat((Object) row).isNotNull();
-            assertThat(row.getCell(0).getCellType()).isEqualTo(CellType.NUMERIC);
-            assertThat(row.getCell(0).getNumericCellValue()).isEqualTo((double) clientId);
-            assertThat(row.getCell(1).getStringCellValue()).isEqualTo(saved.get("nombre"));
-            assertThat(row.getCell(2).getStringCellValue()).isEqualTo(saved.get("apellido"));
-            assertThat(row.getCell(3).getCellType()).isEqualTo(CellType.STRING);
-            assertThat(row.getCell(3).getStringCellValue()).isEqualTo(saved.get("telefono"));
-            assertThat(row.getCell(4).getCellType()).isEqualTo(CellType.BLANK);
-            assertThat(row.getCell(5).getCellType()).isEqualTo(CellType.BLANK);
-            for (String sheet : List.of("Órdenes", "Cobros", "Presupuestos")) {
-                assertThat(workbook.getSheet(sheet).getPhysicalNumberOfRows()).as("no foreign rows in %s", sheet).isEqualTo(1);
-            }
-            assertThat(workbook.getProperties().getCoreProperties().getDescription())
-                    .contains("No incluye todas las categorías de datos ni archivos del taller", "sin validez fiscal");
-        }
+        // Protected ZIP/XLSX bytes and isolation are covered by ExportBrowserE2E.
+        // This employee gate verifies the protected UI entry and retired legacy GET.
     }
 
     private static long positiveId(JsonNode node, String field) {

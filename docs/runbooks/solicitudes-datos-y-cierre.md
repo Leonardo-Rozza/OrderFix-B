@@ -82,8 +82,8 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
 - Este runbook no ofrece SQL para desactivar/eliminar talleres. El cambio de la
   bandera en las pruebas es una fixture descartable, no un procedimiento productivo.
 - `/api/export/excel` es una exportación operativa ADMIN de clientes, órdenes,
-  cobros y presupuestos. No incluye todas las categorías/archivos ni incorpora la
-  reautenticación y entrega previstas para la exportación integral. No sirve como
+  cobros y presupuestos. D exige contraseña actual mediante POST; el GET anterior
+  responde 410. No incluye todas las categorías/archivos. No sirve como
   respuesta automática a una solicitud individual de un empleado o cliente.
 - El corte A de exportación agrega reautenticación interna ADMIN con contraseña
   actual y email verificado: prueba temporal de un solo uso ligada a la sesión,
@@ -92,8 +92,9 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   propios y QR. Su manifiesto declara entrega incompleta y fotos remotas pendientes;
   no se debe enviar ese staging a una persona ni marcar su pedido resuelto.
   El corte C agrega el trabajo durable, ZIP con fotos permitidas, cifrado y
-  vencimiento/limpieza en PostgreSQL. Permanece deshabilitado por defecto y ofrece
-  sólo servicios internos; D debe conectar API, pantalla y descarga autorizada.
+  vencimiento/limpieza en PostgreSQL. La generación permanece deshabilitada por
+  defecto y sólo se activa con configuración explícita. D conecta API, pantalla
+  ADMIN y descarga con una nueva prueba por archivo, también para el Excel.
   El runbook [de exportaciones](../operations/exports.md) detalla sus límites y
   recuperación. No habilita a soporte a pedir una contraseña por correo ni acredita
   atención o entrega real de solicitudes. La secuencia se documenta en el
@@ -137,8 +138,9 @@ cierre del taller, cliente sin cuenta e identidad/destinatario no verificables.
 Estos últimos conservan verificación, revisión o ejecución pendientes. No se
 crearon expedientes reales ni se acreditó recepción/respuesta del buzón.
 
-Para continuar faltan herramientas de exportación integral y cierre coordinado,
-con decisiones de retención y entrega, además de la atención real ya prevista.
+La herramienta de exportación A–D está implementada localmente; resta su activación
+operativa y capacidad del despliegue. Continúan pendientes el cierre coordinado,
+las decisiones de retención/entrega y la atención real ya prevista.
 No se reemplazan con el Excel operativo ni con SQL sobre `talleres.activo`.
 Identidad/alta/contactos definitivos mantienen su etapa acordada; este resultado
 no autoriza anunciar un cierre integral disponible ni omitir el gate de salida.

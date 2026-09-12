@@ -14,7 +14,7 @@ import java.util.function.Supplier;
 import static com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPackageException.Code.*;
 import static com.leonardorozza.mvgrreparacionesbackend.cuenta.reauth.ExportReauthenticationPurpose.*;
 
-/** Internal account workflow. No controller. Ciphertext, leases and proof consumption commit in PostgreSQL. */
+/** Internal account workflow; HTTP admission is separate. Ciphertext, leases and proof consumption commit in PostgreSQL. */
 public final class ExportJobService {
     private static final int MAX_LIVE_JOBS=4;
     private final JdbcTemplate jdbc;
@@ -58,25 +58,45 @@ public final class ExportJobService {
             return status(find(id),false);
         });
     }
+    /** Recovers the latest own request without storing its identifier in browser storage. */
+    public Optional<Status> latest(String accessToken) {
+        return transaction(()-> {
+            ExportSession actor=reauthentication.authorize(accessToken);
+            cleanupLocked();
+            var jobs=jdbc.query(SELECT+" WHERE user_id=? AND taller_id=? AND token_version=? ORDER BY creada_en DESC,id DESC LIMIT 1",
+                    ExportJobService::row,actor.userId(),actor.tallerId(),actor.tokenVersion());
+            return jobs.isEmpty()?Optional.empty():Optional.of(status(jobs.getFirst(),false));
+        });
+    }
     public Status status(String accessToken,UUID id) {
         return transaction(()-> {
             ExportSession actor=reauthentication.authorize(accessToken);
             cleanupLocked(); Job job=find(id); requireOwner(job,actor); return status(job,false);
         });
     }
-    /** D must expose this only through its bounded HTTP download flow; every call consumes a fresh download proof. */
+    /** Every bounded HTTP download consumes a fresh proof and authenticates the complete ciphertext. */
     public byte[] authorizedArchive(String accessToken,String proof,UUID id) {
-        return transaction(()-> {
-            ExportSession actor=reauthentication.authorize(accessToken);
-            cleanupLocked(); Job job=find(id); requireOwner(job,actor);
-            if(!job.state().equals("READY")) throw new ExportPackageException(INVALID_PACKAGE);
-            requireLive(job,true);
-            byte[] encrypted=jdbc.queryForObject("SELECT archive_cipher FROM public.cuenta_exportaciones WHERE id=?",byte[].class,id);
-            byte[] result=codec.decryptArchive(context(job),encrypted);
-            requireLive(job,true);
-            reauthentication.consume(accessToken,proof,DESCARGAR_EXPORTACION);
+        byte[][] decrypted=new byte[1][];
+        boolean delivered=false;
+        try {
+            byte[] result=transaction(()-> {
+                ExportSession actor=reauthentication.authorize(accessToken);
+                cleanupLocked(); Job job=find(id); requireOwner(job,actor);
+                if(!job.state().equals("READY")) throw new ExportPackageException(INVALID_PACKAGE);
+                requireLive(job,true);
+                // Reject invalid proofs before BYTEA/AES work; subsequent failure rolls this consumption back.
+                reauthentication.consume(accessToken,proof,DESCARGAR_EXPORTACION);
+                byte[] encrypted=jdbc.queryForObject("SELECT archive_cipher FROM public.cuenta_exportaciones WHERE id=?",byte[].class,id);
+                decrypted[0]=codec.decryptArchive(context(job),encrypted);
+                reauthentication.authorize(accessToken); // Work cannot extend the actual JWT lifetime.
+                requireLive(job,true);
+                return decrypted[0];
+            });
+            delivered=true;
             return result;
-        });
+        } finally {
+            if(!delivered && decrypted[0]!=null) Arrays.fill(decrypted[0],(byte)0);
+        }
     }
     /** A bounded scheduler pass; the database singleton claim also serializes different application instances. */
     public synchronized boolean runNext() {

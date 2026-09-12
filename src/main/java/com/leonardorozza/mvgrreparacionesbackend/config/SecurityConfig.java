@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.config;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.JwtFilter;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.http.ExportHttpGuardFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
@@ -41,8 +42,9 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
-            ObjectProvider<LegalPrivateRequirementsAuthenticationEntryPoint> privateLegalEntryPoint) throws Exception {
-        return http
+            ObjectProvider<LegalPrivateRequirementsAuthenticationEntryPoint> privateLegalEntryPoint,
+            ObjectProvider<ExportHttpGuardFilter> exportGuard) throws Exception {
+        http
                 .csrf(AbstractHttpConfigurer::disable)
                 .exceptionHandling(exceptions -> privateLegalEntryPoint.ifAvailable(exceptions::authenticationEntryPoint))
                 .cors(withDefaults())
@@ -59,8 +61,9 @@ public class SecurityConfig {
                 )
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(publicEndpointRateLimitFilter, JwtFilter.class)
-                .build();
+                .addFilterBefore(publicEndpointRateLimitFilter, JwtFilter.class);
+        exportGuard.ifAvailable(filter -> http.addFilterAfter(filter, JwtFilter.class));
+        return http.build();
     }
 
     @Bean

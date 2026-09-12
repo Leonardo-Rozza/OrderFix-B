@@ -1,7 +1,7 @@
 # Exportación integral del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `bf9b6d9`, frontend `0d76348`.
-Estado: cortes A, B y C cerrados localmente. D pendiente; la exportación integral todavía no está disponible para el usuario.
+Estado: cortes A–D cerrados localmente. La activación productiva permanece pendiente.
 
 ## Alcance acordado y secuencia
 
@@ -494,3 +494,209 @@ es **D: API, pantalla, límites HTTP, confirmación nueva por descarga y protecc
 retiro del Excel directo**. El gate de capacidad del despliegue, la operación de
 retención/recuperación y los pendientes independientes de lanzamiento permanecen
 abiertos; C no habilita por sí solo publicación ni entrega al usuario.
+
+
+## Diseño del corte D — entrega autenticada y pantalla
+
+Continuación autorizada sobre backend `71558e4` y frontend `1dc3cc7`. Se aplica el
+brainstorming al diseño A–D aprobado y a la sección Exportación del diseño de
+Confianza y cuenta; no se abre una nueva aprobación para decisiones de implementación.
+El corte conserva el Excel operativo con confirmación, en lugar de retirarlo o
+mantener dos recorridos de contraseña. La página completa `/cuenta/exportacion`
+reutiliza Cuenta, sus tokens y formulario de contraseña actual; evita modales largos
+en móvil. Dashboard enlaza a esa página para el Excel. El ADMIN ve alcance, estado,
+vencimiento, consulta/reintento y acciones; USER no monta ni solicita la exportación.
+
+Intención visual: el titular que necesita una copia del taller debe distinguir un
+reporte de cuatro resúmenes de un ZIP con datos y evidencia. Se conserva la paleta,
+tipografía, superficies y bordes de Cuenta, espaciado de cuatro píxeles y controles
+con área táctil de 44 px. El estado y la fecha del archivo guían la acción, sin
+porcentajes ficticios ni cambios de identidad visual.
+
+Contrato autenticado (mismos actores, talleres y versiones de A/C):
+
+| Método y ruta | Solicitud | Resultado |
+| --- | --- | --- |
+| POST `/api/cuenta/reauthenticaciones` | JSON `passwordActual`, `proposito` EXPORTAR o DESCARGAR_EXPORTACION | `reauthToken`, `proposito`, `expiresAt`; no renueva sesión. |
+| POST `/api/exportaciones` | Cuerpo vacío; Idempotency-Key UUID y X-Reauth-Token | 202: `id`, `estado`, `expiresAt`, `reused` y Location del recurso. |
+| GET `/api/exportaciones/actual` | Sin query ni secreto adicional | `habilitada`, `exportacion` última del titular/taller/versión o null; permite recargar sin guardar IDs. |
+| GET `/api/exportaciones/{id}` | UUID canónico, sin query | Estado actual propio. |
+| POST `/api/exportaciones/{id}/archivo` | Cuerpo vacío y X-Reauth-Token | ZIP privado, autorización nueva por descarga. |
+| POST `/api/export/excel` | Cuerpo vacío y X-Reauth-Token | Excel operativo protegido. |
+| GET `/api/export/excel` | Ruta anterior | 410 sin archivo; no conserva descarga directa. |
+
+Las descargas son POST porque consumen una credencial de un solo uso. No se publica
+URL firmada ni remota: la respuesta transmite bytes autenticados directamente.
+Ambos formatos usan DESCARGAR_EXPORTACION; no se inventa otro propósito ni se cambia
+V31. Estados JSON conservan QUEUED/RUNNING/READY/FAILED/EXPIRED/REVOKED y se traducen
+en pantalla. Los errores son sanitizados: 400 contraseña/prueba/solicitud inválida,
+403 acción no permitida, 404 recurso ajeno/inexistente, 409 archivo no disponible,
+429 límite con Retry-After y 503 función apagada/fallo temporal. Una contraseña
+incorrecta no cierra la sesión. Todas las respuestas sensibles evitan caché.
+
+La contraseña se limpia al enviar; proof y Blob sólo viven en variables transitorias.
+No se usan mutations de React Query para conservar secretos, ni storage, URL o
+errores Axios completos. Cambio de sesión/desmontaje aborta y descarta resultados;
+la descarga no usa respuestas de otra sesión. Consultas pueden repetirse; una
+solicitud incierta conserva su clave en memoria y verifica estado antes de crear
+otra. Cada descarga requiere una confirmación nueva. El polling sólo acompaña
+trabajos pendientes y respeta errores/Retry-After.
+
+Límites HTTP propios, siempre activos: por actor/JVM, cinco confirmaciones, tres
+solicitudes y tres descargas en quince minutos; treinta lecturas por minuto.
+Mapa de hasta 2.048 actores: no expulsa cuotas vivas al llenarse. Como máximo dos
+verificaciones de contraseña concurrentes; JSON estricto hasta 4 KiB y contraseña
+1–100 caracteres sin recortar. Header único/canónico, sin query ni cuerpos no
+previstos. Estos límites locales no se presentan como un rate limit distribuido;
+reinicios y varias instancias requieren la política complementaria del despliegue.
+
+Un permiso de trabajo pesado compartido por JVM serializa generación del worker
+y descarga hasta finalizar la escritura HTTP síncrona. El permiso se libera también
+en errores/desconexión; otra descarga no carga archivos mientras esté ocupado.
+En C se mueve consume antes de leer BYTEA/descifrar, dentro de la misma transacción:
+una prueba inválida no dispara el trabajo costoso y cualquier fallo antes del commit
+revierte el consumo. Se conserva el chequeo final de vigencia y pertenencia. La
+escritura HTTP ocurre después; una pérdida de respuesta no restaura la prueba.
+
+Excel conserva formato y cálculos, con un wrapper nuevo REQUIRES_NEW/REPEATABLE_READ:
+consume, presupuesto previo de filas/bytes del grafo leído, generación y revalidación
+comparten snapshot. La lectura consistente impide que un COUNT previo bajo
+READ_COMMITTED quede obsoleto antes de cargar JPA/POI. No se usan locks globales de
+tablas. El permiso HTTP acota concurrencia, no acredita memoria constante; la prueba
+de capacidad se documenta en el runbook. Los límites son 50.000 filas del grafo,
+16 MiB de huella de origen y 32 MiB de salida; se comprueban textos descomprimidos,
+relaciones inversas y pertenencia antes de entrar a POI.
+
+La auditoría operativa registra autorización y escritura de respuesta con identificadores
+y formato, sin tokens, contraseña, datos exportados ni diagnósticos de proveedor. Una
+respuesta escrita no acredita recepción del cliente; recolección/retención de logs,
+timeouts del proxy y capacidad del despliegue permanecen en el gate operativo.
+No hay migraciones nuevas; V27–V32 permanecen congeladas. El worker continúa apagado
+por defecto; Excel protegido no depende de activarlo. No se modifican secretos ni
+se activan MP, email, proveedores o despliegues reales.
+
+
+## Acta del corte D — validación local
+
+No se agrega ninguna migración. La API y pantalla completan el contrato A–D, con
+confirmación actual por solicitud/descarga, cuotas activas y retiro del GET Excel.
+El formato del reporte y sus cálculos se conservan; los cobros siguen siendo registros
+manuales ajenos al procesamiento de pagos y el reporte no tiene validez fiscal.
+
+### Pruebas focalizadas
+
+`./mvnw -B -Dtest=ExportArtifactCodecTest,ExportJobConfigurationTest,ExportHttpRequestsTest,ExportHttpRateLimitTest,ExportHttpGuardFilterTest,ProtectedExcelExportServiceTest,ExportServiceTest,ExportTests -Dit.test=ExportJobServiceIT,ExportReauthenticationServiceIT,ExportHttpIT,ProtectedExcelExportIT verify`:
+**BUILD SUCCESS**, 01:21 min; **84 unitarias y 69 de integración**, sin fallos,
+errores ni omisiones. Log: `/private/tmp/ordenfix-export-d-focused.log`.
+
+Los 18 casos HTTP usan PostgreSQL 16/Flyway V32, Hibernate validate, JWT, BCrypt,
+principal/filtros reales y MockMvc sobre la cadena de Spring Security. Cubren solicitud,
+replay, recuperación desde otra sesión, ambas descargas, proof nuevo y rechazo de
+permisos/cuerpo/cabeceras/cuotas/corrupción. La protección propia se prueba con rate
+limit público desactivado; la plaza de trabajo ocupada conserva cuota y prueba.
+Las respuestas 401 previas al filtro también conservan no-store. CORS admite los
+headers del contrato; GET legado responde 410 y HEAD no entrega archivo.
+
+Los 22 IT de trabajos incluyen recuperación del último trabajo por actor/taller/época,
+rechazo de prueba antes de leer BYTEA/descifrar y revalidación final con rollback y
+limpieza de plaintext. Los 21 IT de reautenticación son regresión completa de A.
+Los ocho IT nuevos de Excel usan el TransactionManager/JPA reales: dos talleres y
+cuatro hojas con cálculos; exceso de filas, ítems y texto TOAST rechazado antes de
+POI; relaciones inversas ajenas; fallo de generación con rollback; una escritura
+concurrente entre preflight y JPA no contamina el snapshot REPEATABLE_READ.
+Las unitarias cubren parser estricto, cuotas monotónicas, concurrencia del permiso,
+liberación en error y estructura de las transacciones. El ensayo H2 anterior conserva
+la regresión del escritor y acredita el retiro GET; la seguridad nueva se prueba en PG.
+
+### Navegador real y frontend
+
+`./mvnw -B -Dtest=ExportHttpRequestsTest -Dit.test=ExportBrowserE2E verify`:
+**BUILD SUCCESS**, 01:07 min, finalizado a las 18:16:06 -03. Sus 18 unitarias son
+repetición focal; el IT opt-in orquesta **dos recorridos Playwright reales**, escritorio
+y 320 px. Tomcat en loopback, PostgreSQL 16 efímero, CORS/JWT/BCrypt y descargas
+reales; no hay mocks HTTP. El disparador de scheduler se acelera desde el test y
+conserva el permiso compartido; el servicio y almacenamiento no se sustituyen.
+
+Cada titular solicita desde Cuenta, espera READY, recarga para recuperar el trabajo,
+confirma otra contraseña para descargar ZIP y repite confirmación para XLSX. Playwright
+comprueba MIME/no-store, archivos, manifiesto y todos sus hashes; verifica inclusión
+del cliente propio y ausencia del otro taller. Java vuelve a leer ZIP/POI y contrasta
+hashes, dos trabajos READY y consumo durable de pruebas en PostgreSQL. No se guardan
+contraseña/proof en URL o storage; las identidades del laboratorio son sintéticas.
+Las fixtures pequeñas no acreditan capacidad máxima del proceso web ni fotos remotas.
+
+Log Maven: `/private/tmp/ordenfix-export-d-browser.log`. Evidencia del laboratorio:
+`/var/folders/j4/ym6p76r56xq1tcv775vjckq40000gn/T/ordenfix-export-browser-4987642637657445602`.
+El comando reproducible desde frontend es `npm run test:e2e:export-real`, con Java 21,
+Docker disponible y `DOCKER_AUTH_CONFIG` vacío para imágenes públicas. Vite usa
+`envDir:false`; no importa secretos `.env`. Trazas, capturas y video del recorrido
+real están apagados. Los artefactos descargados son sintéticos con permisos 0600.
+
+Frontend: **730 Vitest en 99 archivos y 42 pruebas del tooling de publicación** con
+`npm test`; `npm run lint` y `npm run build` aprobados. El build local omite su gate
+productivo y advierte sobre el bundle principal de 577 kB; no se presenta como una
+acreditación de publicación. **16 Playwright focalizados** de exportación/Cuenta/Inicio
+pasaron; los cinco de exportación se repitieron tras ajustar copy/estado y ambos
+recorridos visuales volvieron a comprobarse con el control real del tema oscuro.
+Esas repeticiones no se suman como casos distintos. Typecheck de app y del gate real
+aprobados. Se inspeccionaron escritorio y 320 px, temas claro/oscuro y formulario.
+Una captura oscura tomó un frame de la transición de 150 ms; la comprobación del
+color final y repetición de los dos recorridos confirmaron contraste correcto, sin
+cambiar producción. Las capturas esperan el fin de animaciones. Evidencia visual:
+`/var/folders/j4/ym6p76r56xq1tcv775vjckq40000gn/T/ordenfix-export-chevron-qa-5hsdacbu/`.
+Los resultados frontend completos se conservaron en las salidas de herramientas;
+no se generó un log independiente de esa ejecución.
+
+El laboratorio histórico de registro/empleados se adapta al retiro GET: comprueba
+entrada al recorrido protegido y 410 para ADMIN, conservando rechazos USER/anónimo.
+La acreditación binaria se traslada al nuevo laboratorio ExportBrowserE2E; el gate
+histórico completo no se vuelve a ejecutar en D. Sus fuentes compilan en el integral.
+
+### Capacidad y revisión
+
+El probe opt-in `ExportArtifactCapacityProbe` ejecutó codec real + ida/vuelta
+PostgreSQL con **134.061.717 bytes expandidos**, 99,88 % de 128 MiB, y ciphertext
+**117.405.731 bytes**. Pasó con heaps de 768 MiB, 1 GiB y 2 GiB. Se agrega el launcher
+`scripts/run-export-capacity.sh`, compilación temporal aislada y timeout; su ejecución
+con 2 GiB también pasó. Tamaños, tiempos, RSS y footprint exactos, reproducibilidad y
+límites de la medición se conservan en [exports.md](../operations/exports.md).
+
+768 MiB es el mínimo ensayado, con poco margen; no se acredita una instancia Spring
+productiva de ese tamaño. El probe no ejecuta captura completa B, tráfico web o I/O
+Cloudinary. Dimensionar proceso completo, PostgreSQL/WAL/backups y proxy permanece
+requisito de activación. Logs: `/private/tmp/ordenfix-export-capacity-y1d2_3zk/` y
+`/private/tmp/ordenfix-export-capacity-1zxadc5n/`. Se eliminaron todos los contenedores
+propios de esas mediciones. No se tocaron datos/configuración reales.
+
+Revisión independiente de autorización/rollback, cuotas y liberación de recursos,
+contrato API, cancelación por sesión, errores y manejo de secretos: sin hallazgos
+accionables. Se revisó el diff y la UI; no se sustituyen por ello los ensayos anteriores.
+
+### Integral final
+
+Comando: `JAVA_HOME=<Corretto 21.0.10> DOCKER_AUTH_CONFIG='{"auths":{}}' ./mvnw -B clean verify`.
+**BUILD SUCCESS**, finalizado el 2026-09-12 a las **18:45:27 -03**, en **28:56 min**:
+**7.578 unitarias (239 suites) y 1.475 IT (103 suites), cero fallos, errores u omisiones**.
+El cierre D y la integración del filtro en SecurityConfig justifican esta corrida
+completa. No hubo correcciones de producción durante el integral ni revalidaciones
+focales para cubrir fallos del mismo: pasó completo en una ejecución.
+
+Log: `/private/tmp/ordenfix-export-d-clean-verify.log`; resumen contrastado de los
+XML finales, sin propiedades/contenido de pruebas:
+`/private/tmp/ordenfix-export-d-integral-summary.json`. Pasó
+`verify-no-secret-properties-in-jar`. Los laboratorios opt-in de navegador y capacidad
+son evidencia adicional separada; no se suman al total del integral.
+
+### Cierre local
+
+**D queda cerrado y completa la secuencia de exportación A–D.** Se conserva un commit
+atómico por repositorio, sin push ni merge. V27–V32 son idénticas al baseline; no se
+agrega migración ni se modifican privilegios legales. `git diff --check` aprobado y
+los 77 archivos ajenos no versionados del frontend se preservan.
+
+Excel protegido queda integrado; la generación ZIP sigue apagada por defecto. La
+activación requiere claves y capacidad/operación del despliegue según el runbook;
+esta acta acredita implementación y pruebas locales. No se modificaron secretos,
+configuración real, cuentas ni proveedores, ni se enviaron correos. El cierre
+coordinado ADMIN permanece como trabajo posterior separado; MP, Email y los contactos
+reales mantienen sus pendientes y decisiones de etapa acordadas.

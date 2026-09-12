@@ -33,15 +33,22 @@ public class ExportJobConfiguration {
             WorkshopExportSnapshotService snapshots,ExportArtifactCodec codec,ObjectProvider<PrivatePhotoService> photos) {
         return new ExportJobService(jdbc,manager,reauth,snapshots,codec,new ExportPhotoReader(photos::getIfAvailable));
     }
-    @Bean(destroyMethod="close") Worker exportJobWorker(ExportJobService service) { return new Worker(service); }
+    @Bean(destroyMethod="close") Worker exportJobWorker(ExportJobService service,ExportWorkPermit permit) { return new Worker(service,permit); }
     static final class Worker implements AutoCloseable {
         private final ScheduledExecutorService executor=Executors.newSingleThreadScheduledExecutor(runnable->{
             Thread thread=new Thread(runnable,"ordenfix-export-worker"); thread.setDaemon(true); return thread;
         });
-        Worker(ExportJobService service) {
-            executor.scheduleWithFixedDelay(()-> {
+        private final ExportJobService service;
+        private final ExportWorkPermit permit;
+        Worker(ExportJobService service,ExportWorkPermit permit) {
+            this.service=service; this.permit=permit;
+            executor.scheduleWithFixedDelay(this::runPass,60,60,TimeUnit.SECONDS);
+        }
+        void runPass() {
+            try (var lease=permit.tryAcquire()) {
+                if(lease==null) return;
                 try { service.runNext(); } catch(RuntimeException failure) { /* lease recovery on the next bounded pass; never log payload/provider diagnostics */ }
-            },60,60,TimeUnit.SECONDS);
+            }
         }
         @Override public void close() { executor.shutdownNow(); }
     }
