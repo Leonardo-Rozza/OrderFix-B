@@ -75,7 +75,7 @@ que justifiquen ampliarlo.
 ## Continuación finita
 
 - **Email B:** dominio Verified y entrega al servidor receptor acreditados en el
-  [cierre B](2026-09-12-email-dominio-entrega-implementation.md); confirmación visual de la casilla pendiente.
+  [cierre B](2026-09-12-email-dominio-entrega-implementation.md); recepción confirmada por el titular.
 - **Email C:** al disponer de staging, comprobar registro/verificación/recuperación
   con enlaces HTTPS reales, errores recuperables y configuración del entorno.
 

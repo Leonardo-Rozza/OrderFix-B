@@ -1,9 +1,9 @@
 # Email — Corte B: dominio y entrega controlada
 
 Fecha: 2026-09-12. Baselines backend `93860d4`, frontend `6f5bfb8`.
-Estado: dominio Verified, DNS y entrega al servidor receptor acreditados; pendiente
-confirmación visual de Recibidos/Spam por el titular. Corte C conserva los recorridos
-con enlaces reales en staging.
+Estado: **Corte B cerrado**. Dominio Verified, DNS y entrega al servidor receptor
+acreditados; el titular confirmó la recepción el 2026-09-12. No especificó Recibidos
+o Spam. Corte C conserva los recorridos con enlaces reales en staging.
 
 ## Alcance y autorización
 
@@ -64,8 +64,9 @@ Mensaje:
 - Resend ID: `78e024f6-261e-4269-a464-05f2f9472706`.
 - Panel: **Sent y Delivered**, 2026-09-12 10:12 -03:00; remitente y preview coinciden
   con lo autorizado. [Evidencia en Resend](https://resend.com/emails/78e024f6-261e-4269-a464-05f2f9472706).
-- Delivered acredita la aceptación por el servidor receptor. El titular debe confirmar
-  ubicación en Recibidos/Spam y lectura; esa respuesta todavía no se recibió.
+- Delivered acredita la aceptación por el servidor receptor. El titular confirmó
+  posteriormente: “Si ya llegó el correo!”. Se acredita recepción, sin atribuir una
+  carpeta o revisión visual que no se especificaron. No se realizó otro envío.
 
 No se enviaron tokens ni se consumieron enlaces de cuenta. El corte C comprobará
 los recorridos de registro/verificación/recuperación desde el entorno real.

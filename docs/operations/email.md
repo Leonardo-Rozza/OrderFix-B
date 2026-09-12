@@ -17,7 +17,8 @@ expresamente esos registros y un único envío de prueba a su propia casilla.
 - El adaptador Java real obtuvo una única aceptación SMTP observada, sin arrancar
   la app, DB o Flyway. Resend registró **Sent y Delivered**, 2026-09-12 10:12 -03:00,
   para el mensaje `78e024f6-261e-4269-a464-05f2f9472706`.
-  La confirmación visual de Recibidos/Spam por el titular sigue pendiente.
+  El titular confirmó que recibió el correo el 2026-09-12. No especificó la carpeta
+  de recepción; no se infiere Recibidos ni Spam.
 - No se configuró dominio de tracking, no se habilitó recepción de correo ni se dio
   acceso automático a Resend sobre Vercel. El enlace backend → Resend exige STARTTLS;
   la política Resend → servidor receptor conserva el valor `Opportunistic` observado
@@ -114,7 +115,7 @@ registral siguen diferidas hasta después de MP y Email, por decisión del usuar
 
 - **Email A:** configuración local, SMTP seguro y regresión de cuenta. Evidencia en el
   [plan del corte](../plans/2026-09-12-email-transaccional-implementation.md).
-- **Email B:** dominio, DNS y entrega al servidor receptor acreditados; confirmación visual de la casilla pendiente.
+- **Email B cerrado:** dominio, DNS, entrega al servidor receptor y recepción confirmada por el titular.
 - **Email C:** recorrido con frontend y backend de staging, enlaces HTTPS y operación del envío.
 
 ## Referencias oficiales consultadas
