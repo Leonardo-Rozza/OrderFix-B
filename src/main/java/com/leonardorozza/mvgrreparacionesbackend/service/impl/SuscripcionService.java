@@ -1,17 +1,21 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
+import com.leonardorozza.mvgrreparacionesbackend.config.mercadopago.MercadoPagoProperties;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Suscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.SuscripcionRepository;
+import com.leonardorozza.mvgrreparacionesbackend.service.dto.OfertaProResponseDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.SuscripcionResponseDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.YearMonth;
+import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.YearMonth;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +25,7 @@ public class SuscripcionService {
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
     private final Clock clock;
+    private final MercadoPagoProperties mercadoPagoProperties;
 
     @Value("${plan.free.max-reparaciones-mes:25}")
     private int freeMaxReparacionesMes;
@@ -46,7 +51,24 @@ public class SuscripcionService {
                 suscripcion.getProximoCobro(),
                 usadasEsteMes,
                 limite,
-                planFeatureService.capacidades()
+                planFeatureService.capacidades(),
+                ofertaPro()
         );
+    }
+
+    private OfertaProResponseDto ofertaPro() {
+        // La configuración de MP apagado puede estar incompleta. No debe impedir
+        // consultar el plan ni presentar una oferta que no se puede interpretar.
+        BigDecimal precio = mercadoPagoProperties.getAmount();
+        String moneda = mercadoPagoProperties.getCurrency();
+        if (precio == null || precio.signum() <= 0 || moneda == null) {
+            return null;
+        }
+        moneda = moneda.trim().toUpperCase(Locale.ROOT);
+        if (!moneda.matches("[A-Z]{3}")) {
+            return null;
+        }
+        return new OfertaProResponseDto(precio, moneda,
+                mercadoPagoProperties.isEnabled() && mercadoPagoProperties.isCheckoutEnabled());
     }
 }

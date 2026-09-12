@@ -9,6 +9,8 @@ import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.Me
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -143,6 +145,19 @@ class MercadoPagoContractTests {
     }
 
     @Test
+    void integracionApagadaBloqueaAltasAunqueCheckoutEsteEncendido() {
+        properties.setEnabled(false);
+        properties.setCheckoutEnabled(true);
+
+        assertThatThrownBy(() -> service.crearCheckoutSuscripcion())
+                .isInstanceOf(PagoException.class)
+                .hasMessageContaining("no está habilitada");
+
+        verifyNoInteractions(tenantService, checkoutStateService);
+        server.verify();
+    }
+
+    @Test
     void checkoutEstaApagadoPorDefecto() {
         assertThat(new MercadoPagoProperties().isCheckoutEnabled()).isFalse();
     }
@@ -173,8 +188,10 @@ class MercadoPagoContractTests {
         verify(checkoutStateService, never()).complete(anyLong(), any());
     }
 
-    @Test
-    void cancelarConPreapprovalHabilitadoCancelaRemotoAntesDeLaBajaLocal() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void cancelarConPreapprovalHabilitadoCancelaRemotoAntesDeLaBajaLocal(boolean altasHabilitadas) {
+        properties.setCheckoutEnabled(altasHabilitadas);
         when(tenantService.currentTallerId()).thenReturn(7L);
         when(subscriptionStateService.cancellationState(7L))
                 .thenReturn(new MercadoPagoSubscriptionStateService.CancellationState("pre-1", false));
@@ -205,8 +222,10 @@ class MercadoPagoContractTests {
         server.verify();
     }
 
-    @Test
-    void cancelarSinPreapprovalPermiteBajaLocalAunqueMpEsteDeshabilitado() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void cancelarSinPreapprovalPermiteBajaLocalAunqueMpEsteDeshabilitado(boolean altasHabilitadas) {
+        properties.setCheckoutEnabled(altasHabilitadas);
         properties.setEnabled(false);
         when(tenantService.currentTallerId()).thenReturn(7L);
         when(subscriptionStateService.cancellationState(7L))

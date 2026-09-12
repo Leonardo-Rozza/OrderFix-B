@@ -18,7 +18,7 @@ public class SuscripcionController {
 
     private final SuscripcionService suscripcionService;
 
-    @Operation(summary = "Obtener el plan y consumo del taller actual")
+    @Operation(summary = "Obtener el plan, consumo y oferta PRO del taller actual")
     @GetMapping
     public ResponseEntity<SuscripcionResponseDto> miSuscripcion() {
         return ResponseEntity.ok(suscripcionService.miSuscripcion());

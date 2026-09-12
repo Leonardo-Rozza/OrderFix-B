@@ -1,17 +1,23 @@
 package com.leonardorozza.mvgrreparacionesbackend.flows;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.leonardorozza.mvgrreparacionesbackend.config.mercadopago.MercadoPagoProperties;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoSuscripcion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.PlanType;
 import com.leonardorozza.mvgrreparacionesbackend.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class PlanGatingTests extends IntegrationTestBase {
+
+    @Autowired
+    private MercadoPagoProperties mercadoPagoProperties;
 
     @Test
     void freeActivoNoAccedeAFuncionesProYExponeCapacidades() throws Exception {
@@ -126,5 +132,37 @@ class PlanGatingTests extends IntegrationTestBase {
         authPost("/api/usuarios", pro, json(Map.of(
                 "username", "Emp", "email", "emp2@test.com", "password", "secret123")))
                 .andExpect(status().isCreated());
+    }
+
+    @Test
+    void ofertaPublicaSeLeeSinDarPermisosDeContratacionAlEmpleado() throws Exception {
+        String admin = registrar("Taller Oferta", "oferta-admin@test.com");
+        activarPro(admin);
+        authPost("/api/usuarios", admin, json(Map.of(
+                "username", "Empleado Oferta", "email", "oferta-empleado@test.com", "password", "secret123")))
+                .andExpect(status().isCreated());
+        String empleado = login("oferta-empleado@test.com", "secret123");
+
+        JsonNode respuesta = node(authGet("/api/suscripcion", admin).andExpect(status().isOk()));
+        JsonNode oferta = respuesta.get("ofertaPro");
+        assertThat(oferta).isNotNull();
+        assertThat(oferta.isObject()).isTrue();
+        assertThat(oferta.size()).isEqualTo(3);
+        assertThat(oferta.get("precioMensual").isNumber()).isTrue();
+        assertThat(oferta.get("precioMensual").decimalValue())
+                .isEqualByComparingTo(mercadoPagoProperties.getAmount());
+        assertThat(oferta.get("moneda").asText())
+                .isEqualTo(mercadoPagoProperties.getCurrency().trim().toUpperCase(Locale.ROOT));
+        assertThat(oferta.get("contratacionDisponible").isBoolean()).isTrue();
+        assertThat(oferta.get("contratacionDisponible").asBoolean()).isFalse();
+        assertThat(respuesta.get("funciones").get("cobros").asBoolean()).isTrue();
+        assertThat(respuesta.get("plan").asText()).isEqualTo("PRO");
+
+        JsonNode vistaEmpleado = node(authGet("/api/suscripcion", empleado).andExpect(status().isOk()));
+        assertThat(vistaEmpleado.get("ofertaPro")).isEqualTo(oferta);
+        authPost("/api/pagos/suscripcion", empleado).andExpect(status().isForbidden());
+        authPost("/api/pagos/suscripcion/cancelar", empleado).andExpect(status().isForbidden());
+        assertThat(node(authGet("/api/suscripcion", admin).andExpect(status().isOk())).get("plan").asText())
+                .isEqualTo("PRO");
     }
 }
