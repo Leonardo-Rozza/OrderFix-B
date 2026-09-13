@@ -538,8 +538,8 @@ operativo acreditado. Un backup antiguo no puede autodeclararse reconciliado.
 ### Pendientes concretos para completar D
 
 1. Política real por categoría: fundamento, datos mínimos conservados, horizonte y
-   responsable. El diseño 15O describe un mantenimiento legal futuro; en HEAD sólo
-   hay operaciones de repositorio, no ese servicio/rol/scheduler implementados.
+   responsable. La continuación 15O, documentada abajo, implementa el mantenimiento
+   de plazos técnicos ya persistidos; no decide retención de negocio o identidad.
 2. Contrato de supresión de negocio/identidad y transición terminal mediante una
    migración nueva acreditada, respetando los recursos V27–V34 congelados. Las
    excepciones conservadas se informarán separadamente de los datos eliminados.
@@ -608,3 +608,40 @@ HEAD; no hay DML en bases reales, llamadas de proveedores, lectura de secretos n
 cambios de frontend funcional. Documentación y código se entregan en un commit
 atómico por repositorio afectado, sin push ni merge. D permanece parcial según las
 dependencias concretas anteriores.
+
+
+## Continuación D — mantenimiento legal 15O
+
+Se completa el servicio técnico previsto por 15O, ausente al comienzo de D en
+`3f907b3`. Aplica vencimientos ya registrados a metadata cifrada y resultados de
+reintentos legales; conserva aceptaciones, documentos, nonce y pertenencia.
+No requiere decidir nuevos plazos ni descifrar información. Funciona también tras
+el cierre y después de gracia, con gates y guards V27–V34 existentes.
+
+Usa un contexto/rol restringido independiente, preflight de esquema y privilegios,
+transacción REQUIRES_NEW/READ_COMMITTED y hasta diez objetivos por categoría. El
+scheduler es opcional y queda apagado, junto con la configuración. La frontera no
+se importa desde la aplicación ni expone HTTP. Un error anterior a commit
+revierte la pasada; un resultado incierto nunca se presenta como confirmación de limpieza. Repetir una
+pasada sin objetivos no hace DML. El acta técnica y pruebas están en el apartado
+15O del [plan de consentimiento](2026-09-06-legal-account-consent-implementation.md)
+y el [runbook](../runbooks/legal-account-consent-postgresql.md).
+
+Este avance resuelve un pendiente local concreto. **D sigue parcial** por las
+cuatro dependencias reales enumeradas arriba: política de conservación,
+supresión de negocio/identidad, recibos remotos y recuperación/conciliación externa.
+No declara ELIMINADO ni modifica contratos congelados. E conserva API/pantalla y
+verificación integral; su alcance local puede mostrar solicitud, restricción y
+restauración, con las salidas pendientes explícitas. No debe prometer borrado
+completo o efectos MP/email confirmados mediante una intención en cola.
+
+El backend continúa detenido. No se operan datos reales ni proveedores; frontend
+sólo sincroniza estos planes. Sin push ni merge, un commit atómico por repositorio.
+
+Validación 15O consolidada: **351 pruebas aprobadas** (272 unitarias y 79 IT
+PostgreSQL 16, trece clases), empaquetado sin propiedades secretas y revisión
+independiente sin hallazgos materiales. Se corrigieron únicamente dos problemas
+de tests: genéricos de AssertJ y datos sintéticos que duplicaban una aceptación.
+El acta 15O conserva fallos intermedios, comandos y consolidación sin duplicar
+repeticiones. No se repite clean verify; integral reservado para E. Los recursos
+V27–V34 y los 77 archivos ajenos del frontend conservaron sus hashes.

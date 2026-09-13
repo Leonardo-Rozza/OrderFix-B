@@ -3676,24 +3676,117 @@ Commit: `feat(legal): prepara bloqueo compatible por aceptacion`.
 
 ## 15O — Retención y mantenimiento internos
 
-Estado comprobado el 2026-09-12 durante cierre D: este apartado describe trabajo
-previsto. Los servicios, verificador, scheduler, runbook y pruebas nombrados abajo
-no están implementados en HEAD. Existen operaciones de repositorio para tombstone
-y cabecera; no acreditan un worker de mantenimiento ni la purga de una cuenta.
+Estado: implementado localmente el 2026-09-12, durante la continuación de cierre D.
+La revisión inicial de D había comprobado correctamente que estos tipos aún no
+existían en `3f907b3`. Esta ejecución completa ese pendiente técnico, sin declarar
+terminada la eliminación de una cuenta ni aprobar nuevos plazos de conservación.
 
-Resultado: servicio y adaptador programable interno, apagado por defecto, para purgar únicamente
-metadata/resultados vencidos. Credencial separada del lector/escritores; sin endpoint HTTP.
+`LegalAcceptanceRetentionService.runNext()` aplica exclusivamente `retener_hasta`
+y `expires_at` ya persistidos, usando `transaction_timestamp()` de PostgreSQL.
+Vacía ciphertext/tag/longitud original, conserva nonce/key_version y cierra la
+cabecera con tombstone en la misma transacción. Elimina resultados idempotentes
+vencidos NEW, EMPTY y DEDUP; en DEDUP elimina referencias antes del padre. Las
+aceptaciones, sus documentos, publicaciones y pertenencia al taller permanecen.
+Un reintento sin objetivos vencidos devuelve contadores cero sin DML.
 
-Nuevos: `db/LegalAcceptanceRetentionService.java`, `LegalAcceptanceMaintenanceConfiguration.java`,
-`LegalAcceptanceMaintenancePrivilegeVerifier.java`, scheduler nominal condicionado por su flag.
-Nuevo runbook: `docs/runbooks/legal-account-consent-postgresql.md`.
-Tests: `LegalAcceptanceRetentionIT`, `LegalAcceptanceMaintenanceIsolationIT`.
+La frontera `LegalAcceptanceMaintenanceBoundary` usa credencial LOGIN propia,
+REQUIRES_NEW/READ_COMMITTED, preflight exacto de esquema V27–V34 y el nuevo
+`LegalAcceptanceMaintenancePrivilegeVerifier` antes de cada pasada. No acepta
+conexión/rol del request, keyrings ni fallback al datasource web. El verificador
+acredita privilegios por columna y la cadena de helpers congelados; no concede
+lectura de ciphertext, tag, nonce o cuentas ni escrituras sobre evidencia canónica.
+Los UPDATE(id) de los dos padres idempotentes permiten locks; los guards impiden
+actualizaciones efectivas de esos registros.
 
-Gate focal: no borrar antes del vencimiento, tombstones/nonce persistentes, purga atómica por lote,
-resultados activos protegidos, colisión con replay y cambio de keyring, batches finitos, retry tras
-fallo y observabilidad sin datos sensibles. Rol request no adquiere DELETE ni acceso de mantenimiento.
-Runbook incluye rotación en réplicas, recuperación de UNKNOWN, configuración/retención y alertas;
-no se configura un cron real ni un entorno compartido. Commit: `feat(legal): mantiene retencion de evidencia tecnica`.
+Selecciona hasta once candidatos por categoría para observar pendientes y procesa
+como máximo diez cabeceras y diez padres de cada ledger. Cada DEDUP conserva el
+límite existente de 2.048 referencias. Adquiere gates compartidos de taller
+ordenados, try-locks exclusivos de tupla ordenados como enteros sin signo y luego
+try-lock editorial compartido; sólo después bloquea filas con SKIP LOCKED.
+La clave de tupla es exactamente V29, independiente de key_version. Talleres
+restringidos/inactivos y fuera de gracia siguen siendo mantenibles. Locks ocupados
+quedan pendientes; no se acredita justicia entre candidatos bloqueados ni un SLA.
+
+Pool propio de dos conexiones, borrow de 1 s, frontera de 15 s, SQL de hasta 5 s y
+lock_timeout de hasta 1 s, ambos acotados por el remanente. El datasource existente
+controla cancelación, deadline y limpieza. Constraints diferidas, commit, rollback
+y devolución de conexión forman parte de la acreditación: sólo un retorno normal
+entrega el Batch. Fallos con persistencia incierta o posterior a commit devuelven
+UNKNOWN sin datos de SQL, IDs o HMAC. La respuesta contiene sólo contadores y un
+booleano; `pending=false` describe la observación de esas categorías, no borrado
+global ni eliminación física en WAL, réplicas o backups.
+
+`LegalAcceptanceMaintenanceConfiguration` se registra únicamente en un contexto
+interno explícito y separado; no es componente ni se importa desde la aplicación.
+Flags `ordenfix.legal.maintenance.enabled` y `.scheduled` ausentes/false mantienen
+apagada la capacidad; ambos admiten sólo true/false exactos. Scheduler opcional con
+initialDelay/fixedDelay de 60 s, sin activación en este corte. BATCH_COMPLETED,
+WORK_REMAINS, RETRY_REQUIRED y RECONCILIATION_REQUIRED describen la última pasada en
+memoria/logs saneados, sin recibo durable ni alerta externa.
+
+El [runbook PostgreSQL](../runbooks/legal-account-consent-postgresql.md) registra
+permisos, configuración separada, rotación coordinada, UNKNOWN, límites y alertas
+operativas pendientes. El fixture de roles se restringe a clusters PostgreSQL 16
+descartables `ordenfix_legal_maintenance_*`; sus revocaciones PUBLIC no son un script
+de despliegue productivo. No se modifica V27–V34 ni se crea V35, endpoint, credencial
+real o cron de entorno. Commit: `feat(legal): mantiene retencion de evidencia tecnica`.
+
+### Validación 15O — 2026-09-12, 23:25:01 -03
+
+Gate focal consolidado: **351 pruebas aprobadas**, 272 unitarias y 79 IT, trece
+clases con cero fallos, errores u omisiones. Los casos nuevos son 42 unitarias y
+44 IT PostgreSQL 16.14; el resto acredita los consumidores de configuración y
+aceptación existentes. No se suman dos veces clases repetidas ni XML ajenos.
+Empaquetado y verificación de ausencia de propiedades secretas aprobados.
+
+La primera ejecución no llegó a correr pruebas por inferencia genérica ambigua
+de AssertJ en los tests nuevos. Se precisaron los tipos y la aserción de campos
+del Batch. La segunda ejecutó 40 unitarias y 44 IT, con un único error del fixture
+de capacidad: intentaba aceptar repetidamente el mismo requisito con un usuario,
+violando la unicidad vigente. Se generó un actor distinto por iteración sin tocar
+constraints. Las otras 43 IT quedaron aprobadas, incluyendo privilegios,
+aislamiento, purga y rollback. No se presenta esa corrida como BUILD SUCCESS.
+
+La repetición final agregó dos casos de observabilidad del scheduler y las
+regresiones de contextos/aceptación: 264 unitarias y 53 IT, BUILD SUCCESS en 1:34 min.
+Los ocho tests del fixture y 26 IT de privilegios/aislamiento conservaron su pase
+anterior: sus clases y producción asociada no cambiaron. Consolidación local:
+`/private/tmp/ordenfix-legal-15o-consolidated-results.json`.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' \
+./mvnw -B -Dtest=LegalAcceptanceMaintenanceConfigurationTest,LegalRestrictedMaintenanceRoleFixtureTest \
+  -Dit.test=LegalAcceptanceMaintenancePrivilegeVerifierIT,LegalAcceptanceMaintenanceIsolationIT,LegalAcceptanceRetentionIT verify
+
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' \
+./mvnw -B -Dtest=LegalAcceptanceMaintenanceConfigurationTest,LegalDatabaseBoundaryMarkerTest,LegalAcceptanceDatabaseConfigurationTest,LegalRegistrationDatabaseConfigurationTest,LegalPrivateRequirementsDatabaseConfigurationTest,LegalPublicRequirementsDatabaseConfigurationTest,LegalPublicDocumentReadDatabaseConfigurationTest,LegalRequiredSetAggregateDatabaseConfigurationTest \
+  -Dit.test=LegalAcceptanceRetentionIT,LegalAcceptanceServiceIT verify
+```
+
+Logs de las tres ejecuciones: `/private/tmp/ordenfix-legal-15o-first.log`,
+`/private/tmp/ordenfix-legal-15o-compiled.log` y
+`/private/tmp/ordenfix-legal-15o-regressions.log`. Son evidencia local descartable.
+
+Se acreditan límites exactos al microsegundo usando el tiempo de transacción DB,
+IP con/sin UA, conservación de nonce y rechazo de reutilización, NEW/EMPTY/DEDUP,
+lotes 11 → 10+1, cero DML repetido, rollback entre cifrado/cabecera y entre
+referencias/padre, dos workers, locks de fila/editorial/taller/tupla y key_version
+persistida 99 sin keyring. También talleres cerrados después de gracia,
+suspensión/restauración del caller, SQL prohibido, deriva de esquema/permisos y
+fallos antes/después de commit, durante close y tras vencer el deadline. Las fechas
+vencidas se preparan mediante la conexión propietaria exclusivamente en fixtures
+descartables; las operaciones verificadas usan el rol restringido y los guards
+activos. No se envejece ni purga información real.
+
+La revisión independiente no encontró fallos materiales en permisos transitivos,
+orden de locks, frontera transaccional o configuración apagada. El único cambio
+a una clase existente es el marcador MAINTENANCE; sus consumidores se incluyen en
+las regresiones. No se ejecuta clean verify: el integral de cierre permanece en E.
+V27–V34 se compararon byte a byte con HEAD y los 77 archivos ajenos no versionados
+del frontend conservaron sus hashes. Backend detenido, sin cambios en secretos,
+configuración real, proveedores o interfaz. Un commit por repositorio, sin push.
 
 ## 15P — Concurrencia, causalidad, capacidad y deadlines
 
