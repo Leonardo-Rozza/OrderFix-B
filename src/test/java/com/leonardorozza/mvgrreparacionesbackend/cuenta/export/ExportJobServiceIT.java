@@ -70,7 +70,8 @@ class ExportJobServiceIT {
         registry.add("spring.jpa.properties.hibernate.dialect",()->"org.hibernate.dialect.PostgreSQLDialect");
     }
     @BeforeEach void prepare() {
-        jdbc.update("DELETE FROM cuenta_exportaciones");
+        // Clear isolated fixtures, including READY archives intentionally retained on a restricted workshop.
+        replica(()->jdbc.update("DELETE FROM cuenta_exportaciones"));
         own=actor(); jobs=service(snapshots,null);
     }
     @Test void requestReplayAndFreshDownloadProofProduceOneAuthenticatedZip() throws Exception {
@@ -220,31 +221,49 @@ class ExportJobServiceIT {
     @Test void photoDeletionWaitsUntilTheReadyPublicationCommits() throws Exception {
         Photo photo=photo(); PrivatePhotoService port=mock(PrivatePhotoService.class);
         when(port.content(any(),eq(photo.repair()),eq(photo.id()))).thenReturn(new PrivatePhotoDtos.Content("image/png",photo.bytes()));
-        jobs=service(snapshots,port); String access=token(own);
-        var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());
-        jdbc.execute("CREATE FUNCTION export_publish_barrier_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.estado='READY' THEN PERFORM pg_advisory_xact_lock(9176423); END IF; RETURN NEW; END $$");
-        jdbc.execute("CREATE TRIGGER export_publish_barrier_fixture BEFORE UPDATE ON cuenta_exportaciones FOR EACH ROW EXECUTE FUNCTION export_publish_barrier_fixture()");
-        try(var controller=java.sql.DriverManager.getConnection(PG.getJdbcUrl(),PG.getUsername(),PG.getPassword()); var executor=Executors.newFixedThreadPool(2)) {
-            controller.createStatement().execute("SELECT pg_advisory_lock(9176423)");
+        var observedJdbc=spy(jdbc);
+        var readyUpdate=new CountDownLatch(1);var releasePublication=new CountDownLatch(1);
+        doAnswer(invocation->{
+            // requireLive has already acquired the real photo/repair/actor locks in this transaction.
+            // Pausing Java here keeps the V33 catalog unchanged, unlike a synthetic database trigger.
+            readyUpdate.countDown();
+            if(!releasePublication.await(10,TimeUnit.SECONDS))throw new AssertionError("Publication fixture deadline");
+            return invocation.callRealMethod();
+        }).when(observedJdbc).update(argThat(sql->sql.contains("SET estado='READY',archive_cipher=?")),any(Object[].class));
+        jobs=new ExportJobService(observedJdbc,manager,reauth,snapshots,codec,new ExportPhotoReader(()->port));
+        String access=token(own);var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());
+        try(var executor=Executors.newFixedThreadPool(2)) {
             var publish=executor.submit(jobs::runNext);
             try {
-                awaitDatabaseWait("%archive_cipher=%");
+                assertThat(readyUpdate.await(8,TimeUnit.SECONDS)).isTrue();
                 var deletion=executor.submit(()-> {
                     try(var connection=java.sql.DriverManager.getConnection(PG.getJdbcUrl(),PG.getUsername(),PG.getPassword())) {
-                        connection.setAutoCommit(false); connection.createStatement().execute("SET LOCAL session_replication_role=replica");
+                        connection.setAutoCommit(false);connection.createStatement().execute("SET LOCAL session_replication_role=replica");
                         try(var statement=connection.prepareStatement("UPDATE reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE' WHERE id=?")) {
-                            statement.setObject(1,photo.id()); statement.executeUpdate();
+                            statement.setObject(1,photo.id());statement.executeUpdate();
                         }
-                        connection.commit(); return true;
+                        // Only after the publishing transaction releases its photo lock can this update finish.
+                        // The complete archive must already be committed before this deletion commits.
+                        byte[] published;
+                        try(var statement=connection.prepareStatement("SELECT estado,archive_cipher FROM cuenta_exportaciones WHERE id=?")) {
+                            statement.setObject(1,job.id());
+                            try(var row=statement.executeQuery()) {
+                                assertThat(row.next()).isTrue();assertThat(row.getString(1)).isEqualTo("READY");
+                                published=row.getBytes(2);assertThat(published).isNotEmpty();
+                            }
+                        }
+                        var files=unzip(codec.decryptArchive(new ExportArtifactCodec.Context(job.id(),own.workshop(),own.user()),published));
+                        assertThat(files.get("archivos/fotos/"+photo.id()+".png")).containsExactly(photo.bytes());
+                        connection.commit();return true;
                     }
                 });
                 awaitDatabaseWait("UPDATE reparacion_fotos_privadas SET estado=%");
                 assertThat(deletion.isDone()).isFalse();
-                controller.createStatement().execute("SELECT pg_advisory_unlock(9176423)");
-                assertThat(publish.get(15,TimeUnit.SECONDS)).isTrue(); assertThat(deletion.get(15,TimeUnit.SECONDS)).isTrue();
-            } finally { controller.createStatement().execute("SELECT pg_advisory_unlock(9176423)"); }
-        } finally { jdbc.execute("DROP TRIGGER export_publish_barrier_fixture ON cuenta_exportaciones"); jdbc.execute("DROP FUNCTION export_publish_barrier_fixture()"); }
-        jobs.cleanup(); assertPurged(job.id(),"REVOKED");
+                releasePublication.countDown();
+                assertThat(publish.get(15,TimeUnit.SECONDS)).isTrue();assertThat(deletion.get(15,TimeUnit.SECONDS)).isTrue();
+            } finally {releasePublication.countDown();}
+        }
+        jobs.cleanup();assertPurged(job.id(),"REVOKED");
     }
     @Test void latestRecoversOnlyTheCurrentOwnersJobAcrossSessions() {
         String access=token(own);
@@ -283,6 +302,76 @@ class ExportJobServiceIT {
         assertUsed(proof,false);
         assertThat(plaintextSeen.get()).isNotEmpty().containsOnly((byte)0);
     }
+    @Test void restrictedOwnerRecoversAndDownloadsReboundReadyArchiveWithoutExtendingItsTtl() throws Exception {
+        String previousAccess=token(own);
+        var job=jobs.request(previousAccess,grant(previousAccess,EXPORTAR),UUID.randomUUID());jobs.runNext();
+        Instant originalExpiry=jobs.status(previousAccess,job.id()).expiresAt();
+        byte[] originalCipher=jdbc.queryForObject("SELECT archive_cipher FROM cuenta_exportaciones WHERE id=?",byte[].class,job.id());
+        restrictWorkshop(own,true);
+        String restrictedAccess=token(own);
+
+        assertThatThrownBy(()->jobs.latest(previousAccess)).isInstanceOf(RuntimeException.class);
+        jobs.cleanup();
+        assertThat(jobs.latest(restrictedAccess)).contains(new ExportJobService.Status(job.id(),"READY",originalExpiry,false));
+        assertThat(jobs.status(restrictedAccess,job.id()).expiresAt()).isEqualTo(originalExpiry);
+        assertThat(jdbc.queryForObject("SELECT archive_cipher FROM cuenta_exportaciones WHERE id=?",byte[].class,job.id())).containsExactly(originalCipher);
+        String proof=grant(restrictedAccess,DESCARGAR_EXPORTACION);
+        assertThat(unzip(jobs.authorizedArchive(restrictedAccess,proof,job.id()))).containsKeys("manifest.json","datos/clientes.json");
+        assertUsed(proof,true);
+        assertThatThrownBy(()->grant(restrictedAccess,EXPORTAR))
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException.class);
+        assertThatThrownBy(()->jobs.request(restrictedAccess,"unusable",UUID.randomUUID()))
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException.class);
+        assertThat(jobs.runNext()).isFalse();
+        assertThat(jobs.status(restrictedAccess,job.id()).expiresAt()).isEqualTo(originalExpiry);
+    }
+
+    @Test void restrictedReadyWithoutExplicitEpochRebindingIsRevoked() {
+        String access=token(own);var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());jobs.runNext();
+        restrictWorkshop(own,false);
+        jobs.cleanup();assertPurged(job.id(),"REVOKED");
+        assertThat(jobs.latest(token(own))).isEmpty();
+    }
+
+    @Test void expiredGraceRevokesReadyEvenIfTheOriginalArtifactTtlRemainsValid() {
+        String access=token(own);var job=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());jobs.runNext();
+        restrictWorkshop(own,true);
+        replica(()->jdbc.update("""
+                UPDATE talleres SET cierre_confirmado_en=statement_timestamp()-INTERVAL '8 days',
+                    cierre_reversible_hasta=statement_timestamp()-INTERVAL '1 day',
+                    cierre_eliminacion_prevista_en=statement_timestamp()+INTERVAL '29 days' WHERE id=?
+                """,own.workshop()));
+        jobs.cleanup();assertPurged(job.id(),"REVOKED");
+    }
+
+    @Test void closedQueuedJobsArePurgedWithoutCapturingAndDoNotStarveAnotherWorkshop() {
+        var captured=spy(snapshots);jobs=service(captured,null);
+        String access=token(own);var closed=jobs.request(access,grant(access,EXPORTAR),UUID.randomUUID());
+        restrictWorkshop(own,false);
+        Actor other=actor();String otherAccess=token(other);
+        var next=jobs.request(otherAccess,grant(otherAccess,EXPORTAR),UUID.randomUUID());
+        assertThat(jobs.runNext()).isTrue();
+        assertPurged(closed.id(),"REVOKED");
+        verify(captured,never()).capture(eq(own.user()),eq(own.workshop()),anyLong());
+        assertThat(jobs.status(otherAccess,next.id()).state()).isEqualTo("READY");
+    }
+
+    /** Seeds the consumer state; the closure store IT verifies the real atomic transition and epoch rebinding. */
+    private void restrictWorkshop(Actor actor,boolean rebindReady) {
+        replica(()-> {
+            jdbc.update("UPDATE users SET token_version=token_version+1 WHERE taller_id=?",actor.workshop());
+            if(rebindReady)jdbc.update("""
+                    UPDATE cuenta_exportaciones j SET token_version=u.token_version
+                    FROM users u WHERE u.id=j.user_id AND j.taller_id=? AND j.estado='READY'
+                    """,actor.workshop());
+            jdbc.update("""
+                    UPDATE talleres SET cierre_estado='RESTRINGIDO',cierre_version=1,cierre_referencia=?,
+                        cierre_confirmado_en=statement_timestamp(),cierre_reversible_hasta=statement_timestamp()+INTERVAL '7 days',
+                        cierre_eliminacion_prevista_en=statement_timestamp()+INTERVAL '37 days' WHERE id=?
+                    """,UUID.randomUUID(),actor.workshop());
+        });
+    }
+
     private void awaitDatabaseWait(String query) throws Exception {
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
         while(System.nanoTime()<deadline) {

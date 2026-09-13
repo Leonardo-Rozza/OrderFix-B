@@ -65,6 +65,10 @@ import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 /** Real account/token commits, independent PostgreSQL observations, BCrypt and JWT signing. */
 @SpringBootTest
@@ -174,7 +178,7 @@ class LegacyRegistrationPostCommitIT {
         assertThat(rows()).isEqualTo(PROBE.rowsAfterCommit);
     }
 
-    @ParameterizedTest @ValueSource(strings = {"user", "workshop", "password", "membership"})
+    @ParameterizedTest @ValueSource(strings = {"user", "workshop", "password"})
     void postCommitIneligibilityCannotIssueASessionOrRecreateTheAccount(String change) {
         var request = request();
         PROBE.afterCommit = identity -> {
@@ -183,10 +187,6 @@ class LegacyRegistrationPostCommitIT {
                 case "workshop" -> owner().update("UPDATE talleres SET activo = false WHERE id = ?", identity.tallerId());
                 case "password" -> owner().update("UPDATE users SET password = ?, token_version = 1 WHERE id = ?",
                         new BCryptPasswordEncoder().encode("changed-registration-password"), identity.userId());
-                case "membership" -> {
-                    long other = owner().queryForObject("INSERT INTO talleres(nombre,activo) VALUES ('Other tenant',true) RETURNING id", Long.class);
-                    owner().update("UPDATE users SET taller_id = ? WHERE id = ?", other, identity.userId());
-                }
                 default -> throw new AssertionError(change);
             }
         };
@@ -201,6 +201,39 @@ class LegacyRegistrationPostCommitIT {
         assertThat(owner().queryForObject("SELECT count(*) FROM users WHERE id = ?", Long.class, PROBE.created.userId())).isEqualTo(1);
         assertThat(rows()).isEqualTo(change.equals("password") ? PROBE.rowsAtEmail : PROBE.rowsAfterCommit);
         assertNoAmbientTransaction();
+    }
+
+    @Test void mismatchedPostCommitIdentityCannotIssueASessionOrMoveTheCommittedAccount() {
+        var request = request();
+        long otherWorkshop = owner().queryForObject(
+                "INSERT INTO talleres(nombre,activo) VALUES ('Other identity fixture',true) RETURNING id", Long.class);
+        var identityBoundary = mock(LegacyRegistrationAccountWriter.class);
+        when(identityBoundary.create(request)).thenAnswer(invocation -> {
+            // Keep the real writer/proxy/commit. Corrupt only the returned identity checkpoint,
+            // since V33 deliberately forbids moving an existing user to another workshop.
+            var committed = writer.create(request);
+            assertThat(PROBE.events).containsExactly("account-commit");
+            assertThat(committed.userId()).isEqualTo(PROBE.created.userId());
+            assertThat(committed.tallerId()).isEqualTo(PROBE.created.tallerId()).isNotEqualTo(otherWorkshop);
+            return new LegacyRegistrationAccountWriter.Identity(committed.userId(), otherWorkshop);
+        });
+        var coordinator = new RegistroService(identityBoundary,
+                applicationContext.getBean(AccountVerificationNotifier.class),
+                applicationContext.getBean(AccountSessionPolicy.class));
+
+        assertThatThrownBy(() -> coordinator.registrar(request)).isInstanceOf(BadCredentialsException.class)
+                .hasMessage("Usuario o contraseña incorrectos");
+
+        verify(identityBoundary).create(request); verifyNoMoreInteractions(identityBoundary);
+        assertAccount(request, PROBE.created); assertMutableWriter();
+        assertThat(PROBE.events).containsExactly("account-commit");
+        assertThat(PROBE.inserts).containsExactly("talleres", "suscripciones", "users");
+        assertThat(PROBE.signatures).isZero(); assertThat(PROBE.deliveries).isZero();
+        assertThat(owner().queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id = ?", Long.class,
+                PROBE.created.userId())).isZero();
+        assertThat(owner().queryForObject("SELECT count(*) FROM users WHERE id = ? AND taller_id = ?", Long.class,
+                PROBE.created.userId(), otherWorkshop)).isZero();
+        assertThat(rows()).isEqualTo(PROBE.rowsAfterCommit); assertNoAmbientTransaction();
     }
 
     @Test void aSigningFailurePreservesTheCommittedAccountAndTokenWithoutRetryOrAnotherWelcome() {

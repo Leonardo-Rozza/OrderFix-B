@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.cuenta.export;
 
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.reauth.ExportReauthenticationService;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.reauth.ExportReauthenticationService.ExportSession;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -61,17 +63,19 @@ public final class ExportJobService {
     /** Recovers the latest own request without storing its identifier in browser storage. */
     public Optional<Status> latest(String accessToken) {
         return transaction(()-> {
-            ExportSession actor=reauthentication.authorize(accessToken);
+            ExportSession actor=reauthentication.authorizeDownload(accessToken);
             cleanupLocked();
             var jobs=jdbc.query(SELECT+" WHERE user_id=? AND taller_id=? AND token_version=? ORDER BY creada_en DESC,id DESC LIMIT 1",
                     ExportJobService::row,actor.userId(),actor.tallerId(),actor.tokenVersion());
+            reauthentication.authorizeDownload(accessToken);
             return jobs.isEmpty()?Optional.empty():Optional.of(status(jobs.getFirst(),false));
         });
     }
     public Status status(String accessToken,UUID id) {
         return transaction(()-> {
-            ExportSession actor=reauthentication.authorize(accessToken);
-            cleanupLocked(); Job job=find(id); requireOwner(job,actor); return status(job,false);
+            ExportSession actor=reauthentication.authorizeDownload(accessToken);
+            cleanupLocked(); Job job=find(id); requireOwner(job,actor);
+            reauthentication.authorizeDownload(accessToken); return status(job,false);
         });
     }
     /** Every bounded HTTP download consumes a fresh proof and authenticates the complete ciphertext. */
@@ -80,7 +84,7 @@ public final class ExportJobService {
         boolean delivered=false;
         try {
             byte[] result=transaction(()-> {
-                ExportSession actor=reauthentication.authorize(accessToken);
+                ExportSession actor=reauthentication.authorizeDownload(accessToken);
                 cleanupLocked(); Job job=find(id); requireOwner(job,actor);
                 if(!job.state().equals("READY")) throw new ExportPackageException(INVALID_PACKAGE);
                 requireLive(job,true);
@@ -88,7 +92,7 @@ public final class ExportJobService {
                 reauthentication.consume(accessToken,proof,DESCARGAR_EXPORTACION);
                 byte[] encrypted=jdbc.queryForObject("SELECT archive_cipher FROM public.cuenta_exportaciones WHERE id=?",byte[].class,id);
                 decrypted[0]=codec.decryptArchive(context(job),encrypted);
-                reauthentication.authorize(accessToken); // Work cannot extend the actual JWT lifetime.
+                reauthentication.authorizeDownload(accessToken); // Work cannot extend the actual JWT lifetime.
                 requireLive(job,true);
                 return decrypted[0];
             });
@@ -103,7 +107,7 @@ public final class ExportJobService {
         Job job=transaction(()-> {
             cleanupLocked();
             if(jdbc.queryForObject("SELECT count(*) FROM public.cuenta_exportaciones WHERE estado='RUNNING'",Long.class)>0) return null;
-            var rows=jdbc.query(SELECT+" WHERE estado='QUEUED' ORDER BY creada_en,id LIMIT 1 FOR UPDATE",ExportJobService::row);
+            var rows=jdbc.query(SELECT+" WHERE estado='QUEUED' AND EXISTS(SELECT 1 FROM public.talleres t WHERE t.id=taller_id AND t.activo AND t.cierre_estado='ABIERTO') ORDER BY creada_en,id LIMIT 1 FOR UPDATE",ExportJobService::row);
             if(rows.isEmpty()) return null;
             UUID id=rows.getFirst().id(),lease=UUID.randomUUID();
             jdbc.update("""
@@ -168,7 +172,8 @@ public final class ExportJobService {
             var matches=jdbc.query(SELECT+" WHERE id=? AND lease_id=? AND estado='RUNNING'",ExportJobService::row,original.id(),original.lease());
             if(matches.isEmpty()) return false; // A stale worker cannot publish, retry, or erase a successor.
             Job current=matches.getFirst();
-            String state=!current.expiresAt().isAfter(now())?"EXPIRED":code==ACCESS_DENIED?"REVOKED":code==UNAVAILABLE && current.attempts()<3?"QUEUED":"FAILED";
+            boolean operational=Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM public.talleres WHERE id=? AND activo AND cierre_estado='ABIERTO')",Boolean.class,current.workshop()));
+            String state=!current.expiresAt().isAfter(now())?"EXPIRED":!operational || code==ACCESS_DENIED?"REVOKED":code==UNAVAILABLE && current.attempts()<3?"QUEUED":"FAILED";
             boolean retry=state.equals("QUEUED");
             jdbc.update("""
                     UPDATE public.cuenta_exportaciones SET estado=?,fallo=?,lease_id=NULL,lease_hasta=NULL,archive_cipher=NULL,
@@ -242,7 +247,8 @@ public final class ExportJobService {
             return work.get();
         }); } catch(ExportPackageException | com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException
                 | com.leonardorozza.mvgrreparacionesbackend.exceptions.UnauthorizedException
-                | org.springframework.security.access.AccessDeniedException rejected) { throw rejected; }
+                | org.springframework.security.access.AccessDeniedException
+                | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) { throw rejected; }
         catch(RuntimeException failure) { throw new ExportPackageException(UNAVAILABLE); }
     }
     private Instant now() { return jdbc.queryForObject("SELECT clock_timestamp()",OffsetDateTime.class).toInstant(); }
@@ -254,7 +260,7 @@ public final class ExportJobService {
                 r.getObject("expira_en",OffsetDateTime.class).toInstant(),r.getObject("lease_id",UUID.class),r.getInt("intentos"));
     }
     private static final String SELECT="SELECT id,user_id,taller_id,token_version,session_hash,estado,expira_en,lease_id,intentos FROM public.cuenta_exportaciones";
-    private static final String VALID_ACTOR="EXISTS(SELECT 1 FROM public.users u JOIN public.talleres t ON t.id=u.taller_id WHERE u.id=j.user_id AND u.taller_id=j.taller_id AND u.role='ADMIN' AND u.active AND u.email_verificado AND t.activo AND u.token_version=j.token_version)";
+    private static final String VALID_ACTOR="EXISTS(SELECT 1 FROM public.users u JOIN public.talleres t ON t.id=u.taller_id WHERE u.id=j.user_id AND u.taller_id=j.taller_id AND u.role='ADMIN' AND u.active AND u.email_verificado AND t.activo AND u.token_version=j.token_version AND (t.cierre_estado='ABIERTO' OR (j.estado='READY' AND t.cierre_estado='RESTRINGIDO' AND t.cierre_reversible_hasta>clock_timestamp())))";
     private static final String PHOTO_ALLOWED="p.estado='ASOCIADA' AND p.retener_hasta>clock_timestamp() AND EXISTS(SELECT 1 FROM public.reparaciones r WHERE r.id=p.reparacion_id AND r.id=p.reparacion_original_id AND r.taller_id=p.taller_id) AND EXISTS(SELECT 1 FROM public.users u WHERE u.id=p.user_id AND u.taller_id=p.taller_id)";
     private static final String VALID_PHOTOS="NOT EXISTS(SELECT 1 FROM unnest(j.foto_ids) expected(id) WHERE NOT EXISTS(SELECT 1 FROM public.reparacion_fotos_privadas p WHERE p.id=expected.id AND p.taller_id=j.taller_id AND "+PHOTO_ALLOWED+"))";
 }

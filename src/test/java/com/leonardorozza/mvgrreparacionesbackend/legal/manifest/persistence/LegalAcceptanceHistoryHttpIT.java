@@ -220,10 +220,8 @@ class LegalAcceptanceHistoryHttpIT {
 
     @Test void anotherUserInTheSameWorkshopAndAnotherTenantAreNeverIncludedInOwnHistory() throws Exception {
         Actor actor = seedActor(owner, "USER");
-        Actor colleague = seedActor(owner, "USER");
+        Actor colleague = seedActor(owner, "USER", actor.workshopId());
         Actor foreign = seedActor(owner, "ADMIN");
-        owner.update("UPDATE users SET taller_id = ? WHERE id = ?", actor.workshopId(), colleague.userId());
-        colleague = new Actor(colleague.userId(), actor.workshopId(), colleague.role(), colleague.audience());
         acceptAsOwnerFixture(colleague); acceptAsOwnerFixture(foreign);
         openHttp(properties(true, false, false));
         var before = counts(owner);
@@ -286,15 +284,19 @@ class LegalAcceptanceHistoryHttpIT {
     }
 
     @ParameterizedTest @ValueSource(strings = {"role", "token", "inactive", "workshop", "tenant", "missing"})
-    void invalidatedActorSnapshotReturns401AndRollsBackWithoutReadingAnotherIdentity(String mutation) throws Exception {
+    void invalidOrStaleActorSnapshotReturns401AndRollsBackWithoutReadingAnotherIdentity(String mutation) throws Exception {
         Actor actor = seedActor(owner, "USER"); openHttp(properties(true, false, false));
-        MockHttpServletRequestBuilder request = authenticatedGet(actor);
+        // A foreign workshop belongs only to the presented snapshot; persisted membership stays immutable.
+        Actor presentedActor = mutation.equals("tenant")
+                ? new Actor(actor.userId(), seedActor(owner, "ADMIN").workshopId(), actor.role(), actor.audience())
+                : actor;
+        MockHttpServletRequestBuilder request = authenticatedGet(presentedActor);
         switch (mutation) {
             case "role" -> owner.update("UPDATE users SET role = 'ADMIN' WHERE id = ?", actor.userId());
             case "token" -> owner.update("UPDATE users SET token_version = 1 WHERE id = ?", actor.userId());
             case "inactive" -> owner.update("UPDATE users SET active = false WHERE id = ?", actor.userId());
             case "workshop" -> owner.update("UPDATE talleres SET activo = false WHERE id = ?", actor.workshopId());
-            case "tenant" -> owner.update("UPDATE users SET taller_id = ? WHERE id = ?", seedActor(owner, "ADMIN").workshopId(), actor.userId());
+            case "tenant" -> { /* The mismatching snapshot above must fail in the real actor reader. */ }
             case "missing" -> owner.update("DELETE FROM users WHERE id = ?", actor.userId());
             default -> throw new AssertionError(mutation);
         }

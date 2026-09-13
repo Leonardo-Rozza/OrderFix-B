@@ -255,6 +255,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException ex,
                                                         HttpServletRequest request) {
 
+        var closure=closureFailure(ex,request);
+        if(closure!=null) return closure;
         if (privatePhotoDeletionPending(ex)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(
                     LocalDateTime.now(), HttpStatus.CONFLICT.value(), "Conflicto de datos",
@@ -362,6 +364,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleGeneralError(Exception ex,
                                                        HttpServletRequest request) {
 
+        var closure=closureFailure(ex,request);
+        if(closure!=null) return closure;
         // Log completo del lado del servidor; al cliente NO se le filtra el detalle interno.
         log.error("Error no controlado en {}", request.getRequestURI(), ex);
 
@@ -374,6 +378,29 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    @ExceptionHandler({com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException.class,
+            com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException.class})
+    public ResponseEntity<ApiError> handleClosure(RuntimeException failure,HttpServletRequest request) {
+        return closureFailure(failure,request);
+    }
+
+    private ResponseEntity<ApiError> closureFailure(Throwable failure,HttpServletRequest request) {
+        boolean blocked=failure instanceof com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+        boolean busy=failure instanceof com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException;
+        var seen=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable,Boolean>());
+        for(Throwable current=failure;current!=null && seen.add(current);current=current.getCause()) {
+            if(current instanceof java.sql.SQLException sql) {
+                blocked|="P0033".equals(sql.getSQLState());busy|="P0034".equals(sql.getSQLState());
+            }
+        }
+        if(!blocked && !busy) return null;
+        var status=blocked?HttpStatus.LOCKED:HttpStatus.SERVICE_UNAVAILABLE;
+        return ResponseEntity.status(status).header("Cache-Control","private, no-store")
+            .body(new ApiError(LocalDateTime.now(),status.value(),status.getReasonPhrase(),
+              blocked?"El taller está en proceso de cierre.":"El taller tiene una operación en curso. Intentá nuevamente.",
+              request.getRequestURI(),blocked?"CUENTA_EN_CIERRE":"CUENTA_NO_DISPONIBLE",null));
     }
 
     private Map<String, Object> optionalDetails(Map<String, Object> details) {

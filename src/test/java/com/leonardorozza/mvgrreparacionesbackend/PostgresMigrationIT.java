@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -15,6 +16,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -101,9 +103,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("32");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("33");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -306,7 +308,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV32ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
+    void latestV33ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -327,7 +329,7 @@ class PostgresMigrationIT {
                 """, String.class);
         assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
         assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);
-        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones", "cuenta_exportaciones"));
+        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones", "cuenta_exportaciones", "cuenta_cierres"));
 
         var tiposRepresentativos = jdbcTemplate.queryForList("""
                 SELECT table_name || '.' || column_name || ':' || data_type
@@ -794,9 +796,12 @@ class PostgresMigrationIT {
                 INSERT INTO users (username, password, email, role, active, taller_id)
                 VALUES ('Sin taller', 'hash', 'sin-taller@test.com', 'USER', TRUE, NULL)
                 """))
-                .isInstanceOf(DataIntegrityViolationException.class)
-                .rootCause()
-                .hasMessageContaining("taller_id");
+                // V33 rejects missing ownership before the still-present V26 NOT NULL constraint.
+                .isInstanceOf(UncategorizedSQLException.class)
+                .rootCause().isInstanceOf(SQLException.class)
+                .satisfies(cause -> assertThat(((SQLException) cause).getSQLState()).isEqualTo("P0033"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM users WHERE email = 'sin-taller@test.com'", Long.class)).isZero();
 
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO users (username, password, email, role, active, taller_id)

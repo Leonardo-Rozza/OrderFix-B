@@ -78,6 +78,12 @@ public class MercadoPagoSubscriptionStateService {
             suscripcion.setProximoCobro(nextPayment.atZone(ZoneOffset.UTC).toLocalDate());
         }
 
+        // Provider observations remain durable; closure is never an entitlement activation.
+        if (!isOperational(suscripcion)) {
+            suscripcionRepository.save(suscripcion);
+            return;
+        }
+
         switch (status) {
             case "authorized" -> applyAuthorizedPreapproval(suscripcion);
             case "paused" -> {
@@ -165,8 +171,10 @@ public class MercadoPagoSubscriptionStateService {
             if (isCurrentOrNewerPayment(suscripcion, dataId, billingAt)) {
                 suscripcion.setMpLastPaymentAt(billingAt);
                 suscripcion.setMpLastAuthorizedPaymentId(dataId);
-                applyPaymentEntitlement(
-                        suscripcion, normalize(link.getStatus()), paymentStatus, statusDetail);
+                if (isOperational(suscripcion)) {
+                    applyPaymentEntitlement(
+                            suscripcion, normalize(link.getStatus()), paymentStatus, statusDetail);
+                }
             } else {
                 log.info("Factura MP histórica {} persistida sin revertir el estado vigente.", dataId);
             }
@@ -232,6 +240,12 @@ public class MercadoPagoSubscriptionStateService {
                     link.setUpdatedAt(clock.instant());
                     linkRepository.save(link);
                 });
+    }
+
+    private boolean isOperational(Suscripcion suscripcion) {
+        var workshop = suscripcion.getTaller();
+        return workshop != null && Boolean.TRUE.equals(workshop.getActivo())
+                && "ABIERTO".equals(workshop.getCierreEstado());
     }
 
     private void activatePro(Suscripcion suscripcion) {

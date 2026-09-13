@@ -1,6 +1,10 @@
 package com.leonardorozza.mvgrreparacionesbackend.cuenta.reauth;
 
 import com.auth0.jwt.interfaces.DecodedJWT;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureAccess;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.UnauthorizedException;
@@ -46,15 +50,26 @@ public class ExportReauthenticationService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final SecureRandom random;
+    private final WorkshopClosureGate closureGate;
 
     @Autowired
     public ExportReauthenticationService(UserRepository users, UserSecurityStateLock securityState,
+            PasswordEncoder passwords, JwtUtils jwt, JdbcTemplate jdbc, Clock clock, WorkshopClosureGate closureGate) {
+        this(users, securityState, passwords, jwt, jdbc, clock, new SecureRandom(), closureGate);
+    }
+
+    public ExportReauthenticationService(UserRepository users, UserSecurityStateLock securityState,
             PasswordEncoder passwords, JwtUtils jwt, JdbcTemplate jdbc, Clock clock) {
-        this(users, securityState, passwords, jwt, jdbc, clock, new SecureRandom());
+        this(users, securityState, passwords, jwt, jdbc, clock, new SecureRandom(), new WorkshopClosureGate(jdbc));
     }
 
     ExportReauthenticationService(UserRepository users, UserSecurityStateLock securityState,
             PasswordEncoder passwords, JwtUtils jwt, JdbcTemplate jdbc, Clock clock, SecureRandom random) {
+        this(users, securityState, passwords, jwt, jdbc, clock, random, new WorkshopClosureGate(jdbc));
+    }
+
+    private ExportReauthenticationService(UserRepository users, UserSecurityStateLock securityState,
+            PasswordEncoder passwords, JwtUtils jwt, JdbcTemplate jdbc, Clock clock, SecureRandom random, WorkshopClosureGate closureGate) {
         this.users = Objects.requireNonNull(users);
         this.securityState = Objects.requireNonNull(securityState);
         this.passwords = Objects.requireNonNull(passwords);
@@ -62,6 +77,7 @@ public class ExportReauthenticationService {
         this.jdbc = Objects.requireNonNull(jdbc);
         this.clock = Objects.requireNonNull(clock);
         this.random = Objects.requireNonNull(random);
+        this.closureGate = Objects.requireNonNull(closureGate);
     }
 
     /**
@@ -74,7 +90,7 @@ public class ExportReauthenticationService {
         requireWritableTransaction();
         try {
             requirePurpose(purpose);
-            LockedSession session = lockSession(accessToken);
+            LockedSession session = lockSession(accessToken, purpose == ExportReauthenticationPurpose.DESCARGAR_EXPORTACION);
             boolean matches = false;
             if (passwordActual != null && !passwordActual.isBlank() && passwordActual.length() <= 100) {
                 try { matches = passwords.matches(passwordActual, session.user().getPassword()); }
@@ -102,7 +118,8 @@ public class ExportReauthenticationService {
             if (inserted != 1) throw unavailable();
             if (!liveNow(session).isBefore(expiresAt)) throw invalidProof();
             return new ReauthenticationGrant(token, expiresAt);
-        } catch (BadRequestException | UnauthorizedException | AccessDeniedException rejected) {
+        } catch (BadRequestException | UnauthorizedException | AccessDeniedException
+                | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) {
             throw rejected;
         } catch (RuntimeException failure) {
             // JWTs, password data and SQL driver diagnostics must not become exception causes.
@@ -117,7 +134,7 @@ public class ExportReauthenticationService {
         try {
             requirePurpose(purpose);
             requireCanonicalToken(opaqueToken);
-            LockedSession session = lockSession(accessToken);
+            LockedSession session = lockSession(accessToken, purpose == ExportReauthenticationPurpose.DESCARGAR_EXPORTACION);
             Instant consumedAt = liveNow(session);
             List<Instant> expirations = jdbc.query("""
                     UPDATE public.cuenta_reautenticaciones SET usada_en = ?
@@ -131,7 +148,8 @@ public class ExportReauthenticationService {
             if (expirations.size() != 1) throw invalidProof();
             // The UPDATE may itself have waited for a database lock beyond the grant's lifetime.
             if (!liveNow(session).isBefore(expirations.getFirst())) throw invalidProof();
-        } catch (BadRequestException | UnauthorizedException | AccessDeniedException rejected) {
+        } catch (BadRequestException | UnauthorizedException | AccessDeniedException
+                | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) {
             throw rejected;
         } catch (RuntimeException failure) {
             throw unavailable();
@@ -143,10 +161,22 @@ public class ExportReauthenticationService {
     public ExportSession authorize(String accessToken) {
         requireWritableTransaction();
         try {
-            LockedSession session = lockSession(accessToken);
+            LockedSession session = lockSession(accessToken, false);
             return new ExportSession(session.user().getId(), session.user().getTaller().getId(),
                     session.user().getTokenVersion(), session.hash());
-        } catch (UnauthorizedException | AccessDeniedException rejected) { throw rejected; }
+        } catch (UnauthorizedException | AccessDeniedException | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) { throw rejected; }
+        catch (RuntimeException failure) { throw unavailable(); }
+    }
+
+    /** Existing archives may be read during grace; this never authorizes generating a new export. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ExportSession authorizeDownload(String accessToken) {
+        requireWritableTransaction();
+        try {
+            LockedSession session = lockSession(accessToken, true);
+            return new ExportSession(session.user().getId(), session.user().getTaller().getId(),
+                    session.user().getTokenVersion(), session.hash());
+        } catch (UnauthorizedException | AccessDeniedException | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) { throw rejected; }
         catch (RuntimeException failure) { throw unavailable(); }
     }
 
@@ -154,7 +184,7 @@ public class ExportReauthenticationService {
         @Override public String toString() { return "ExportSession[redacted]"; }
     }
 
-    private LockedSession lockSession(String accessToken) {
+    private LockedSession lockSession(String accessToken, boolean allowRestricted) {
         if (accessToken == null || accessToken.isBlank() || accessToken.length() > MAX_ACCESS_TOKEN_LENGTH) {
             throw invalidSession();
         }
@@ -174,21 +204,32 @@ public class ExportReauthenticationService {
                 || user.getRole() == null || user.getTokenVersion() < 0
                 || user.getEmail() == null || user.getEmail().isBlank()
                 || user.getPassword() == null || user.getPassword().isBlank()) throw invalidSession();
+        Instant observedAt = clock.instant();
+        var mode = WorkshopClosureAccess.mode(user, observedAt);
         try {
-            if (!jwt.validateToken(verified, new AuthenticatedUserPrincipal(user))) throw invalidSession();
+            if (!jwt.validateToken(verified, new AuthenticatedUserPrincipal(user, observedAt))) throw invalidSession();
         } catch (RuntimeException rejected) {
             throw invalidSession();
         }
         if (user.getRole() != UserRole.ADMIN) throw new AccessDeniedException("La exportación corresponde al titular del taller.");
         if (!Boolean.TRUE.equals(user.getEmailVerificado())) throw new AccessDeniedException("Se requiere un email verificado para exportar.");
-        LockedSession session = new LockedSession(user, hash(accessToken), verified.getExpiresAtAsInstant());
+        if (mode == WorkshopClosureAccess.Mode.DENIED) throw invalidSession();
+        if (mode == WorkshopClosureAccess.Mode.RESTRICTED && !allowRestricted) throw new WorkshopClosureBlockedException();
+        if (mode == WorkshopClosureAccess.Mode.OPERATIVE) closureGate.requireOperational(user.getTaller().getId());
+        else closureGate.requireAccountAccess(user.getTaller().getId());
+        Instant expiresAt = verified.getExpiresAtAsInstant();
+        if (mode == WorkshopClosureAccess.Mode.RESTRICTED) {
+            Instant graceEnd = user.getTaller().getCierreReversibleHasta().toInstant();
+            if (graceEnd.isBefore(expiresAt)) expiresAt = graceEnd;
+        }
+        LockedSession session = new LockedSession(user, hash(accessToken), expiresAt);
         liveNow(session);
         return session;
     }
 
     private Instant liveNow(LockedSession session) {
         Instant now = clock.instant();
-        // Recheck after the user lock/password work; a JWT's verification leeway cannot extend this grant.
+        // Recheck after lock/password work: neither JWT leeway nor work may extend the grace deadline.
         if (!now.isBefore(session.expiresAt())) throw invalidSession();
         return now;
     }

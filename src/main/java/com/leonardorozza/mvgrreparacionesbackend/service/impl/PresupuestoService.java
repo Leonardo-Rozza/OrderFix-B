@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.ItemPresupuesto;
@@ -34,6 +36,7 @@ public class PresupuestoService {
     private final PresupuestoRepository presupuestoRepository;
     private final ReparacionRepository reparacionRepository;
     private final TenantService tenantService;
+    private final WorkshopClosureGate closureGate;
 
     @Value("${presupuesto.validez-dias-default:7}")
     private int validezDiasDefault;
@@ -111,6 +114,7 @@ public class PresupuestoService {
         Reparacion reparacion = reparacionRepository.findByCodigoSeguimientoAndTallerActivoTrue(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("No encontramos una reparación con ese código."));
 
+        requirePublicOperational(reparacion);
         Presupuesto presupuesto = presupuestoRepository
                 .findFirstByReparacionIdAndEstadoOrderByCreatedAtDesc(reparacion.getId(), EstadoPresupuesto.PENDIENTE)
                 .orElseThrow(() -> new BadRequestException("No hay un presupuesto pendiente para responder."));
@@ -121,12 +125,23 @@ public class PresupuestoService {
     /** Último presupuesto de la reparación (para mostrar en el seguimiento público). Puede ser null. */
     @Transactional(readOnly = true)
     public PresupuestoResponseDTO ultimoDeReparacion(Long reparacionId) {
+        Reparacion reparacion = reparacionRepository.findById(reparacionId)
+                .orElseThrow(() -> new ResourceNotFoundException("No encontramos una reparación con ese código."));
+        requirePublicOperational(reparacion);
         return presupuestoRepository.findFirstByReparacionIdOrderByCreatedAtDesc(reparacionId)
                 .map(this::toDTO)
                 .orElse(null);
     }
 
     // ===== Helpers =====
+
+    private void requirePublicOperational(Reparacion reparacion) {
+        try {
+            closureGate.requireOperational(reparacion.getTaller().getId());
+        } catch (WorkshopClosureBlockedException closed) {
+            throw new ResourceNotFoundException("No encontramos una reparación con ese código.");
+        }
+    }
 
     private PresupuestoResponseDTO responderInterno(Presupuesto presupuesto, boolean aprobar) {
         if (presupuesto.getEstado() != EstadoPresupuesto.PENDIENTE) {

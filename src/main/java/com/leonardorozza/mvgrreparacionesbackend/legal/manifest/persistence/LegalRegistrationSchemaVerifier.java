@@ -26,6 +26,15 @@ final class LegalRegistrationSchemaVerifier implements LegalDatabasePreflight {
             1, "11ebbf93e7305bebc56324d2625fb12833a25aca6311b3bbff3c0472b2deb505", 19, "5f363c06f3678ca575416bee6de7b4153349503231152f8b341e438388615683", 3, "cc001b8c4555c69586a7ec2141a89ae68f134c0ee9a1fc9f2ee8e8ae782b9cf6",
             4, "5a2ec727e88d5eaac700cf85d52fea8cb760b806e01367f59e40148e12063e61", 6, "e6dbcea517b1d2363648075095202f21f7b3aa21b21786d9ca9e5d53c810ae75", 1, "0da85b25a072b9481fd57c3fe2b40f847dc1e720820e065cdffed3a7df7763a0");
 
+    // Recorded independently from the V33 closure diagnostic; V29–V32 retain EXPECTED above.
+    private static final CatalogFingerprint EXPECTED_V33 = new CatalogFingerprint(
+            1,"11ebbf93e7305bebc56324d2625fb12833a25aca6311b3bbff3c0472b2deb505",
+            19,"5f363c06f3678ca575416bee6de7b4153349503231152f8b341e438388615683",
+            3,"cc001b8c4555c69586a7ec2141a89ae68f134c0ee9a1fc9f2ee8e8ae782b9cf6",
+            4,"5a2ec727e88d5eaac700cf85d52fea8cb760b806e01367f59e40148e12063e61",
+            7,"d3fa1f4953925220d924c93424968f39b84fa92682c596d4d55f3ed6f114707e",
+            1,"0da85b25a072b9481fd57c3fe2b40f847dc1e720820e065cdffed3a7df7763a0");
+
     private final JdbcTemplate jdbc;
     private final String expectedSchema;
     private final LegalV29AcceptanceSchemaVerifier acceptance;
@@ -43,7 +52,8 @@ final class LegalRegistrationSchemaVerifier implements LegalDatabasePreflight {
     public void verify() {
         acceptance.verify();
         verifyTopology();
-        if (!EXPECTED.equals(catalogFingerprint())) incompatible();
+        CatalogFingerprint expected = acceptance.usesWorkshopClosureSchema() ? EXPECTED_V33 : EXPECTED;
+        if (!expected.equals(catalogFingerprint())) incompatible();
     }
 
     @Override

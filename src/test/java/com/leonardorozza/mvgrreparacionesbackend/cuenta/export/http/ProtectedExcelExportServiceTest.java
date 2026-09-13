@@ -176,6 +176,26 @@ class ProtectedExcelExportServiceTest {
         verify(f.manager).commit(f.status);
     }
 
+    @Test void closureRejectionIsPreservedBeforeAnyProofOrWorkbookWork() {
+        var f=new Fixture();
+        var denied=new com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException();
+        when(f.reauth.authorize("access")).thenThrow(denied);
+        assertThatThrownBy(()->f.service.download("access","proof")).isSameAs(denied);
+        verifyNoInteractions(f.jdbc,f.excel);
+        verify(f.reauth,never()).consume(anyString(),anyString(),any());
+        verify(f.manager).rollback(f.status);
+    }
+
+    @Test void closureAdmissionFailureAfterGenerationErasesBytesAndPreservesTheSafeException() {
+        var f=new Fixture();
+        var busy=new com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException();
+        when(f.reauth.authorize("access")).thenReturn(f.actor).thenThrow(busy);
+        assertThatThrownBy(()->f.service.download("access","proof")).isSameAs(busy);
+        assertThat(f.bytes).containsOnly((byte)0);
+        verify(f.manager).rollback(f.status);
+        verify(f.manager,never()).commit(any());
+    }
+
     private static void assertCode(Fixture f, ExportPackageException.Code code) {
         assertThatThrownBy(() -> f.service.download("access", "proof"))
                 .isInstanceOfSatisfying(ExportPackageException.class, error -> {

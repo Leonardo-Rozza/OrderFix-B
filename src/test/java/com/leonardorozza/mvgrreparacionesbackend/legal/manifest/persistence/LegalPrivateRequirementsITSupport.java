@@ -237,6 +237,19 @@ final class LegalPrivateRequirementsITSupport {
         return new Actor(user, workshop, role, "ADMIN".equals(role) ? "ADMIN_TITULAR" : "USER");
     }
 
+    /** Creates a colleague with its final membership; V33 never permits moving an existing user. */
+    static Actor seedActor(JdbcTemplate owner, String role, long workshop) {
+        requireSafeEphemeralDatabase(owner);
+        if (!java.util.Set.of("ADMIN", "USER").contains(role)) throw new IllegalArgumentException("Rol inválido");
+        if (workshop <= 0) throw new IllegalArgumentException("Taller inválido");
+        String identity = java.util.UUID.randomUUID().toString();
+        long user = Objects.requireNonNull(owner.queryForObject("""
+                INSERT INTO users (username, password, email, role, taller_id)
+                VALUES (?, 'fixture-hash', ?, ?, ?) RETURNING id
+                """, Long.class, "fixture-" + identity, identity + "@ordenfix.test", role, workshop));
+        return new Actor(user, workshop, role, "ADMIN".equals(role) ? "ADMIN_TITULAR" : "USER");
+    }
+
     static java.util.Map<String, Long> counts(JdbcTemplate owner) {
         requireSafeEphemeralDatabase(owner);
         var counts = new java.util.LinkedHashMap<String, Long>();

@@ -101,6 +101,7 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
     private static final String LEGAL_GRAPH_TABLE_NAMES = sqlStrings(
             LegalV29AcceptanceInventory.LEGAL_GRAPH_TABLES);
 
+    private final boolean photos;
     private final Set<String> readTables;
     private final Set<String> insertTables;
     private final Map<String,Set<String>> selectColumns;
@@ -119,6 +120,7 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
     }
 
     LegalAcceptancePrivilegeVerifier(JdbcTemplate jdbc,String expectedRole,String expectedSchema,boolean photos) {
+        this.photos=photos;
         readTables=new HashSet<>(READ_TABLES);
         insertTables=new HashSet<>(INSERT_TABLES);
         selectColumns=new java.util.HashMap<>(SELECT_COLUMNS);
@@ -150,7 +152,12 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
         verifyDatabase(role.oid());
         verifySchemas(role.oid());
         verifySystemSchemaBoundary(role.oid());
-        verifyRelationsAndColumns(role.oid());
+        Map<String,Set<String>> effectiveSelectColumns = selectColumns;
+        if (photos && new LegalV29AcceptanceSchemaVerifier(jdbc, expectedSchema).usesWorkshopClosureSchema()) {
+            effectiveSelectColumns = new java.util.HashMap<>(selectColumns);
+            effectiveSelectColumns.put("talleres", Set.of("id", "activo", "cierre_estado"));
+        }
+        verifyRelationsAndColumns(role.oid(), effectiveSelectColumns);
         verifySequences(role.oid());
         verifyEffectiveSessionSettings();
         verifyParameterPrivileges(role.oid());
@@ -539,7 +546,7 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
         }
     }
 
-    private void verifyRelationsAndColumns(long roleOid) {
+    private void verifyRelationsAndColumns(long roleOid, Map<String,Set<String>> selectColumns) {
         List<RelationState> relations = jdbc.query("""
                 SELECT n.nspname, c.relname, c.relowner = ?::oid AS owner,
                        pg_catalog.has_table_privilege(?::oid, c.oid, 'SELECT') AS can_select,

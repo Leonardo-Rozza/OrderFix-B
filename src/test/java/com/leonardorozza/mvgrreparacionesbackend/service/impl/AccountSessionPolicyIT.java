@@ -222,6 +222,8 @@ class AccountSessionPolicyIT {
             int outerPid = ((Number) entityManager.createNativeQuery("SELECT pg_backend_pid()").getSingleResult()).intValue();
             managed.cambiarPassword(encoder.encode(NEW_PASSWORD));
             managed.setEmail(UUID.randomUUID() + "@session.test");
+            // Both changes remain uncommitted. V33 admits user edits before workshop inactivation.
+            entityManager.flush();
             managed.getTaller().setActivo(false);
             entityManager.flush();
 

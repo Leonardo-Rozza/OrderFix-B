@@ -73,6 +73,9 @@ final class LegalRegistrationHttpITSupport {
         this.postgres = postgres;
         this.fixture = new LegalRegistrationServiceITSupport(postgres);
         owner = fixture.owner;
+        // The SQL-only writer fixture keeps its V29 default; HTTP/JPA needs the current entity schema.
+        LegalRestrictedRegistrationRoleFixture.requireSafeEphemeralDatabase(owner);
+        LegalManifestPersistenceITSupport.migrateLatest(postgres);
         provisionApplicationRole();
         provisionPublicReaderRole();
     }

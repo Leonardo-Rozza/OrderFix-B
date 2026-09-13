@@ -7,6 +7,9 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.util.UUID;
+import org.hibernate.annotations.ColumnDefault;
 
 /**
  * Tenant del sistema: cada taller de reparación es una cuenta aislada.
@@ -50,6 +53,26 @@ public class Taller {
     @Column(nullable = false)
     @Builder.Default
     private Boolean activo = true;
+
+    // Closure state is owned by its coordinated store, never by ordinary JPA updates.
+    @Column(name = "cierre_estado", nullable = false, length = 16, insertable = false, updatable = false)
+    @ColumnDefault("'ABIERTO'")
+    @Builder.Default
+    private String cierreEstado = "ABIERTO";
+
+    @Column(name = "cierre_version", nullable = false, insertable = false, updatable = false)
+    @ColumnDefault("0")
+    @Builder.Default
+    private long cierreVersion = 0L;
+
+    @Column(name = "cierre_referencia", insertable = false, updatable = false)
+    private UUID cierreReferencia;
+    @Column(name = "cierre_confirmado_en", insertable = false, updatable = false)
+    private OffsetDateTime cierreConfirmadoEn;
+    @Column(name = "cierre_reversible_hasta", insertable = false, updatable = false)
+    private OffsetDateTime cierreReversibleHasta;
+    @Column(name = "cierre_eliminacion_prevista_en", insertable = false, updatable = false)
+    private OffsetDateTime cierreEliminacionPrevistaEn;
 
     // ----- Numeración de órdenes (correlativo por taller con reinicio anual) -----
     /** Último correlativo de orden usado en el año {@code anioSecuenciaOrden}. */

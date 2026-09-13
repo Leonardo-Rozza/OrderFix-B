@@ -42,6 +42,9 @@ final class LegalPrivatePhotoSchema {
             )::text AS photo_catalog
             """;
     static void verify(JdbcTemplate jdbc) {
+        verify(jdbc, new LegalV29AcceptanceSchemaVerifier(jdbc, "public").usesWorkshopClosureSchema());
+    }
+    static void verify(JdbcTemplate jdbc, boolean closure) {
         try {
             Boolean trustedOwner=jdbc.queryForObject("""
                     SELECT p.proowner=f.relowner AND p.proowner=r.relowner AND p.proowner=m.relowner
@@ -56,7 +59,8 @@ final class LegalPrivatePhotoSchema {
                     """,Boolean.class);
             if(!Boolean.TRUE.equals(trustedOwner)) throw new IllegalStateException("Esquema de fotos privadas incompatible");
             String raw=jdbc.queryForObject(SQL,String.class);
-            if(raw==null || !EXPECTED.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8)))))
+            String expected=closure ? LegalV33ClosureSchema.PHOTO_CATALOG : EXPECTED;
+            if(raw==null || !expected.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8)))))
                 throw new IllegalStateException("Esquema de fotos privadas incompatible");
         } catch(java.security.GeneralSecurityException failure) {throw new IllegalStateException("Esquema de fotos privadas incompatible");}
     }

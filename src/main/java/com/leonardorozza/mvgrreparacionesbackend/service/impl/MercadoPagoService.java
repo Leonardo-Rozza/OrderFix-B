@@ -78,6 +78,7 @@ public class MercadoPagoService {
         MercadoPagoCheckoutStateService.CheckoutPreparation preparation =
                 checkoutStateService.prepare(tallerId);
         if (preparation.existing()) {
+            checkoutStateService.requireCheckoutDelivery(tallerId);
             return preparation.existingResponse();
         }
 
@@ -114,6 +115,7 @@ public class MercadoPagoService {
             throw ex;
         }
         CheckoutResponseDto result = checkoutStateService.complete(preparation.linkId(), response);
+        checkoutStateService.requireCheckoutDelivery(tallerId);
         log.info("Checkout de suscripción creado para taller {}.", tallerId);
         return result;
     }

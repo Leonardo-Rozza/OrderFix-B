@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.config.tenant;
 
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.UnauthorizedException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.TallerRepository;
@@ -15,8 +16,16 @@ import org.springframework.stereotype.Service;
 public class TenantService {
 
     private final TallerRepository tallerRepository;
+    private final WorkshopClosureGate closureGate;
 
     public Long currentTallerId() {
+        Long tallerId = currentTallerIdForAccount();
+        closureGate.requireOperational(tallerId);
+        return tallerId;
+    }
+
+    /** Identity only for the restricted account surface; it does not authorize workshop operations. */
+    public Long currentTallerIdForAccount() {
         Long tallerId = TenantContext.getTallerId();
         if (tallerId == null) {
             throw new UnauthorizedException("No hay un taller asociado a la petición.");
@@ -25,7 +34,7 @@ public class TenantService {
     }
 
     /**
-     * Referencia liviana (proxy) al taller actual, para setear la FK sin golpear la DB.
+     * Referencia al taller actual después de verificar que admite operaciones.
      */
     public Taller currentTallerRef() {
         return tallerRepository.getReferenceById(currentTallerId());

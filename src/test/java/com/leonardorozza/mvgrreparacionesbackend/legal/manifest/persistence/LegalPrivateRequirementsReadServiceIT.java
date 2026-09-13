@@ -140,9 +140,7 @@ class LegalPrivateRequirementsReadServiceIT {
     @Test void anotherUserInSameWorkshopAndAnotherTenantNeverSatisfyTheActor() throws Exception {
         var actor = seedActor(owner, "ADMIN");
         var otherTenant = seedActor(owner, "USER");
-        var sameWorkshop = seedActor(owner, "USER");
-        owner.update("UPDATE users SET taller_id = ? WHERE id = ?", actor.workshopId(), sameWorkshop.userId());
-        sameWorkshop = new LegalPrivateRequirementsITSupport.Actor(sameWorkshop.userId(), actor.workshopId(), "USER", "USER");
+        var sameWorkshop = seedActor(owner, "USER", actor.workshopId());
         accept(otherTenant, null);
         accept(sameWorkshop, null);
         var result = service.read(principal(actor));
@@ -163,13 +161,17 @@ class LegalPrivateRequirementsReadServiceIT {
     @ParameterizedTest @ValueSource(strings = {"role", "token", "inactive", "workshop", "tenant", "missing"})
     void staleOrForeignPrincipalFailsBeforeAggregateDml(String mutation) {
         var actor = seedActor(owner, "USER");
-        var principal = principal(actor);
+        // Keep current database membership and present an inconsistent identity for the tenant case.
+        var presentedActor = mutation.equals("tenant")
+                ? new LegalPrivateRequirementsITSupport.Actor(actor.userId(), seedActor(owner, "ADMIN").workshopId(), actor.role(), actor.audience())
+                : actor;
+        var principal = principal(presentedActor);
         switch (mutation) {
             case "role" -> owner.update("UPDATE users SET role = 'ADMIN' WHERE id = ?", actor.userId());
             case "token" -> owner.update("UPDATE users SET token_version = 1 WHERE id = ?", actor.userId());
             case "inactive" -> owner.update("UPDATE users SET active = false WHERE id = ?", actor.userId());
             case "workshop" -> owner.update("UPDATE talleres SET activo = false WHERE id = ?", actor.workshopId());
-            case "tenant" -> owner.update("UPDATE users SET taller_id = ? WHERE id = ?", seedActor(owner, "ADMIN").workshopId(), actor.userId());
+            case "tenant" -> { /* The mismatching principal above must fail before aggregate DML. */ }
             case "missing" -> owner.update("DELETE FROM users WHERE id = ?", actor.userId());
         }
         assertThatThrownBy(() -> service.read(principal)).isInstanceOf(LegalActorSnapshotException.class)
@@ -535,7 +537,7 @@ class LegalPrivateRequirementsReadServiceIT {
             org.flywaydb.core.Flyway.configure().dataSource(historyDataSource)
                     .locations("classpath:db/migration").load().migrate();
             assertThat(historyOwner.queryForObject(
-                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(32);
+                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(33);
             assertThat(historyOwner.queryForMap("""
                     SELECT revision_scheme, perfil, agregado_id FROM legal_aceptacion_lotes WHERE id=?
                     """, legacyLot)).containsEntry("revision_scheme", "SCOPE_V1")

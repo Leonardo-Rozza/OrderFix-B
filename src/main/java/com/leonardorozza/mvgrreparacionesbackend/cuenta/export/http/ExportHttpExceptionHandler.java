@@ -1,6 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.cuenta.export.http;
 
 import com.leonardorozza.mvgrreparacionesbackend.controller.ExportController;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPackageException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ApiError;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
@@ -29,6 +31,8 @@ public class ExportHttpExceptionHandler {
     }
     private static ExportHttpException map(Exception failure) {
         if(failure instanceof ExportHttpException known) return known;
+        if(failure instanceof WorkshopClosureBlockedException) return new ExportHttpException(HttpStatus.LOCKED,"CUENTA_EN_CIERRE","El taller está en proceso de cierre.");
+        if(failure instanceof WorkshopClosureBusyException) return ExportHttpException.unavailable();
         if(failure instanceof UnauthorizedException || failure instanceof org.springframework.security.core.AuthenticationException) return ExportHttpException.unauthorized();
         if(failure instanceof AccessDeniedException) return ExportHttpException.forbidden();
         if(failure instanceof BadRequestException bad) {

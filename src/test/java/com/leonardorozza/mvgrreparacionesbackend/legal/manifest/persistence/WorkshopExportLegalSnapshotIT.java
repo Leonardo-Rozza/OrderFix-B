@@ -77,9 +77,7 @@ class WorkshopExportLegalSnapshotIT {
 
     @Test
     void adminReceivesOnlyOwnActsAndExactCorrespondingMarkdownWithoutMetadataOrDml() throws Exception {
-        var employee = seedActor(owner, "USER");
-        owner.update("UPDATE users SET taller_id=? WHERE id=?", administrator.workshopId(), employee.userId());
-        employee = new LegalPrivateRequirementsITSupport.Actor(employee.userId(), administrator.workshopId(), employee.role(), employee.audience());
+        var employee = seedActor(owner, "USER", administrator.workshopId());
         var otherTenant = seedActor(owner, "USER");
         var ownActs = accept(dataSource, administrator, PerfilAgregadoLegal.AUTHENTICATED_PENDING, null);
         var employeeActs = accept(dataSource, employee, PerfilAgregadoLegal.AUTHENTICATED_PENDING, null);

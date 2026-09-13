@@ -1,5 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
@@ -19,11 +21,18 @@ public class SeguimientoService {
 
     private final ReparacionRepository reparacionRepository;
     private final PresupuestoService presupuestoService;
+    private final WorkshopClosureGate closureGate;
 
     @Transactional(readOnly = true)
     public SeguimientoPublicoDTO consultar(String codigo) {
         Reparacion r = reparacionRepository.findByCodigoSeguimientoAndTallerActivoTrue(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("No encontramos una reparación con ese código."));
+
+        try {
+            closureGate.requireOperational(r.getTaller().getId());
+        } catch (WorkshopClosureBlockedException closed) {
+            throw new ResourceNotFoundException("No encontramos una reparación con ese código.");
+        }
 
         return new SeguimientoPublicoDTO(
                 r.getCodigoSeguimiento(),

@@ -384,7 +384,7 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
     private void observe(LegalActorSnapshot actor) {
         Boolean valid=jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM public.users u JOIN public.talleres t ON t.id=u.taller_id
-              WHERE u.id=? AND u.taller_id=? AND u.role=? AND u.active AND t.activo AND u.token_version=?)
+              WHERE u.id=? AND u.taller_id=? AND u.role=? AND u.active AND t.activo AND t.cierre_estado='ABIERTO' AND u.token_version=?)
             """,Boolean.class,actor.userId(),actor.tallerId(),actor.role().name(),actor.tokenVersion());
         if(!Boolean.TRUE.equals(valid))throw PrivatePhotoException.of(HttpStatus.UNAUTHORIZED,"FOTO_ACTOR_NO_VALIDO");
     }

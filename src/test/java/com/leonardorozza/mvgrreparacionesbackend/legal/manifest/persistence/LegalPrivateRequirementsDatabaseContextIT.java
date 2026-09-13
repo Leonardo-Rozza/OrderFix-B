@@ -338,7 +338,7 @@ class LegalPrivateRequirementsDatabaseContextIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"role", "active", "token-version", "workshop-active", "tenant"})
-    void staleServerPrincipalsAreRejectedAfterLocksAndBeforeStore(String changed) {
+    void staleOrForeignServerPrincipalsAreRejectedAfterLocksAndBeforeStore(String changed) {
         switch (changed) {
             case "role" -> owner.update("UPDATE users SET role='USER' WHERE id=?", actor.userId());
             case "active" -> owner.update("UPDATE users SET active=false WHERE id=?", actor.userId());
@@ -346,7 +346,11 @@ class LegalPrivateRequirementsDatabaseContextIT {
             case "workshop-active" -> owner.update("UPDATE talleres SET activo=false WHERE id=?", actor.workshopId());
             case "tenant" -> {
                 var foreign = LegalPrivateRequirementsITSupport.seedActor(owner, "USER");
-                owner.update("UPDATE users SET taller_id=? WHERE id=?", foreign.workshopId(), actor.userId());
+                // Only the presented identity claims another workshop; the persisted user never moves.
+                principal = new AuthenticatedUserPrincipal(User.builder().id(actor.userId())
+                        .taller(Taller.builder().id(foreign.workshopId()).build())
+                        .role(UserRole.valueOf(actor.role())).active(true).tokenVersion(principal.getTokenVersion())
+                        .email(principal.getUsername()).password(principal.getPassword()).build());
             }
             default -> throw new AssertionError(changed);
         }

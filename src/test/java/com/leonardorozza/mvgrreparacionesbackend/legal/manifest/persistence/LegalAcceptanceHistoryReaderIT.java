@@ -96,9 +96,8 @@ class LegalAcceptanceHistoryReaderIT {
     }
 
     @Test void onlyOwnActorEvidenceIsVisibleEvenForAdminInTheSameWorkshop() throws Exception {
-        var administrator = seedActor(owner, "ADMIN"); var employee = seedActor(owner, "USER");
-        owner.update("UPDATE users SET taller_id=? WHERE id=?", administrator.workshopId(), employee.userId());
-        employee = new LegalPrivateRequirementsITSupport.Actor(employee.userId(), administrator.workshopId(), employee.role(), employee.audience());
+        var administrator = seedActor(owner, "ADMIN");
+        var employee = seedActor(owner, "USER", administrator.workshopId());
         var otherTenant = seedActor(owner, "USER");
         var adminActs = accept(ownerDataSource, administrator, PerfilAgregadoLegal.AUTHENTICATED_PENDING, null);
         var employeeActs = accept(ownerDataSource, employee, PerfilAgregadoLegal.AUTHENTICATED_PENDING, null);
@@ -389,7 +388,7 @@ class LegalAcceptanceHistoryReaderIT {
             org.flywaydb.core.Flyway.configure().dataSource(historyDataSource)
                     .locations("classpath:db/migration").load().migrate();
             assertThat(historyOwner.queryForObject(
-                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(32);
+                    "SELECT max(version::integer) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(33);
             assertThat(historyOwner.queryForMap("""
                     SELECT revision_scheme, perfil, agregado_id FROM legal_aceptacion_lotes WHERE id=?
                     """, legacyLot)).containsEntry("revision_scheme", "SCOPE_V1")

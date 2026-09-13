@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.mercadopago.MercadoPagoProperties;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PagoException;
@@ -33,9 +34,11 @@ public class MercadoPagoCheckoutStateService {
     private final SubscriptionProviderLinkRepository linkRepository;
     private final MercadoPagoProperties properties;
     private final Clock clock;
+    private final WorkshopClosureGate closureGate;
 
     @Transactional
     public CheckoutPreparation prepare(Long tallerId) {
+        closureGate.requireOperational(tallerId);
         Suscripcion suscripcion = suscripcionRepository.findByTallerIdForUpdate(tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El taller no tiene una suscripción asociada."));
@@ -125,6 +128,8 @@ public class MercadoPagoCheckoutStateService {
         link.setUpdatedAt(clock.instant());
         linkRepository.save(link);
 
+        // A late acknowledgement remains durable even after restriction or replacement.
+        if (!link.isCurrent()) return new CheckoutResponseDto(response.id(), response.initPoint());
         Suscripcion suscripcion = link.getSuscripcion();
         suscripcion.setMpPreapprovalId(response.id());
         suscripcion.setMpExternalReference(link.getExternalReference());
@@ -142,11 +147,18 @@ public class MercadoPagoCheckoutStateService {
                 link.setStatus("retryable");
                 link.setUpdatedAt(clock.instant());
                 linkRepository.save(link);
+                if (!link.isCurrent()) return;
                 Suscripcion suscripcion = link.getSuscripcion();
                 suscripcion.setMpStatus("retryable");
                 suscripcionRepository.save(suscripcion);
             }
         });
+    }
+
+    /** Called after complete commits: denying delivery must never roll back the provider identifier. */
+    @Transactional(readOnly = true)
+    public void requireCheckoutDelivery(Long tallerId) {
+        closureGate.requireOperational(tallerId);
     }
 
     private String payerEmail(Suscripcion suscripcion) {

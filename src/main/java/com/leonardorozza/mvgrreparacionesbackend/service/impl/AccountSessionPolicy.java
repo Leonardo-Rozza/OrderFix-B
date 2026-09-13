@@ -5,7 +5,9 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.AuthResponseDto;
 import com.leonardorozza.mvgrreparacionesbackend.utils.jwt.JwtUtils;
-import lombok.RequiredArgsConstructor;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureAccess;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Clock;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -21,13 +23,25 @@ import java.util.function.Supplier;
  * de registro reutilizan esta política, sin recuperar la cuenta por un email histórico.
  */
 @Service
-@RequiredArgsConstructor
 public class AccountSessionPolicy {
 
     private static final Runnable NO_CHECKPOINT = () -> { };
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
+    private final Clock clock;
+
+    @Autowired
+    public AccountSessionPolicy(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtUtils jwtUtils, Clock clock) {
+        this.userRepository = Objects.requireNonNull(userRepository);
+        this.passwordEncoder = Objects.requireNonNull(passwordEncoder);
+        this.jwtUtils = Objects.requireNonNull(jwtUtils);
+        this.clock = Objects.requireNonNull(clock);
+    }
+
+    public AccountSessionPolicy(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtUtils jwtUtils) {
+        this(userRepository, passwordEncoder, jwtUtils, Clock.systemUTC());
+    }
 
     /**
      * El llamador de registro debe haber confirmado el alta. La transacción propia evita reutilizar
@@ -52,7 +66,7 @@ public class AccountSessionPolicy {
         if (!Objects.equals(userId, user.getId()) || user.getTaller() == null
                 || !Objects.equals(tallerId, user.getTaller().getId())
                 || !Boolean.TRUE.equals(user.getActive())
-                || !Boolean.TRUE.equals(user.getTaller().getActivo())
+                || WorkshopClosureAccess.mode(user, clock.instant()) == WorkshopClosureAccess.Mode.DENIED
                 || user.getRole() == null || user.getTokenVersion() < 0
                 || user.getEmail() == null || user.getEmail().isBlank()
                 || user.getPassword() == null || user.getPassword().isBlank()) {
@@ -62,8 +76,11 @@ public class AccountSessionPolicy {
             throw rejected();
         }
 
-        AuthenticatedUserPrincipal principal = new AuthenticatedUserPrincipal(user);
+        // BCrypt and token generation must not carry a restricted login beyond the grace deadline.
+        AuthenticatedUserPrincipal principal = new AuthenticatedUserPrincipal(user, clock.instant());
+        if (!principal.isEnabled()) throw rejected();
         String token = checked(checkpoint, () -> jwtUtils.generateToken(principal, principal.getTallerId()));
+        if (WorkshopClosureAccess.mode(user, clock.instant()) == WorkshopClosureAccess.Mode.DENIED) throw rejected();
         return new AuthResponseDto(token, "Bearer", principal.getUsername(), principal.isEmailVerificado());
     }
 

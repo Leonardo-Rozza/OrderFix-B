@@ -104,6 +104,11 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   No es una autorización de cierre ni una prueba de cancelación remota. El plan
   [de cierre coordinado](../plans/2026-09-12-cierre-taller-implementation.md) separa
   estado/restricción, solicitud/restauración, eliminación y entrega mediante UI.
+  B incorpora estado e historial durables, revocación y coordinación transaccional
+  de escrituras, con acceso restringido del titular. El store es interno: C todavía
+  debe validar confirmación/propósitos y coordinar los efectos remotos mediante
+  outbox; D implementará eliminación por categorías y E API/pantalla. No hay un
+  comando autorizado de soporte para invocar ese store ni SQL operativo de cierre.
   El cierre del taller sigue sin estar disponible. Los plazos técnicos de su política
   no sustituyen decisiones reales de retención ni habilitan publicación del borrador.
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.

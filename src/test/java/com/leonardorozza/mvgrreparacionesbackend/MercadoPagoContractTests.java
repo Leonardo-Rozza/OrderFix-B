@@ -82,6 +82,29 @@ class MercadoPagoContractTests {
     }
 
     @Test
+    void cierreDuranteCheckoutPersisteLaRespuestaAntesDeDenegarSuEntrega() {
+        when(tenantService.currentTallerId()).thenReturn(7L);
+        when(checkoutStateService.prepare(7L)).thenReturn(preparation());
+        when(checkoutStateService.complete(eq(11L),any()))
+                .thenReturn(new CheckoutResponseDto("pre-1",checkoutUrl("pre-1")));
+        doThrow(new com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException())
+                .when(checkoutStateService).requireCheckoutDelivery(7L);
+        server.expect(requestTo(API_URL+"/preapproval")).andRespond(withSuccess("""
+                {"id":"pre-1","status":"pending","init_point":"https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=pre-1",
+                 "external_reference":"ofx_123","collector_id":100200300,"application_id":12345678,
+                 "auto_recurring":{"frequency":1,"frequency_type":"months","transaction_amount":24900.00,"currency_id":"ARS"}}
+                """,MediaType.APPLICATION_JSON));
+        assertThatThrownBy(service::crearCheckoutSuscripcion)
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException.class);
+        var order=inOrder(checkoutStateService);
+        order.verify(checkoutStateService).prepare(7L);
+        order.verify(checkoutStateService).complete(eq(11L),any());
+        order.verify(checkoutStateService).requireCheckoutDelivery(7L);
+        verify(checkoutStateService,never()).markAttemptFailed(anyLong());
+        server.verify();
+    }
+
+    @Test
     void checkoutEnviaContratoExactoEIdempotencyKey() {
         when(tenantService.currentTallerId()).thenReturn(7L);
         var preparation = preparation();

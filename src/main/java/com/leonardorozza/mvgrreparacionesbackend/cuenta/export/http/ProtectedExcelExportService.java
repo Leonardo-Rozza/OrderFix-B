@@ -1,5 +1,8 @@
 package com.leonardorozza.mvgrreparacionesbackend.cuenta.export.http;
 
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBusyException;
+
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantContext;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPackageException;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.reauth.ExportReauthenticationPurpose;
@@ -132,7 +135,8 @@ public class ProtectedExcelExportService {
                     authorized[0].userId(), authorized[0].tallerId(), result.length);
             delivered = true;
             return result;
-        } catch (BadRequestException | UnauthorizedException | AccessDeniedException | ExportPackageException rejected) {
+        } catch (BadRequestException | UnauthorizedException | AccessDeniedException | ExportPackageException
+                | WorkshopClosureBlockedException | WorkshopClosureBusyException rejected) {
             throw rejected;
         } catch (RuntimeException failure) {
             throw unavailable();

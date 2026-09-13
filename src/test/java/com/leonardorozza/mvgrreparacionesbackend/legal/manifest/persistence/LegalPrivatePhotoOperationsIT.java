@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.leonardorozza.mvgrreparacionesbackend.photos.PrivatePhotoDtos.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** Real V30/role/transactions; storage effects are a test port, never a Cloudinary ACL claim. */
+/** Real V30/V33 role and transactions; storage effects are a test port, never a Cloudinary ACL claim. */
 @Testcontainers
 class LegalPrivatePhotoOperationsIT {
     static final String ROLE="ordenfix_private_photos";
@@ -63,6 +63,8 @@ class LegalPrivatePhotoOperationsIT {
         owner.execute("GRANT UPDATE(estado,asset_id,asset_version,lease_id,lease_hasta,asociada_en) ON public.reparacion_fotos_privadas TO "+ROLE);
         owner.execute("GRANT SELECT(id,taller_id),UPDATE(id) ON public.reparaciones TO "+ROLE);
         owner.execute("GRANT EXECUTE ON FUNCTION public.foto_privada_insert_guard_v30(),public.foto_atestacion_insert_guard_v30(),public.foto_privada_completa_v30(),public.foto_privada_update_guard_v30() TO "+ROLE);
+        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("33").load().migrate();
+        owner.execute("GRANT SELECT(cierre_estado) ON public.talleres TO "+ROLE);
         JdbcTemplate restricted=new JdbcTemplate(new DriverManagerDataSource(credentials.jdbcUrl(),credentials.username(),credentials.password()));
         new LegalV29AcceptanceSchemaVerifier(restricted,"public").verify();
         new LegalAcceptancePrivilegeVerifier(restricted,credentials.username(),"public",true).verify();
@@ -120,6 +122,66 @@ class LegalPrivatePhotoOperationsIT {
     long count(String table){return owner.queryForObject("SELECT count(*) FROM public."+table,Long.class);}
     String state(UUID id){return owner.queryForObject("SELECT estado FROM public.reparacion_fotos_privadas WHERE id=?",String.class,id);}
     static void code(Throwable failure,String code){assertThat(failure).isInstanceOf(PrivatePhotoException.class);assertThat(((PrivatePhotoException)failure).code()).isEqualTo(code);}
+
+    @Test void restrictedWorkshopCannotCreateReadOrFinalizePrivatePhotos() throws Exception {
+        var photo=associate();
+        var pending=create();
+        var command=body(actor,repair);
+        long intentions=count("reparacion_fotos_privadas"),acceptances=count("legal_aceptaciones");
+        restrictWorkshop();
+        storage.reads.set(0);
+
+        code(catchThrowable(()->service.requirements(principal(actor),repair)),"FOTO_ACTOR_NO_VALIDO");
+        code(catchThrowable(()->service.photos(principal(actor),repair)),"FOTO_ACTOR_NO_VALIDO");
+        code(catchThrowable(()->service.content(principal(actor),repair,photo.id())),"FOTO_ACTOR_NO_VALIDO");
+        code(catchThrowable(()->service.finish(principal(actor),repair,pending.id())),"FOTO_ACTOR_NO_VALIDO");
+        code(catchThrowable(()->create(actor,repair,UUID.randomUUID().toString(),command)),"FOTO_ACTOR_NO_VALIDO");
+        assertThat(storage.reads.get()).isZero();
+        assertThat(storage.uploads.get()).isEqualTo(1);
+        assertThat(count("reparacion_fotos_privadas")).isEqualTo(intentions);
+        assertThat(count("legal_aceptaciones")).isEqualTo(acceptances);
+        assertThat(state(photo.id())).isEqualTo("ASOCIADA");
+        assertThat(state(pending.id())).isEqualTo("AUTORIZADA");
+        assertThat(service.cleanup()).as("closure alone does not delete retained associated evidence").isZero();
+        assertThat(storage.assets).hasSize(1);
+    }
+
+    @Test void closureDuringUploadPreservesObjectKeyAndCleanupRecoversTheUnacknowledgedAsset() throws Exception {
+        UUID id=create().id();
+        storage.afterUpload=this::restrictWorkshop;
+        code(catchThrowable(()->service.upload(principal(actor),repair,id,"image/png",image)),"FOTO_ACTOR_NO_VALIDO");
+        String key="ordenfix-private/"+id;
+        assertThat(storage.assets).containsKey(key);
+        assertThat(state(id)).isEqualTo("AUTORIZADA");
+        assertThat(owner.queryForMap("SELECT object_key,asset_id IS NULL AS unacknowledged,lease_id IS NOT NULL AS leased FROM reparacion_fotos_privadas WHERE id=?",id))
+                .containsEntry("object_key",key).containsEntry("unacknowledged",true).containsEntry("leased",true);
+
+        // Advance the persisted fixture deadlines without altering production retention or waiting in real time.
+        fixture(()->owner.update("""
+                UPDATE reparacion_fotos_privadas SET confirmado_en=statement_timestamp()-INTERVAL '16 minutes',
+                    expira_en=statement_timestamp()-INTERVAL '1 minute',lease_hasta=statement_timestamp()-INTERVAL '1 second'
+                WHERE id=?
+                """,id));
+        assertThat(service.cleanup()).isEqualTo(1);
+        assertThat(state(id)).isEqualTo("ELIMINADA");
+        assertThat(storage.assets).isEmpty();
+        assertThat(storage.deleteAttempts).containsExactly(key);
+        assertThat(owner.queryForObject("SELECT object_key FROM reparacion_fotos_privadas WHERE id=?",String.class,id)).isEqualTo(key);
+        assertThat(count("reparacion_foto_atestaciones")).isEqualTo(1);
+    }
+
+    /** Service-state fixture only; coordinated closure transitions are covered by the closure store IT. */
+    private void restrictWorkshop() {
+        fixture(()->owner.update("""
+                UPDATE talleres SET cierre_estado='RESTRINGIDO',cierre_version=1,cierre_referencia=?,
+                    cierre_confirmado_en=statement_timestamp(),cierre_reversible_hasta=statement_timestamp()+INTERVAL '7 days',
+                    cierre_eliminacion_prevista_en=statement_timestamp()+INTERVAL '37 days' WHERE id=?
+                """,UUID.randomUUID(),actor.tallerId()));
+    }
+    private static void fixture(Runnable action) {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(new DataSourceTransactionManager(owner.getDataSource()));
+        tx.executeWithoutResult(status->{owner.execute("SET LOCAL session_replication_role=replica");action.run();});
+    }
 
     @Test void anAuthorizedPhotoFromTheRealProtocolIsIncludedInTheEncryptedExport() throws Exception {
         owner.update("UPDATE users SET email_verificado=true WHERE id=?",actor.userId());
@@ -315,13 +377,14 @@ class LegalPrivatePhotoOperationsIT {
     }
 
     static final class MemoryStorage implements PrivatePhotoStorage {
-        final Map<String,byte[]> assets=new HashMap<>();final AtomicInteger uploads=new AtomicInteger();
+        final Map<String,byte[]> assets=new HashMap<>();final AtomicInteger uploads=new AtomicInteger(),reads=new AtomicInteger();
+        Runnable afterUpload=()->{};
         final Set<String> permanentDeleteFailures=new HashSet<>();final List<String> deleteAttempts=new ArrayList<>();
         final AtomicBoolean failUpload=new AtomicBoolean(),failDelete=new AtomicBoolean(),hideLookup=new AtomicBoolean();
-        @Override public StoredAsset upload(String key,String mime,byte[] content){uploads.incrementAndGet();assets.put(key,content.clone());if(failUpload.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);return asset(key);}
+        @Override public StoredAsset upload(String key,String mime,byte[] content){uploads.incrementAndGet();assets.put(key,content.clone());afterUpload.run();if(failUpload.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);return asset(key);}
         @Override public Optional<StoredAsset> find(String key){return !hideLookup.get() && assets.containsKey(key)?Optional.of(asset(key)):Optional.empty();}
         StoredAsset asset(String key){return new StoredAsset("asset-"+key.substring(key.lastIndexOf('/')+1),key,"image/png",assets.get(key).length,"1");}
-        @Override public byte[] read(StoredAsset expected,int max){return assets.get(expected.objectKey()).clone();}
+        @Override public byte[] read(StoredAsset expected,int max){reads.incrementAndGet();return assets.get(expected.objectKey()).clone();}
         @Override public void delete(String key,String id){deleteAttempts.add(key);if(permanentDeleteFailures.contains(key) || failDelete.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);assets.remove(key);}
     }
 }

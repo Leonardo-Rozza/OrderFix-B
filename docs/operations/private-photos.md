@@ -86,16 +86,17 @@ El pool privado tiene como máximo dos conexiones y no es el DataSource de JPA. 
 
 ## Esquema, publicación y rol
 
-El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Aplicar V30 con la identidad de migraciones; no editar V27–V29. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
+El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Aplicar las migraciones hasta V33 con la identidad de migraciones; no editar V27–V32. V33 coordina las operaciones con el estado de cierre del taller. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
 
 El consumidor usa el inventario de `LegalAcceptancePrivilegeVerifier` más su extensión de fotos. Es un rol dedicado `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, sin pertenencias ni propiedad de base/esquema/objetos. Necesita el inventario nominal legal previo y, adicionalmente:
 
+- `SELECT(cierre_estado)` sobre `public.talleres`, además de las columnas nominales legales existentes. V33 lo requiere para comprobar admisión; no conceder SELECT de tabla ni lectura de `cierre_referencia`.
 - `SELECT, INSERT` sobre `public.reparacion_fotos_privadas` y `public.reparacion_foto_atestaciones`.
 - `SELECT(id,taller_id), UPDATE(id)` sobre `public.reparaciones`, para acreditar pertenencia y tomar el lock.
 - `UPDATE(estado,asset_id,asset_version,lease_id,lease_hasta,asociada_en)` sobre `public.reparacion_fotos_privadas`.
 - `EXECUTE` sobre `foto_privada_insert_guard_v30()`, `foto_atestacion_insert_guard_v30()`, `foto_privada_completa_v30()` y `foto_privada_update_guard_v30()`.
 
-No conceder DELETE/TRUNCATE sobre las dos tablas nuevas, UPDATE de los vínculos/manifestaciones, ni EXECUTE sobre `foto_privada_conservar_objetos_v30()`. Este último guard se ejecuta por el trigger referencial con privilegios de su propietario; su definición exacta, search_path fijo y propietario de migraciones/tablas se acreditan. No exige conceder lectura de fotos a los consumidores históricos para borrar una reparación sin objetos pendientes. El rechazo general de funciones SECURITY DEFINER ejecutables permanece activo.
+No conceder DELETE/TRUNCATE sobre las dos tablas nuevas, UPDATE de los vínculos/manifestaciones, ni EXECUTE sobre `foto_privada_conservar_objetos_v30()`. Este último guard se ejecuta por el trigger referencial con privilegios de su propietario; su definición exacta, search_path fijo y propietario de migraciones/tablas se acreditan. No exige conceder lectura de fotos a los consumidores históricos para borrar una reparación sin objetos pendientes. El rechazo general de funciones SECURITY DEFINER ejecutables permanece activo. Los guards V33 se ejecutan por trigger con su propietario; el rol de fotos no recibe EXECUTE sobre ellos. El verificador acredita ese delta y rechaza grants adicionales.
 
 La provisión automatizada disponible hoy es **de laboratorio**: `LegalPrivatePhotoOperationsIT.prepare` compone el fixture de aceptación, publicación canónica y grants adicionales en un PostgreSQL efímero. Ese fixture revoca privilegios PUBLIC y exige un prefijo de base; **no es un instalador para bases compartidas**. La provisión de staging debe inventariar primero sus consumidores y acreditar las ACL efectivas con el verificador, sin trasladar esas revocaciones globales indiscriminadamente. El servicio verifica esquema/privilegios al ejecutar operaciones; construir el bean/pool no demuestra que ese preflight haya pasado.
 
@@ -108,6 +109,12 @@ La aplicación tiene `@EnableScheduling`; con el flag activo, la tarea espera 60
 DELETE responde 204 sólo después de comprobar el borrado remoto y confirmar el estado local. Un fallo conserva `LIMPIEZA_PENDIENTE` y la identidad del objeto para reintentar. El borrado de la reparación se bloquea mientras haya objetos pendientes y devuelve 409 `FOTOS_PRIVADAS_PENDIENTES`, indicando que primero deben eliminarse sus fotos.
 
 El proceso actual no expone una operación HTTP administrativa de limpieza ni métricas de la cola; captura los fallos del pase sin registrar diagnósticos del proveedor. No promete borrado en el segundo exacto de vencimiento. Los fallos permanentes conservan su identidad y vuelven a intentarse en la siguiente vuelta del cursor; no bloquean el avance hacia candidatos posteriores. No borrar filas/identidades manualmente para ocultar un fallo remoto.
+
+Un taller restringido deja de admitir nuevas intenciones, lectura y finalización de
+fotos. La limpieza conserva su ejecución y los límites de los guards anteriores.
+Si una carga estaba en curso al cerrar, la clave persistida y el lease permiten
+recuperar el objeto después; un rechazo de finalización no demuestra borrado remoto.
+B no inicia una eliminación general de fotos por el mero estado de cierre.
 
 ## Legacy y acreditación pendiente
 

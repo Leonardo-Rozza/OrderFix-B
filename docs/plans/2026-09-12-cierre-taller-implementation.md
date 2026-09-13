@@ -1,7 +1,7 @@
 # Cierre coordinado del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
-Estado: corte A cerrado localmente. B–E pendientes. No hay cierre de taller disponible.
+Estado: A y B cerrados. C–E pendientes. No hay cierre de taller disponible.
 
 ## Objetivo y decisiones ya acordadas
 
@@ -170,3 +170,154 @@ V26 ni se crea una migración. Se preservan los 77 archivos ajenos no versionado
 frontend. No hay cambios en secretos, configuración real, cuentas, proveedores,
 frontend funcional ni texto legal publicado. Commit atómico por repositorio, sin
 push ni merge. Próximo: B, estado durable y coordinación de escrituras/sesiones.
+
+
+## Corte B — estado durable y coordinación
+
+El usuario autorizó B y luego confirmó explícitamente la creación de V33, su
+acreditación y las pruebas en PostgreSQL descartable. Quedó resuelta la pausa de
+revisión automática previa; no se ejecutaron migraciones en bases reales.
+
+### Persistencia y frontera interna
+
+V33 agrega seis campos de cierre al ancla `talleres` y el historial `cuenta_cierres`:
+referencia UUID, pertenencia, titular, generación, política y fechas. JPA sólo lee
+los campos del ancla. Se mantienen `talleres.activo` como veto independiente y
+`users.active` por empleado. Las restricciones diferidas comprueban la concordancia
+entre historial y ancla al confirmar; no se permite adelantar eliminación en B.
+
+`WorkshopClosureStore` es una frontera interna de persistencia, sin consumidores
+productivos ni endpoint. Exige una transacción existente, writable, READ_COMMITTED,
+y que el llamador posea el gate exclusivo antes de tomar locks de taller/usuarios.
+C deberá validar identidad, contraseña, propósito y confirmación en esa misma
+transacción antes de invocarlo. Los IDs internos del store no son una autorización
+HTTP. B no acredita cancelación remota, eliminación de datos ni activación del cierre.
+
+Restricción y restauración revocan todas las épocas JWT y pruebas existentes en la
+misma transacción, comprobando overflow antes de escribir. Conservan la actividad
+individual. El replay de una referencia compatible devuelve REUSED sin DML ni
+ampliación de fechas; la colisión entre titulares/talleres falla cerrado. Una nueva
+transición incrementa la generación, incluida la restauración. Restaurar sólo se
+admite en [confirmación, fin de gracia); no reactiva una renovación de Mercado Pago.
+
+### Coordinación de operaciones
+
+El gate PostgreSQL compartido dura toda la transacción; la transición adquiere el
+exclusivo primero. Los guards de fila usan try-lock compartido sin espera y rechazan
+con P0034 si el exclusivo ya fue adquirido, incluso cuando el escritor trae otros
+locks. La transición espera a escritores previamente admitidos. READ_COMMITTED
+lee el ancla después de la admisión sin FOR SHARE: evita un upgrade compartido a
+exclusivo al numerar reparaciones. Las lecturas existentes writable REPEATABLE_READ
+sí bloquean el ancla para rechazar snapshots anteriores a una transición. El gate
+rechaza una transacción readonly con snapshot antiguo. H2 sólo tiene una adaptación
+para la suite histórica, sin pretender acreditar el protocolo PostgreSQL.
+
+V33 agrega guards operativos sobre 28 tablas, incluidas las referencias de
+idempotencia sin actos, y tres guards de historial/consistencia. Backfill de
+`taller_id` en `reparacion_fotos`, `presupuesto_items` y `auth_tokens` conserva
+pertenencia durante DELETE CASCADE aunque el padre ya no esté visible. No permite
+reasignarla a otro taller. La eliminación ordinaria de un taller abierto conserva
+el efecto referencial del QR; la cuenta con historial permanece protegida.
+
+Las excepciones del bloqueo se delimitan por efecto: revocación, limpieza de
+exportaciones/fotos, purga de metadatos vencidos y observación remota de MP. No existe
+un flag de sesión para saltar el protocolo. Los guards legales anteriores siguen
+aplicando sus propios límites. P0033 se traduce a 423 CUENTA_EN_CIERRE; P0034 a 503
+CUENTA_NO_DISPONIBLE, con mensajes fijos y no-store, sin divulgar SQL.
+
+### Sesiones, archivos y proveedores
+
+Sólo el ADMIN activo, verificado y con época vigente obtiene sesión restringida
+durante la gracia. La lista HTTP es exacta por método/ruta: perfil, historial legal
+con sus filtros existentes, consulta de exportación y descarga de un READY previo.
+Se vuelven a comprobar estado/época en los lectores sensibles. Empleados y JWT
+anteriores quedan rechazados; los accesos públicos dejan de admitir operaciones.
+No se admite crear ZIP, exportar Excel ni operar reparaciones en cierre.
+
+Un READY elegible se vincula explícitamente a la nueva época del titular, conservando
+bytes, captura y vencimiento original. La gracia de siete días no amplía el TTL de
+24 horas del archivo. Los demás trabajos vivos se revocan y purgan atómicamente;
+la restauración también los revoca. Las pruebas de descarga y los locks de archivo
+se coordinan con la transición antes de entregar bytes.
+
+Las fotos dejan de admitir creación/lectura/finalización, mientras la limpieza puede
+continuar. Una carga ya iniciada conserva su clave de objeto y lease para recuperar
+un ACK perdido sin declarar borrado. MP guarda IDs y observaciones tardías, pero no
+concede acceso PRO ni entrega checkout tras la restricción. La cancelación remota
+y las notificaciones de cierre requieren la intención durable/outbox de C.
+
+### Acreditación de V33
+
+V27–V32 permanecen congeladas. Se conserva la validación histórica y se agrega un
+delta exacto para V33: ancla/historial, tres backfills, 28 guards, constraints,
+funciones, propietarios, ACL y search_path. No se omiten objetos por prefijo. El rol
+de fotos agrega únicamente SELECT(cierre_estado) sobre talleres; no obtiene acceso
+a las referencias de cierre ni EXECUTE de los nuevos guards SECURITY DEFINER.
+La provisión real conserva el procedimiento separado del runbook de fotos.
+
+SHA-256 de V33: `663839f8a315b9fa8f4d467805fafee7ae6c8a3328b31e1a7fa13d5a0ebd018f`.
+Checksum Flyway: `1626375596`. Huellas capturadas con migraciones limpias en PG16
+mediante el diagnóstico opt-in `LegalV33SchemaSnapshot`, excluido de las suites
+predeterminadas. Log: `/private/tmp/ordenfix-closure-b-v33-final-snapshot.log`.
+
+### Validación B
+
+Java 21 y PostgreSQL 16 descartable; importaciones de secretos y proveedores
+reales deshabilitados. Se ejecutó clean verify por el cambio transversal de
+seguridad/esquema. No hay ensayo nuevo de navegador: frontend sólo documenta B y
+no se expone una pantalla ni un comando de cierre.
+
+- Focales iniciales: 139 unitarias aprobadas. Los primeros pases PG detectaron una
+  comparación de byte[] por referencia, prefijos incorrectos de bases de fixtures,
+  tipos de excepción de drift ya detectado y una barrera DDL incompatible con la
+  nueva acreditación del catálogo. Se corrigieron las pruebas sin ignorar objetos.
+- Ajustes de acceso del historial/perfil: 52 unitarias y 84 IT aprobadas, cero
+  fallos/errores/omisiones, 1:20 min. El historial conserva su parser único de query;
+  el perfil revalida la época y el estado leídos antes del DTO. Log local:
+  `/private/tmp/ordenfix-closure-b-corrections-focused.log`.
+- Corrida completa: 7.754 unitarias aprobadas; 1.586 IT ejecutadas. Terminó
+  BUILD FAILURE por 3 fallos y 28 errores en 12 clases, el 2026-09-12 a las
+  21:03:20 -03, en 31:47 min. Log local:
+  `/private/tmp/ordenfix-closure-b-clean-verify-final.log`.
+- Las incidencias del integral son de fixtures/expectativas: el rechazo P0033 de
+  usuario sin taller ocurre antes del NOT NULL; el clasificador SQL de capacidad
+  requiere siete placeholders; cinco colegas se insertan directamente en el taller
+  elegido y cuatro snapshots inconsistentes sustituyen traslados ahora prohibidos;
+  el checkpoint de registro presenta IDs incompatibles sin mover usuarios; el
+  harness HTTP/JPA migra a latest conservando ddl-auto=validate; la prueba de
+  suspensión transaccional escribe el usuario antes de inactivar su taller, con
+  ambos cambios todavía sin commit. Se conservan las comprobaciones de aislamiento,
+  rechazo, rollback y ausencia de DML/efectos externos.
+
+Repetición de las 12 clases completas: **215 IT y 3 unitarias aprobadas**, cero
+fallos/errores/omisiones. BUILD SUCCESS el 2026-09-12 a las 21:10:19 -03, en 5:38 min,
+incluido empaquetado sin propiedades secretas. Log:
+`/private/tmp/ordenfix-closure-b-fixtures-verified.log`. Selección completa:
+`AccountSessionPolicyIT,LegacyRegistrationPostCommitIT,PostgresMigrationIT,LegalAcceptanceHistoryHttpIT,LegalAcceptanceHistoryReaderIT,LegalEditorialCapacityIT,LegalPrivateRequirementsDatabaseContextIT,LegalPrivateRequirementsHttpIT,LegalPrivateRequirementsReadServiceIT,LegalRegistrationHttpIT,LegalRegistrationReplayIT,WorkshopExportLegalSnapshotIT`;
+unitaria `WorkshopClosureErrorTest`, mediante `./mvnw -B -Dtest=... -Dit.test=... verify`
+y el mismo JAVA_HOME/DOCKER_AUTH_CONFIG del integral.
+
+Desde el integral no cambian los 579 archivos de producción/migraciones contrastados
+por SHA-256; por eso se revalidaron las clases afectadas sin repetir la parte
+aprobada. La corrida completa fallida se conserva como evidencia y no se presenta
+como un clean verify exitoso en una sola ejecución. El resultado consolidado de
+los informes XML mantiene las mismas clases y cantidades: **7.754 unitarias y
+1.586 IT, cero fallos/errores/omisiones pendientes**, sin contar las repeticiones como
+casos adicionales. Las 12 clases antes fallidas quedaron aprobadas completas.
+El gate B se cierra con esta evidencia y la revisión independiente de los cambios.
+
+Cobertura específica B: store 17, cascadas 8, HTTP 3, verificador V33 55, más
+regresiones de exportaciones, reautenticación, fotos y MP. Se acreditan espera de
+escritores admitidos, rechazo sin espera del nuevo escritor, dos talleres, rollback,
+snapshot anterior, replay sin DML, época/overflow, READY elegible y plazos exactos.
+Store/cascadas y la carrera HTTP usan el protocolo real; algunas fixtures previas
+de exportación siembran metadata con privilegios owner para aislar el comportamiento
+del trabajo, por lo que no sustituyen la prueba de transición del store. La barrera
+de publicación ahora pausa el UPDATE real sin añadir triggers al catálogo.
+
+V27–V32 conservan SHA-256 y el frontend sus 77 archivos ajenos no versionados.
+Sin SQL sobre bases reales, push, merge, borrado real, secretos ni operaciones de
+proveedores. Diff --check y revisión final aprobados. Un commit atómico por
+repositorio, sin push ni merge. Próximo: C, confirmación específica, propósitos de
+reautenticación y coordinación mediante outbox. B conserva su frontera interna,
+sin API/UI ni activación del cierre o de eliminación real.
