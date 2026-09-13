@@ -108,8 +108,8 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   de escrituras, con acceso restringido del titular. C agrega el comando interno
   con contraseña/prueba de cinco minutos, propósito y confirmación escrita, además
   de constancia idempotente e intenciones durables. No habilita un procedimiento
-  SQL de soporte ni un endpoint: D implementará eliminación por categorías y
-  E API/pantalla. La activación real requiere adaptadores y ensayo de proveedores.
+  SQL de soporte ni un endpoint: D aporta mantenimiento temporal e inventario;
+  su eliminación integral sigue pendiente. E implementará API/pantalla. La activación real requiere adaptadores y ensayo de proveedores.
   El cierre del taller sigue sin estar disponible. Los plazos técnicos de su política
   no sustituyen decisiones reales de retención ni habilitan publicación del borrador.
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
@@ -185,3 +185,32 @@ adaptadores requieren timeout e idempotencia por clave estable: vencer el permis
 local no cancela una llamada externa que ya comenzó. Los estados inciertos y los
 objetivos sin ID requieren el circuito de recuperación operativa pendiente.
 La outbox no acredita eliminación de datos ni atención de una solicitud real.
+
+
+## Mantenimiento y diagnóstico local D
+
+El servicio interno `WorkshopClosureMaintenanceService.cleanExpired` limpia sólo el
+cierre actual restringido, después de gracia, en cinco lotes de hasta 25 filas dentro
+de una misma transacción. Purga tokens/pruebas vencidos (confirmaciones de cierre
+sólo sin usar), vacía exportaciones vencidas y conserva su metadata al menos siete
+días. Protege las confirmaciones utilizadas, operaciones, efectos, negocio y
+aceptaciones. No invoca proveedores ni cambia el taller a ELIMINADO. Está probado
+con datos sintéticos; no es un endpoint o comando operativo para cuentas reales.
+
+`WorkshopClosureDeletionInventory.inspect` permite revisar categorías y cantidades
+sin leer datos personales, archivos o identificadores remotos. Sus observaciones de
+filas presentes/ausentes no son evidencia de borrado. Revisar fotos pendientes,
+renovaciones sin confirmar y avisos inciertos; no quitar identidades, reiniciar
+intentos ni marcar éxito manualmente. `payment_events` conserva una revisión global
+porque no existe una pertenencia fiable para borrarlo por taller.
+
+Para una copia restaurada, usar el [procedimiento de recuperación de backups](cierre-recuperacion-backup.md).
+`WorkshopClosureBackupCheck` compara evidencia aportada con la copia y siempre
+indica NO_AUTORIZA_REAPERTURA. La coincidencia parcial no reemplaza un registro
+externo completo, ni implementa la cuarentena de arranque. Mantener el entorno
+recuperado aislado mientras no se acrediten esos requisitos.
+
+D sigue parcial: política real, supresión por categorías, recibos de archivos,
+resolución de efectos inciertos y recuperación productiva requieren ejecución y
+verificación posteriores. Una limpieza local sin pendientes nunca debe comunicarse
+como baja o eliminación integral completada.

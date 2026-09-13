@@ -265,8 +265,10 @@ JWT y credenciales de equipos. Los tombstones conservan keyVersion/nonce para ev
 
 La duración de retención debe ser configuración explícita aprobada antes de habilitar escritura;
 no se inventa aquí un plazo legal. Tests usan plazos sintéticos. Ausencia o invalidez de keys/IP/
-retención falla cerrado antes de negocio. El mantenimiento purga sólo después de vencimiento y
-no destruye evidencia contractual. No hay lectura pública de metadata ni secretos en logs.
+retención falla cerrado antes de negocio. El mantenimiento previsto deberá purgar sólo después
+de vencimiento y conservar evidencia contractual. Revisión 2026-09-12: el esquema y las
+operaciones de repositorio permiten tombstones, pero el servicio interno de 15O sigue pendiente.
+No hay lectura pública de metadata ni secretos en logs.
 
 ### Registro y sesión después del commit
 

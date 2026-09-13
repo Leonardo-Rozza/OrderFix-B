@@ -3676,6 +3676,11 @@ Commit: `feat(legal): prepara bloqueo compatible por aceptacion`.
 
 ## 15O — Retención y mantenimiento internos
 
+Estado comprobado el 2026-09-12 durante cierre D: este apartado describe trabajo
+previsto. Los servicios, verificador, scheduler, runbook y pruebas nombrados abajo
+no están implementados en HEAD. Existen operaciones de repositorio para tombstone
+y cabecera; no acreditan un worker de mantenimiento ni la purga de una cuenta.
+
 Resultado: servicio y adaptador programable interno, apagado por defecto, para purgar únicamente
 metadata/resultados vencidos. Credencial separada del lector/escritores; sin endpoint HTTP.
 

@@ -1,7 +1,8 @@
 # Cierre coordinado del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
-Estado: A, B y C cerrados. D–E pendientes. No hay cierre de taller disponible en la UI.
+Estado: A, B y C cerrados. D tiene mantenimiento y diagnóstico local implementados;
+eliminación integral y E pendientes. No hay cierre de taller disponible en la UI.
 
 ## Objetivo y decisiones ya acordadas
 
@@ -430,7 +431,7 @@ concurrente entre talleres, plazo exacto y revocación; rollback de prueba, épo
 historial, constancia y efectos; captura de 1.000 vínculos/rechazo de 1.001; puertos
 fuera de transacción, dos workers, lease vencida durante I/O/espera SQL, ACK obsoleto,
 correo ambiguo, identidad remota ajena y respuestas tardías tras restaurar. Las
-operaciones usan transacciones y guards reales en PostgreSQL16 descartable.
+operaciones usan transacciones y guards reales en PostgreSQL 16 descartable.
 
 Se ejecutaron focales C y de sus consumidores; no se repitió el clean verify de B.
 El integral final permanece en E: C agrega una frontera interna y adapta la
@@ -443,3 +444,167 @@ Se preservan las 77 rutas ajenas no versionadas. Sin cambios en secretos, datos
 reales, identidad legal, providers reales, push o merge. Un commit atómico por
 repositorio afectado. Próximo: **D, eliminación por categorías y recuperación
 operativa**; después E, API/pantalla y gate integral.
+
+
+## Avance D — mantenimiento y diagnóstico operativo
+
+El usuario pidió detener el backend local y continuar. El proceso quedó detenido;
+las nuevas operaciones se prueban sólo en PostgreSQL 16 descartable. No se ejecutan
+sobre la base local utilizada para navegar ni sobre proveedores reales.
+
+La revisión encontró una frontera concreta del alcance: V33 rechaza la transición
+terminal ELIMINADO y las escrituras de negocio durante el cierre; V27/V30/V34
+conservan aceptaciones, atestaciones y constancias inmutables con FK RESTRICT. La
+retención real de esas categorías sigue en la etapa final acordada. Un ledger nuevo
+por sí solo no acredita ni habilita borrado. Sustituir ahora esos contratos también
+exigiría decidir qué identidad/evidencia conservar y cómo demostrar cada efecto.
+
+Se compararon esa ampliación del contrato, un motor abstracto sin ejecutores y el
+mantenimiento concreto permitido por las reglas vigentes. Se implementa la tercera
+opción junto con inventario y comparación de backups. **D no se declara completado**:
+esto entrega una capacidad local útil y comprobable sin convertir limpieza temporal
+en eliminación integral. No se agrega V35 ni una cadena de subcortes nominales.
+
+### Limpieza de datos temporales
+
+`WorkshopClosureMaintenanceService.cleanExpired(tallerId, closureReference)` es una
+frontera interna explícita, sin controller, scheduler ni llamada remota. Los IDs no
+sustituyen autorización HTTP. Sólo acepta el cierre actual RESTRINGIDO, con ancla,
+historial, generación, política y fechas coincidentes, después del fin de gracia.
+Una referencia ajena, restaurada o anterior no puede iniciar limpieza.
+
+Abre REQUIRES_NEW/READ_COMMITTED, timeout transaccional de 10 s, statement_timeout de 5 s y
+lock_timeout de 2 s. Adquiere primero el gate exclusivo del taller; los escritores ya
+admitidos terminan antes y una restauración no puede intercalarse. Cada una de las
+cinco selecciones materializa como máximo 25 objetivos con FOR UPDATE SKIP LOCKED.
+Se comprueba también el conteo devuelto, con rollback ante un exceso inesperado.
+
+- Elimina tokens de recuperación/verificación vencidos, pruebas de exportación
+  vencidas y confirmaciones de cierre vencidas **sin usar**. Las usadas se conservan,
+  junto con las operaciones y sus efectos. Las fechas sin zona de `auth_tokens`
+  respetan la zona JVM del emisor legado, sin reinterpretarlas con la sesión SQL.
+- Vence exportaciones activas cuyo plazo original ya terminó, vaciando BYTEA,
+  referencias de fotos y lease. Conserva identidad, captura, vencimiento y demás
+  campos originales; no amplía el TTL ni intenta regenerar archivos.
+- Purga metadata de exportaciones terminales vacías sólo cuando transcurrieron
+  estrictamente más de siete días desde su actualización. La metadata de un archivo
+  que termina en esta pasada comienza entonces esa espera existente.
+
+Todas las categorías participan de una sola transacción. Un fallo final revierte
+las anteriores. La respuesta cuenta mutaciones locales confirmadas; no es una
+constancia de eliminación ni un recibo durable de proveedor. Un reintento sin
+objetivos elegibles no hace DML. `moreEligibleAtObservation=false` sólo describe
+esas cinco selecciones en ese instante, incluso si quedan datos con vencimiento
+futuro o categorías pendientes. No prueba borrado de disco, WAL, réplicas o backups.
+Los límites SQL no constituyen un deadline absoluto de pool/JVM.
+
+### Inventario y seguimiento
+
+`WorkshopClosureDeletionInventory.inspect` obtiene una captura independiente
+REPEATABLE_READ del cierre actual, incluso después de gracia. Usa gate compartido
+y ancla FOR SHARE, sin DML. Lee cantidades/booleanos y devuelve categorías de datos
+operativos, identidad, evidencia legal, fotos privadas/legacy, temporales,
+suscripciones/efectos e historial. No recupera emails, contraseñas, JWT, claves,
+URLs, payloads ni bytes. Los subconjuntos no se suman como si fueran filas distintas.
+
+LOCAL_ROWS_PRESENT y NO_LOCAL_ROWS son observaciones. Las categorías conservan
+motivos de revisión; ninguna se presenta como eliminada o con retención aprobada.
+La presencia de `payment_events` se informa separadamente como revisión global:
+la tabla carece de pertenencia acreditable por taller, y una coincidencia de un ID
+externo no autoriza asignarla o borrarla. El informe no es una API de usuario.
+
+Los efectos inciertos o sin identidad y la limpieza de fotos necesitan seguimiento.
+El inventario permite detectarlos; no reinicia intentos ni convierte una ausencia de
+respuesta en éxito. C conserva los reintentos automáticos ya acotados. Un aviso con
+ACK ambiguo no se reenvía a ciegas y una marca de cancelación no se retira al restaurar.
+El envío de alertas y la resolución durable de casos inciertos siguen pendientes.
+
+### Comparación de backups
+
+`WorkshopClosureBackupCheck.compare` acepta entre 1 y 1.000 entradas técnicas y compara
+ancla, historial, referencia/generación y época del titular en una sola SELECT,
+REQUIRES_NEW/REPEATABLE_READ de sólo lectura. Distingue ausencia, retroceso, base más
+nueva y divergencias. Incluso COMPARACION_COMPATIBLE devuelve NO_AUTORIZA_REAPERTURA.
+DELETED siempre señala que la eliminación terminal no está implementada.
+
+No autentica la fuente ni prueba que la lista cubra todos los cierres posteriores
+al backup. No evalúa épocas de empleados, contenido de fotos, outbox ni todos los
+respaldos. El [runbook de recuperación](../runbooks/cierre-recuperacion-backup.md)
+explica cuarentena externa a la DB, cobertura del journal y reconciliación previa
+a reabrir. No existe todavía espejo externo transaccional ni barrera automática de
+arranque: la comparación es diagnóstica y el procedimiento requiere aislamiento
+operativo acreditado. Un backup antiguo no puede autodeclararse reconciliado.
+
+### Pendientes concretos para completar D
+
+1. Política real por categoría: fundamento, datos mínimos conservados, horizonte y
+   responsable. El diseño 15O describe un mantenimiento legal futuro; en HEAD sólo
+   hay operaciones de repositorio, no ese servicio/rol/scheduler implementados.
+2. Contrato de supresión de negocio/identidad y transición terminal mediante una
+   migración nueva acreditada, respetando los recursos V27–V34 congelados. Las
+   excepciones conservadas se informarán separadamente de los datos eliminados.
+3. Ejecución de archivos remotos con identidad y recibo por objetivo, incluyendo
+   cargas tardías, legacy, CDN/respaldos y reintentos. El cleanup global existente no
+   acredita la eliminación de todas las fotos de un taller.
+4. Resolución durable/alerta de casos inciertos, registro externo y ensayo real de
+   recuperación en cuarentena antes de activar el cierre productivo.
+
+E conserva API/pantalla y gate integral pendientes. La parte visual podrá describir
+solicitud/restricción/restauración y estados pendientes; no podrá anunciar borrado
+completado o publicar el cierre mientras falten los criterios integrales de salida.
+
+
+### Validación del avance D
+
+Consolidación final del 2026-09-12: **125 pruebas focales aprobadas**, sin fallos,
+errores u omisiones, en ocho clases: 34 unitarias (política 19 y backup 15) y 91 IT
+(mantenimiento 14, inventario 15, backup 8, store 17, comando 16 y efectos 21).
+Empaquetado sin propiedades secretas aprobado. No se cuentan dos veces repeticiones.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' \
+./mvnw -B -Dtest=WorkshopClosurePolicyTest,WorkshopClosureBackupCheckTest \
+  -Dit.test=WorkshopClosureMaintenanceIT,WorkshopClosureDeletionInventoryIT,WorkshopClosureBackupCheckIT,WorkshopClosureStoreIT,WorkshopClosureCommandIT,WorkshopClosureEffectsIT verify
+```
+
+El primer mantenimiento detectó que la selección IN con LIMIT podía afectar 26
+objetivos en vez de 25. Se corrigieron las cinco selecciones con CTE MATERIALIZED y
+comprobación defensiva del conteo; la repetición de 13 IT pasó. Se corrigió también
+el fixture UTC: PostgreSQL JDBC envía la zona JVM al iniciar una conexión, por lo
+que la prueba debe fijar UTC expresamente. Se agregó después el límite exacto de
+siete días (retiene en el límite; purga desde el microsegundo siguiente).
+
+El primer gate conjunto encontró un import faltante en el test de inventario; tras
+corregirlo, la corrida conjunta de 34 unitarias/91 IT tuvo sólo un error de fixture:
+dos grafos del mismo taller usaban un teléfono duplicado, prohibido por la base.
+Se asignaron teléfonos distintos respetando esa restricción. La repetición final
+aprobó los 15 IT de inventario y 15 unitarias de backup en 35,935 s. Los otros 110 casos
+del gate ya estaban aprobados. Ninguna corrida intermedia fallida se presenta como
+BUILD SUCCESS. Logs locales descartables:
+
+- `/private/tmp/ordenfix-closure-d-maintenance-first.log` y
+  `/private/tmp/ordenfix-closure-d-maintenance-corrected.log`.
+- `/private/tmp/ordenfix-closure-d-focused-final.log` (import) y
+  `/private/tmp/ordenfix-closure-d-focused-corrected.log` (fixture de teléfono).
+- `/private/tmp/ordenfix-closure-d-inventory-corrected.log` (repetición final).
+- `/private/tmp/ordenfix-closure-d-consolidated-results.json` (ocho clases, 125 casos).
+
+Mantenimiento acredita dos talleres, referencia/gracia, lotes/replay, límite de
+metadata, vencimiento en zonas diferentes, aislamiento del caller, rollback de
+categorías y concurrencia real con escritores/filas bloqueadas. Inventario acredita
+snapshot consistente, cero DML, gate/timeout, categorías y datos privados omitidos.
+Sus contadores de fotos y algunas categorías legales se verifican vacíos: no se
+pretende acreditar ejecución de borrado remoto o purga legal mediante esos casos.
+Backup acredita comparación de hasta 1.000 entradas, rechazo previo de 1.001 y datos
+inválidos, ausencia/retroceso/avance/divergencias, snapshot concurrente y cero DML.
+No se restauró un backup productivo ni se acreditó completitud de un journal.
+
+No se repite clean verify: las tres fronteras son nuevas e internas, sin modificar
+consumidores productivos, migraciones, seguridad compartida o HTTP. El defecto de
+lote estaba limitado al servicio nuevo y su repetición/regresiones quedaron
+aprobadas. El integral final permanece en E. V27–V34 conservan sus SHA-256 frente a
+HEAD; no hay DML en bases reales, llamadas de proveedores, lectura de secretos ni
+cambios de frontend funcional. Documentación y código se entregan en un commit
+atómico por repositorio afectado, sin push ni merge. D permanece parcial según las
+dependencias concretas anteriores.
