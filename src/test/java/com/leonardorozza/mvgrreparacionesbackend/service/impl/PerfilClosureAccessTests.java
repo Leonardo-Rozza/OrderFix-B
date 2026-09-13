@@ -36,6 +36,7 @@ class PerfilClosureAccessTests {
         var principal = currentIdentity(user);
 
         assertThat(service.obtener(principal).taller().nombre()).isEqualTo("Taller de prueba");
+        assertThat(service.obtener(principal).accesoTaller()).isEqualTo(WorkshopClosureAccess.Mode.OPERATIVE);
         verify(tenant, never()).currentTallerId();
     }
 
@@ -50,6 +51,7 @@ class PerfilClosureAccessTests {
         assertThat(profile.usuario().id()).isEqualTo(11L);
         assertThat(profile.usuario().role()).isEqualTo(UserRole.ADMIN);
         assertThat(profile.taller().id()).isEqualTo(7L);
+        assertThat(profile.accesoTaller()).isEqualTo(WorkshopClosureAccess.Mode.RESTRICTED);
         verify(tenant, never()).currentTallerId();
     }
 

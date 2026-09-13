@@ -2,7 +2,9 @@
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
 Estado: A, B y C cerrados. D tiene mantenimiento y diagnóstico local implementados;
-eliminación integral y E pendientes. No hay cierre de taller disponible en la UI.
+la eliminación integral sigue pendiente. E queda cerrado en local con API, pantalla
+y gate integral aprobados. Sus flags permanecen apagados; activación productiva
+condicionada por D y los requisitos reales de salida.
 
 ## Objetivo y decisiones ya acordadas
 
@@ -645,3 +647,174 @@ de tests: genéricos de AssertJ y datos sintéticos que duplicaban una aceptaci�
 El acta 15O conserva fallos intermedios, comandos y consolidación sin duplicar
 repeticiones. No se repite clean verify; integral reservado para E. Los recursos
 V27–V34 y los 77 archivos ajenos del frontend conservaron sus hashes.
+
+
+## Corte E — API, Cuenta y sesión restringida
+
+Implementación local del 2026-09-13, sobre backend `4754f5f` y frontend `e2bd741`.
+Continúa el diseño ya aprobado: el titular ADMIN con email verificado puede solicitar
+cierre, consultar la constancia y restaurar durante siete días. El alcance termina en
+la integración verificable de estos servicios. **D permanece parcial y la activación
+productiva sigue bloqueada** por sus dependencias concretas; E no agrega supresión
+terminal ni interpreta una intención MP/email como confirmación del proveedor.
+
+### Diseño e interacción
+
+Se elige una página propia en `/cuenta/cierre`, accesible desde Cuenta, porque permite
+leer consecuencias, preparar el respaldo opcional y consultar después la referencia
+sin depender de un modal efímero. Reutiliza superficies, bordes, sombras, tipografía,
+espaciado y botones existentes de Cuenta. La jerarquía presenta estado y plazo,
+respaldo, confirmación y última operación; rojo sólo para confirmar cierre y el botón
+primario para restaurar. Controles de al menos 44 px, foco de encabezado/error y
+referencias partidas permiten operar a 320 px sin desborde horizontal.
+
+La confirmación exige contraseña actual y `CERRAR MI TALLER` o
+`RESTAURAR MI TALLER`, según el estado recién consultado. No persiste la contraseña,
+la prueba de reautenticación ni el identificador del comando en localStorage,
+sessionStorage, URL, historial o caché de consultas/mutaciones. El formulario evita
+doble envío, limpia los campos al iniciar y protege salida/navegación pendiente.
+No impone descargar un respaldo para cerrar.
+
+Después de confirmar se vuelve a login: el cambio revoca las épocas JWT de titular
+y empleados. Se conserva sólo un aviso enumerado de una vez y la ruta fija de Cuenta.
+Un timeout, respuesta no validable, 401 o 5xx posterior al envío del comando muestra
+resultado incierto y exige volver a ingresar y consultar; nunca reenvía el comando
+automáticamente ni supone rollback por falta de ACK. Un error conocido conserva el
+mensaje saneado, respeta Retry-After y vuelve a leer el estado ante 409/423.
+
+### Frontera HTTP y lectura durable
+
+El contrato exacto está en [FRONTEND_INTEGRATION.md](../../FRONTEND_INTEGRATION.md).
+Son tres rutas ADMIN: GET `/api/cuenta/cierre`, POST
+`/api/cuenta/cierre/reauthenticaciones` y POST `/api/cuenta/cierre/operaciones`.
+La reautenticación ata propósito, operación y referencia a sesión/época vigentes;
+el comando exige además `X-Reauth-Token` y la frase exacta. El cierre usa el mismo
+UUID canónico como operación y referencia; restaurar usa una operación nueva sobre
+la referencia actual. El servicio C conserva transacción, gate exclusivo, replay y
+outbox existentes. No se modifica V27–V34 ni se crea otra migración.
+
+El filtro se registra una vez después de JWT. Valida autoridad antes de leer cuerpo,
+admite sólo rutas/métodos exactos, sin query, y rechaza JSON duplicado, campos
+adicionales, contenido sobrante, UTF-8 inválido y cuerpos mayores de 4 KiB. Acota
+cuatro solicitudes concurrentes y dos verificaciones de contraseña por instancia;
+cuotas por actor con tabla acotada a 2.048 actores. No reemplaza la capacidad ni la
+limitación distribuida que deba acreditar el despliegue. Respuestas y errores llevan
+`private, no-store` y `nosniff`, mensajes fijos y sin datos internos de proveedor.
+
+`WorkshopClosureStatusService.read` usa REQUIRES_NEW/READ_COMMITTED, timeout de 10 s,
+gate compartido antes de locks de identidad/ancla, `lock_timeout=2s` y
+`statement_timeout=5s`. La transacción es writable sólo por los locks: no hace DML.
+Cruza ancla, historial y última operación del titular/taller, verifica pertenencia,
+generación, estado y fechas y revalida identidad/vencimiento antes de responder.
+No devuelve IDs internos, claves ni fecha prometida de eliminación. La constancia
+seleccionada es histórica; la capacidad actual viene del servidor, nunca del reloj
+del navegador. Los límites SQL no son un deadline absoluto de pool/JVM.
+
+### Acceso y exportación
+
+`GET /api/perfil` informa `accesoTaller` usando el estado actual de la base y responde
+sin caché. Las rutas privadas validan primero ese perfil. Ante restricción no consultan
+`/suscripcion`, no muestran navegación operativa y llevan a Cuenta/cierre; si el flag
+visual está apagado, a Cuenta. Errores al validar perfil no dejan renderizar datos
+operativos y permiten reintento explícito. Se tolera ausencia del campo para el
+backend anterior; valores desconocidos o null se rechazan. La autoridad efectiva
+continúa en backend.
+
+Durante la gracia, Cuenta permite descargar únicamente un ZIP previo READY y no
+vencido, con nueva contraseña y prueba por descarga. No crea ZIP/Excel ni extiende
+las 24 h originales del respaldo a siete días. Restaurar no revive JWT anteriores,
+no reactiva empleados dados de baja ni renueva automáticamente OrdenFix. Al vencer
+la gracia exacta, el acceso de cierre/restauración deja de admitirse. Esta restricción
+no prueba que los datos hayan sido eliminados.
+
+### Activación y ensayo local
+
+`ordenfix.cuenta.cierre.http-enabled` admite `true`/`false` exactos y queda apagado por
+omisión. El frontend usa `VITE_WORKSHOP_CLOSURE_ENABLED=true` sólo en el ensayo local;
+sin ese valor no presenta acciones habilitadas. El control de release público
+rechaza expresamente ese flag activo con `WORKSHOP_CLOSURE_NOT_RELEASED`, hasta
+resolver política/supresión/recibos remotos y recuperación de D. Ningún archivo real
+de configuración se modifica para este ensayo. Apagar el flag HTTP oculta la API;
+no restaura talleres ni revoca sus efectos pendientes.
+
+El launcher frontend `npm run test:e2e:closure-real` compila los tests backend y ejecuta
+`WorkshopClosureBrowserE2E`. Requiere Java 21, Docker y navegadores Playwright locales.
+Crea PostgreSQL 16 descartable y Tomcat en un puerto aleatorio de 127.0.0.1; Vite usa
+5178 con configuración aislada que no carga `.env`. Dos talleres/cuentas sintéticas
+recorren escritorio y móvil 320. Exportaciones previas se producen con el codec real;
+los proveedores y el worker periódico de exportación permanecen apagados. Los
+procesos hijos se identifican y terminan al finalizar. No se usa 8080 ni la DB real.
+
+### Validación E
+
+Focal backend aprobado: **109 unitarias y 14 IT**, ocho clases, sin fallos,
+errores u omisiones. Incluye lectura sin DML, cierre/replay/restauración, sesiones,
+rol/email, pertenencia entre talleres, rollback de operación/outbox, límite exacto
+de gracia, rutas estrictas, CORS y ZIP anterior con vencimiento original. El primer
+intento falló al compilar tests por visibilidad del worker periódico de exportación;
+un soporte de tests en su paquete permite pausarlo sin cambiar visibilidad de
+producción. La repetición completa focal terminó BUILD SUCCESS en 46,082 s.
+Logs: `/private/tmp/ordenfix-closure-e-backend-focal.log` y
+`/private/tmp/ordenfix-closure-e-backend-focal-corrected.log`.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' ./mvnw -B \
+  -Dtest=WorkshopClosureHttpRequestsTest,WorkshopClosureHttpGuardFilterTest,WorkshopClosureHttpControllerTest,WorkshopClosureHttpConfigurationTest,WorkshopClosureStatusServiceTest,JwtRestrictedAccessTest,PerfilClosureAccessTests \
+  -Dit.test=WorkshopClosureAccountHttpIT verify
+```
+
+Navegador real aprobado el 2026-09-13 a las 00:01:36 -03: **2/2 recorridos**
+(escritorio y móvil 320), más **1/1 verificación JUnit** de efectos persistidos;
+BUILD SUCCESS en 50,076 s. PostgreSQL 16 descartable, JWT/BCrypt y HTTP reales,
+proveedores apagados. Acredita contraseña incorrecta sin comando, cierre/relogin,
+revocación de JWT anteriores y empleado, navegación restringida sin suscripción,
+ZIP previo descargable, restauración y consulta de constancia tras nueva sesión.
+Comprueba dos operaciones, épocas incrementadas, historial restaurado, avisos aún
+PENDIENTE, datos de cliente conservados y ZIP revocado después de restaurar. No
+acredita envío ni cancelación remotos. Los ZIP del ensayo no contienen fotos reales.
+
+```sh
+JAVA_HOME=/Users/leonardorozza/Library/Java/JavaVirtualMachines/corretto-21.0.10/Contents/Home \
+DOCKER_AUTH_CONFIG='{"auths":{}}' ./mvnw -B \
+  -Dit.test=WorkshopClosureBrowserE2E \
+  -Dordenfix.browser.frontend=/Volumes/DiscoExtern/Desktop/mvgr-reparaciones-frontend \
+  failsafe:integration-test failsafe:verify
+```
+
+Log `/private/tmp/ordenfix-closure-e-browser-real.log`; informe y cuatro capturas en
+`/var/folders/j4/ym6p76r56xq1tcv775vjckq40000gn/T/ordenfix-closure-browser-9441598395334438824`.
+Revisión visual independiente aprobada: texto/fechas legibles, referencias ajustadas,
+controles completos y sin desborde horizontal a 320 px. Son artefactos descartables.
+
+Frontend: **819 Vitest en 105 archivos y 43 controles de release aprobados**;
+typecheck, lint y build aprobados. Se corrigió una opción no admitida por los tipos
+de Testing Library. Vite informa el chunk mayor de 500 kB y el harness avisa sobre
+Node 20.15.1 anterior al rango recomendado; esta corrida no acredita release público.
+Playwright existente acredita **135 casos** mediante integral (131 aprobados y cuatro
+expectativas móviles antiguas fallidas) más repetición completa del archivo móvil
+(48/48 aprobados en cuatro proyectos). El único ajuste exige ocultar dashboard ante
+un perfil 500 y recuperar por reintento explícito. No se afirma una integral única
+verde ni se cuentan dos veces las repeticiones. Logs frontend en el acta
+`docs/plans/2026-09-13-cierre-taller-e.md` de ese repositorio.
+
+**Gate integral backend aprobado** el 2026-09-13 a las 00:36:01 -03:
+`./mvnw -B clean verify`, Java 21 y PostgreSQL 16. **7.900 unitarias** (260 clases) y
+**1.771 IT** (120 clases): **9.671 pruebas**, sin fallos, errores ni omisiones.
+BUILD SUCCESS en 34:01 min. Incluye el control de empaquetado sin propiedades
+secretas. Se ejecutó una vez al cierre E por los cambios compartidos de seguridad,
+perfil y navegación; no se sustituyó por los resultados focales. Log
+`/private/tmp/ordenfix-closure-e-backend-clean-verify.log` y manifest de 380 reportes
+`/private/tmp/ordenfix-closure-e-backend-integral-results.json`.
+
+Revisión final de código/contrato y `git diff --cached --check` aprobados. V27–V34
+conservan sus ocho SHA-256; los 77 archivos ajenos no versionados del frontend
+conservan sus hashes. No hubo cambios en secretos o configuraciones reales,
+operaciones sobre cuentas reales ni llamadas a proveedores. Los puertos 8080, 5178 y 62907
+quedaron sin listener; el backend normal sigue detenido. El ensayo no detiene
+servicios ajenos.
+
+E queda cerrado **en local**. D conserva sus dependencias reales, y la activación
+productiva sigue apagada. Entrega: un commit atómico backend
+`feat(cuenta): expone cierre y restauracion del taller`, acompañado por el commit
+frontend `feat(cuenta): integra cierre y restauracion del taller`. Sin push ni merge.

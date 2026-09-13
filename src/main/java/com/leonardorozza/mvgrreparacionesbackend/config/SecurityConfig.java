@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.config;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.JwtFilter;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.http.ExportHttpGuardFilter;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.http.WorkshopClosureHttpGuardFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.filter.PublicEndpointRateLimitFilter;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicDocumentRequestMatcher;
 import com.leonardorozza.mvgrreparacionesbackend.config.security.LegalPublicRequirementsRequestMatcher;
@@ -43,7 +44,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
             ObjectProvider<LegalPrivateRequirementsAuthenticationEntryPoint> privateLegalEntryPoint,
-            ObjectProvider<ExportHttpGuardFilter> exportGuard) throws Exception {
+            ObjectProvider<ExportHttpGuardFilter> exportGuard,
+            ObjectProvider<WorkshopClosureHttpGuardFilter> closureGuard) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .exceptionHandling(exceptions -> privateLegalEntryPoint.ifAvailable(exceptions::authenticationEntryPoint))
@@ -63,6 +65,7 @@ public class SecurityConfig {
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(publicEndpointRateLimitFilter, JwtFilter.class);
         exportGuard.ifAvailable(filter -> http.addFilterAfter(filter, JwtFilter.class));
+        closureGuard.ifAvailable(filter -> http.addFilterAfter(filter, JwtFilter.class));
         return http.build();
     }
 

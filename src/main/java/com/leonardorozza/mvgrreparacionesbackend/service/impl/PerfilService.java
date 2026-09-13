@@ -38,15 +38,17 @@ public class PerfilService {
 
         User user = userRepository.findPerfilByIdAndTallerId(principal.getUserId(), tallerId)
                 .orElseThrow(() -> new UnauthorizedException("El usuario autenticado ya no está disponible."));
+        var accessMode = WorkshopClosureAccess.mode(user, clock.instant());
         if (user.getTokenVersion() != principal.getTokenVersion()
-                || WorkshopClosureAccess.mode(user, clock.instant()) == WorkshopClosureAccess.Mode.DENIED) {
+                || accessMode == WorkshopClosureAccess.Mode.DENIED) {
             throw new UnauthorizedException("El usuario autenticado ya no está disponible.");
         }
         Taller taller = user.getTaller();
 
         return new PerfilResponseDTO(
                 new PerfilUsuarioDTO(user.getId(), user.getUsername(), user.getEmail(), user.getRole()),
-                new PerfilTallerDTO(taller.getId(), taller.getNombre(), taller.getTelefono())
+                new PerfilTallerDTO(taller.getId(), taller.getNombre(), taller.getTelefono()),
+                accessMode
         );
     }
 }

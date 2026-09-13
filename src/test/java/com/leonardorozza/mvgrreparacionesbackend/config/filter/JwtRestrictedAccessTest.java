@@ -56,6 +56,7 @@ class JwtRestrictedAccessTest {
 
     @ParameterizedTest @CsvSource({
         "GET,/api/perfil", "GET,/api/aceptaciones-legales", "GET,/api/exportaciones/actual",
+        "GET,/api/cuenta/cierre", "POST,/api/cuenta/cierre/reauthenticaciones", "POST,/api/cuenta/cierre/operaciones",
         "GET,/api/exportaciones/4b306acb-ce32-47ca-b18d-dce56c3ed255",
         "POST,/api/cuenta/reauthenticaciones", "POST,/api/exportaciones/4b306acb-ce32-47ca-b18d-dce56c3ed255/archivo"
     })
@@ -70,7 +71,9 @@ class JwtRestrictedAccessTest {
     @ParameterizedTest @CsvSource({
         "POST,/api/exportaciones", "GET,/api/export/excel", "GET,/api/clientes", "PATCH,/api/perfil",
         "POST,/api/cuenta/baja-acceso", "POST,/api/cuenta/cierre", "GET,/api/cuenta/reauthenticaciones",
-        "HEAD,/api/perfil", "OPTIONS,/api/perfil", "POST,/api/aceptaciones-legales", "GET,/api/perfil/",
+        "HEAD,/api/cuenta/cierre", "GET,/api/cuenta/cierre/", "GET,/api/cuenta/cierre/operaciones",
+        "POST,/api/cuenta/cierre/operaciones/", "POST,/api/cuenta/cierre/reauthenticaciones/",
+        "GET,/api/%63uenta/cierre", "GET,//api/cuenta/cierre", "HEAD,/api/perfil", "OPTIONS,/api/perfil", "POST,/api/aceptaciones-legales", "GET,/api/perfil/",
         "GET,/api/perfil;ignored=true", "GET,/api/%70erfil", "GET,//api/perfil", "GET,/api/PERFIL",
         "GET,/api/exportaciones/4B306ACB-CE32-47CA-B18D-DCE56C3ED255", "GET,/api/exportaciones/not-a-uuid",
         "POST,/api/exportaciones/4b306acb-ce32-47ca-b18d-dce56c3ed255/archivo/",

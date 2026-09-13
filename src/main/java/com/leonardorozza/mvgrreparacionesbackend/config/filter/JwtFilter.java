@@ -102,9 +102,11 @@ public class JwtFilter extends OncePerRequestFilter {
         String path = uri.substring(context.length());
         String id = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
         return switch (request.getMethod()) {
-            case "GET" -> path.equals("/api/perfil")
+            case "GET" -> path.equals("/api/perfil") || path.equals("/api/cuenta/cierre")
                     || path.equals("/api/exportaciones/actual") || path.matches("/api/exportaciones/" + id);
             case "POST" -> path.equals("/api/cuenta/reauthenticaciones")
+                    || path.equals("/api/cuenta/cierre/reauthenticaciones")
+                    || path.equals("/api/cuenta/cierre/operaciones")
                     || path.matches("/api/exportaciones/" + id + "/archivo");
             default -> false;
         };

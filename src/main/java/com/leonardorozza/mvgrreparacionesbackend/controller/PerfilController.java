@@ -24,6 +24,7 @@ public class PerfilController {
     @GetMapping
     public ResponseEntity<PerfilResponseDTO> obtener(
             @AuthenticationPrincipal AuthenticatedUserPrincipal principal) {
-        return ResponseEntity.ok(perfilService.obtener(principal));
+        return ResponseEntity.ok().header("Cache-Control", "private, no-store")
+                .header("X-Content-Type-Options", "nosniff").body(perfilService.obtener(principal));
     }
 }

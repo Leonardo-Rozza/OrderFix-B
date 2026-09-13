@@ -69,6 +69,9 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
     idempotencia HTTP, respuestas de escritura `409/428/503`, enforcement, contenido definitivo,
     staging y deploy.
     `BACKEND-HANDOFF 1` continúa cerrado.
+20. **Cierre y restauración del taller, Corte E** (§4.2.b): API y UI con flags apagados por defecto,
+    confirmación por contraseña/frase, estado y constancia recuperables. El perfil agrega
+    `accesoTaller: OPERATIVE | RESTRICTED`. D sigue parcial; no se anuncia eliminación completada.
 
 Los tipos operativos de §7 y los tipos legales de §4.1.a reflejan estos contratos.
 
@@ -142,11 +145,14 @@ CORS habilitado para:
 2. Guardar el token (localStorage) y mandarlo en el header en todas las llamadas.
 3. Un **401** en login significa credenciales rechazadas; no hay sesión válida que conservar.
 4. En rutas protegidas, un **403** puede significar tanto sesión ausente/inválida/revocada como falta
-   de rol. No lo conviertas
-   ciegamente en logout ni en "sin permisos": al iniciar la app validá la sesión con
-   `GET /api/suscripcion`; un `403` en esa ruta base implica logout. En una acción conocida como
-   solo-ADMIN, mostrale "sin permisos" al USER. Si aparece un `403` inesperado durante la sesión,
-   repetí esa validación base antes de decidir.
+   de rol. Al iniciar la app, validar primero `GET /api/perfil`; un `401/403` en ese perfil propio
+   exige login nuevo. Sólo un perfil operativo continúa con `GET /api/suscripcion` para acceder
+   a la aplicación comercial. En una acción conocida como solo-ADMIN, mostrar "sin permisos"
+   al USER; ante un `403` inesperado, comprobar la sesión antes de decidir. Para Cuenta y una
+   sesión restringida por cierre (§4.2.b), basta la validación del perfil: `/api/suscripcion`
+   queda fuera del acceso permitido y responde `423 CUENTA_EN_CIERRE`. El HTTP de cierre usa
+   `401` para una sesión inválida y distingue sus errores de permiso; no aplicar el flujo
+   comercial a esa superficie.
 
 ---
 
@@ -1415,13 +1421,252 @@ No requiere plan PRO. Tanto ADMIN como USER reciben únicamente su propio usuari
     "id": 4,
     "nombre": "CelExpress",
     "telefono": "1133334444"
-  }
+  },
+  "accesoTaller": "OPERATIVE"
 }
 ```
 
 El frontend no debe inferir el nombre del taller desde `usuario.username` ni enviar ninguno de esos
 IDs en otras operaciones. Para la interfaz, `taller.nombre` identifica el negocio y
 `usuario.username` identifica a la persona autenticada.
+
+`accesoTaller` pertenece al perfil completo y admite `OPERATIVE` o `RESTRICTED` en una respuesta
+correcta. No es un claim ni un permiso deducido de la suscripción. `RESTRICTED` sólo corresponde al
+titular activo, con email verificado, dentro de la gracia del cierre; un acceso denegado no se
+publica como perfil utilizable. Validar de nuevo este GET al entrar a Cuenta, aislado por la sesión
+actual y sin depender de `/api/suscripcion`. No usar un perfil cacheado de otra sesión para decidir
+el acceso. El perfil no publica `emailVerificado`; el servicio de cierre comprueba esa condición.
+Este GET devuelve `Cache-Control: private, no-store` y `X-Content-Type-Options: nosniff`.
+
+---
+
+### 4.2.b Cierre y restauración del taller — Corte E (`/api/cuenta/cierre`)
+
+Superficie para el titular `ADMIN`, con email verificado, usuario/taller activos y JWT vigente
+contrastado con la sesión actual en el servidor. El taller se deriva del JWT; no se aceptan
+`tallerId`, `userId`, versión de sesión ni otros datos de autoridad enviados por el cliente.
+Los empleados no pueden confirmar el cierre ni la restauración.
+
+El backend queda apagado por defecto mediante `ordenfix.cuenta.cierre.http-enabled=false`.
+Sólo admite los literales exactos `true` y `false`; un valor distinto impide el arranque de esta
+configuración. Sin `true` no se registran los endpoints ni su filtro. La UI tiene un opt-in
+independiente de build: `VITE_WORKSHOP_CLOSURE_ENABLED=true`; cualquier otro valor mantiene la
+pantalla informativa sin formulario ni llamadas de cierre. Habilitar un flag no habilita el otro,
+los proveedores remotos, la limpieza ni el borrado productivo. Esta superficie permite ensayar la integración
+local; las limitaciones de D enumeradas abajo siguen condicionando la activación pública.
+
+| Método | Ruta exacta | Respuesta correcta |
+|---|---|---|
+| GET | `/api/cuenta/cierre` | `200`, estado actual y última constancia propia |
+| POST | `/api/cuenta/cierre/reauthenticaciones` | `200`, prueba temporal de contraseña |
+| POST | `/api/cuenta/cierre/operaciones` | `200`, constancia confirmada o replay exacto |
+
+Todas requieren un único `Authorization: Bearer <JWT>`. Los POST requieren
+`Content-Type: application/json` (opcional `charset=UTF-8`), JSON realmente UTF-8 de hasta 4 KiB
+con exactamente los campos de su ejemplo. Se rechazan claves duplicadas, campos extra, JSON
+anidado donde corresponde texto, contenido posterior al objeto, IDs no canónicos y contraseñas
+vacías o compuestas sólo por espacios. `passwordActual` admite de 1 a 100 caracteres y no se recorta.
+Las rutas no admiten query string, barra final, alias codificados ni otros métodos; el GET no admite
+cuerpo. No enviar headers duplicados de autorización, prueba, tipo/longitud/codificación del cuerpo.
+No se admite `Content-Encoding`. `X-Reauth-Token` se usa exclusivamente en el POST de operaciones.
+
+Las respuestas y errores de esta superficie usan `Cache-Control: private, no-store` y
+`X-Content-Type-Options: nosniff`, sin ETag. El cliente no debe guardar respuestas, contraseña,
+prueba ni cuerpo original en cachés persistentes, logs, analytics, URLs o estado de navegación.
+Los errores públicos están saneados y no incluyen la causa SQL ni las credenciales recibidas.
+
+#### Consultar el estado y la última constancia
+
+Respuesta de un taller abierto sin operación previa:
+
+```json
+{
+  "estado": "ABIERTO",
+  "tallerNombre": "CelExpress",
+  "observadoEn": "2026-09-13T12:00:00Z",
+  "referencia": null,
+  "confirmadoEn": null,
+  "reversibleHasta": null,
+  "puedeSolicitar": true,
+  "puedeRestaurar": false,
+  "ultimaOperacion": null
+}
+```
+
+Los campos nulos se incluyen explícitamente. En `RESTRINGIDO`, `referencia`, `confirmadoEn` y
+`reversibleHasta` identifican el cierre actual, `puedeSolicitar=false` y `puedeRestaurar=true`
+mientras la sesión pueda acceder dentro de la gracia. Después de restaurar, vuelven a ser nulos
+los tres campos del cierre actual; `ultimaOperacion` conserva la constancia de restauración.
+El GET es de sólo consulta: no consume pruebas, cambia épocas ni ejecuta efectos pendientes.
+
+`observadoEn` y las capacidades vienen del servidor. No habilitar restauración calculando días
+con el reloj del navegador. El plazo técnico reversible es de siete días corridos (168 horas),
+desde `confirmadoEn` inclusive hasta `reversibleHasta` **exclusive**. Al llegar a ese límite, la
+sesión restringida deja de permitir el acceso; no se devuelve un permiso de restauración vencido.
+Las fechas son instantes ISO 8601 UTC y pueden formatearse en la zona del usuario para mostrarlas.
+No son plazos universales de retención legal.
+
+#### Reautenticar y confirmar una operación
+
+Antes de solicitar la prueba, volver a leer el estado y comprobar que no cambió el cierre que la
+persona estaba revisando. Generar `operacionId` con `crypto.randomUUID()` y conservarlo únicamente
+para ese intento. Ambos IDs deben ser UUID canónicos en minúsculas.
+
+Para cerrar, `operacionId` y `cierreReferencia` deben ser el mismo UUID nuevo:
+
+```json
+{
+  "passwordActual": "contraseña actual ingresada en el formulario",
+  "proposito": "CERRAR",
+  "operacionId": "b46c821a-a9de-4cb0-8a74-24c0c728502e",
+  "cierreReferencia": "b46c821a-a9de-4cb0-8a74-24c0c728502e"
+}
+```
+
+Respuesta de `POST /api/cuenta/cierre/reauthenticaciones`:
+
+```json
+{
+  "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "expiresAt": "2026-09-13T12:05:00Z"
+}
+```
+
+El token ilustrativo no es una credencial utilizable. La prueba real tiene 43 caracteres base64url
+canónicos y está vinculada a esa sesión completa, titular/taller, propósito, IDs y versión de cierre.
+Su vigencia máxima es de cinco minutos, limitada además por el vencimiento del JWT y, al restaurar,
+por el fin de gracia. El servidor vuelve a comprobar esos límites al confirmar. Emitir otra prueba
+del mismo propósito y sesión reemplaza la anterior que siga sin usar. Si se pierde la respuesta de
+emisión, pedir otra vez la contraseña; no hay endpoint para recuperar el token anterior.
+
+Esta respuesta se llama `{token, expiresAt}`: no confundirla con el contrato de reautenticación de
+exportaciones ni usar sus propósitos `EXPORTAR` o `DESCARGAR_EXPORTACION` en este endpoint.
+La contraseña se descarta del formulario al iniciar el intento; la prueba sólo vive en memoria
+hasta enviar el comando y se descarta en éxito o error. No se persisten para reintentar al recargar.
+
+Enviar el POST de operaciones con el mismo par de IDs y el header
+`X-Reauth-Token: <token temporal>`. No repetir la contraseña en este cuerpo:
+
+```json
+{
+  "proposito": "CERRAR",
+  "operacionId": "b46c821a-a9de-4cb0-8a74-24c0c728502e",
+  "cierreReferencia": "b46c821a-a9de-4cb0-8a74-24c0c728502e",
+  "confirmacion": "CERRAR MI TALLER"
+}
+```
+
+Para restaurar se emite una prueba **nueva** con `proposito: "RESTAURAR"`, otro `operacionId` y la
+`cierreReferencia` actual recibida en el GET. El comando usa esos mismos datos y la frase exacta
+`RESTAURAR MI TALLER`. Las frases no se recortan ni se comparan ignorando mayúsculas.
+
+La constancia pública del comando y el objeto `ultimaOperacion` tienen exactamente estos campos:
+
+```json
+{
+  "operacionId": "b46c821a-a9de-4cb0-8a74-24c0c728502e",
+  "referencia": "b46c821a-a9de-4cb0-8a74-24c0c728502e",
+  "proposito": "CERRAR",
+  "estadoResultante": "RESTRINGIDO",
+  "confirmadoEn": "2026-09-13T12:00:00Z",
+  "reversibleHasta": "2026-09-20T12:00:00Z",
+  "registradaEn": "2026-09-13T12:00:00Z",
+  "reutilizada": false
+}
+```
+
+Al restaurar, el propósito es `RESTAURAR`, el estado resultante `ABIERTO` y `registradaEn` indica
+cuándo se registró esa restauración. `confirmadoEn` y `reversibleHasta` conservan el calendario del
+cierre original; restaurar no lo extiende. No se publican generación interna, digests ni fecha
+prevista de eliminación. `ultimaOperacion` es sólo la última constancia propia, no un historial
+paginado ni evidencia de que todos los trabajos remotos terminaron.
+
+Una operación nueva consume la prueba y confirma en una misma transacción la transición local,
+la revocación de sesiones, la constancia y la intención durable de los efectos. Un fallo revierte
+ese conjunto. Repetir exactamente una operación ya confirmada, con JWT **actual** del mismo titular
+y taller, devuelve la constancia original con `reutilizada=true`, sin consumir otra prueba ni
+modificar fechas. La validación HTTP del header de prueba sigue aplicando. Un identificador usado
+con datos incompatibles devuelve `409`. `estadoResultante` describe esa operación histórica;
+consultar `estado` en el GET para conocer el estado actual si hubo operaciones posteriores.
+
+#### Sesiones y recuperación de una respuesta incierta
+
+Cerrar y restaurar incrementan la época de sesión de todos los usuarios del taller. Los JWT
+anteriores dejan de servir, incluido el del titular que confirmó. Después de un `200` validado,
+borrar el formulario y la sesión local, pedir login nuevo y volver a Cuenta para leer el estado.
+Durante la gracia sólo el titular activo con email verificado puede iniciar una sesión restringida;
+los empleados quedan sin acceso. Restaurar no reactiva empleados previamente desactivados: quienes
+conserven acceso activo deben iniciar sesión otra vez.
+
+Si, después de enviar el comando, hay timeout, desconexión, respuesta inválida, `401` o `5xx`, el
+resultado puede haberse confirmado aunque la UI no haya recibido la constancia. No anunciar éxito,
+fracaso definitivo ni borrado, y no reenviar automáticamente el POST. Descartar contraseña/prueba,
+salir de la sesión anterior y pedir login nuevo. Consultar `GET /api/cuenta/cierre` y mostrar el
+estado y la última constancia recibidos del servidor. Si la consulta no permite acreditar lo
+ocurrido, conservar el resultado como no comprobado y ofrecer volver a consultar; una nueva acción
+requiere revisión del estado, contraseña y confirmación explícita. La UI actual usa esta consulta
+para recuperar el resultado, sin persistir credenciales ni preparar un replay automático.
+
+Una sesión restringida admite perfil propio, historial legal propio, consulta del ZIP existente,
+reautenticación para descargarlo, descarga y este flujo de cierre/restauración. No consultar
+`/api/suscripcion`, dashboard o recursos de negocio para validar esa sesión: su rechazo `423` es
+esperado. Tampoco se pueden crear ZIP nuevos ni descargar Excel operativo durante la restricción.
+Un ZIP previamente `READY` sólo se descarga mientras siga válido; el cierre no amplía su TTL.
+Restaurar no reabre una suscripción cancelada, reactiva una renovación ni regenera exportaciones.
+
+#### Errores y límites
+
+| HTTP | `code` de esta superficie | Acción de la UI |
+|---|---|---|
+| 400 | `SOLICITUD_INVALIDA` | Revisar formato, IDs y frase; pedir una confirmación válida. |
+| 400 | `PASSWORD_ACTUAL_INVALIDA` | Vaciar y volver a pedir contraseña. |
+| 400 | `REAUTENTICACION_INVALIDA` | Pedir contraseña y prueba nuevas; no reciclar la anterior. |
+| 401 | `SESION_INVALIDA` | Pedir login; si ya se envió el comando, recuperar mediante GET posterior. |
+| 403 | `ACCESO_DENEGADO` / `EMAIL_NO_VERIFICADO` | Mostrar la condición requerida; no tratarlo como éxito. |
+| 404 | `SOLICITUD_INVALIDA` en rutas vecinas del filtro | Ruta incorrecta; con el flag apagado no hay controlador de cierre. |
+| 405 / 413 / 415 | `SOLICITUD_INVALIDA` | Corregir método, tamaño o JSON UTF-8; no reintentar sin cambios. |
+| 409 | `CIERRE_CONFLICTO` | Consultar estado actual antes de otra confirmación. |
+| 423 | `CUENTA_EN_CIERRE` | Usar la cuenta restringida y volver a consultar el estado. |
+| 429 | `LIMITE_SOLICITUDES` | Respetar `Retry-After` en segundos. |
+| 503 | `CIERRE_NO_DISPONIBLE` | Consultar estado; si se envió el comando, aplicar recuperación incierta. |
+
+Los errores de filtros compartidos pueden tener otro envoltorio; manejar también el HTTP sin
+suponer siempre `code`. Con el backend deshabilitado, mostrar función no disponible ante `404`.
+Las cuotas locales por titular son 30 consultas por minuto, cinco emisiones de prueba por 15 minutos
+y cinco comandos por 15 minutos. Un login nuevo no reinicia esas cuotas. También hay admisión
+concurrente acotada por JVM (cuatro solicitudes, como máximo dos comprobando contraseñas); su
+saturación devuelve `429`. No son cuotas distribuidas entre réplicas ni sustituyen los controles
+compartidos del despliegue. La UI no debe hacer polling continuo ni reintentos automáticos de escritura.
+
+#### Qué acredita E y qué sigue pendiente de D
+
+La constancia acredita solicitud/restricción o restauración **local**. No acredita cancelación
+remota de la renovación de OrdenFix, envío de email, eliminación de reparaciones/evidencia ni
+borrado integral. Los cobros taller-cliente siguen realizándose por fuera de OrdenFix; el cierre
+no valida cobros ni emite comprobantes fiscales.
+
+D permanece parcial: existen mantenimiento interno de temporales vencidos, inventario diagnóstico,
+comparación de backups y mantenimiento legal 15O sobre vencimientos ya persistidos. Esa limpieza
+conserva aceptaciones/evidencia y no equivale a supresión de identidad/negocio, archivos remotos,
+WAL, réplicas o backups. Faltan política aprobada por categoría, contrato terminal nuevo compatible
+con V27–V34 congeladas, recibos por efecto remoto y resolución/recuperación externa acreditada.
+No hay endpoint de eliminación, transición pública a `ELIMINADO`, fecha prometida de borrado ni
+reapertura automática de un backup. Ver el
+[plan de cierre](docs/plans/2026-09-12-cierre-taller-implementation.md) y el
+[runbook de recuperación](docs/runbooks/cierre-recuperacion-backup.md).
+
+El ensayo reproducible se invoca desde el frontend:
+
+```bash
+npm run test:e2e:closure-real
+```
+
+El script coordina Maven con `WorkshopClosureBrowserE2E`, PostgreSQL 16 descartable, API HTTP real
+y Playwright en escritorio y 320 px. Requiere el backend vecino `../mvrg-backend` (o
+`ORDENFIX_BACKEND_DIR`) y Docker disponible; inicia su propio Vite local. No ejecutarlo en paralelo
+con otra corrida Maven del backend. Usa cuentas sintéticas y no opera proveedores ni bases reales;
+no habilita flags productivos. La evidencia y el resultado de cada corrida se registran en el plan,
+no se infieren por la sola existencia de este comando.
 
 ---
 
@@ -2248,6 +2493,7 @@ export interface AuthResponse { token: string; type: string; email: string; emai
 export interface Perfil {
   usuario: { id: number; username: string; email: string; role: UserRole };
   taller: { id: number; nombre: string; telefono: string | null };
+  accesoTaller: "OPERATIVE" | "RESTRICTED";
 }
 export interface Suscripcion {
   plan: Plan; estado: EstadoSuscripcion;
