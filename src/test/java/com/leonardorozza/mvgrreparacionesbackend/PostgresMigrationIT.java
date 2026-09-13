@@ -103,9 +103,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("33");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("34");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -308,7 +308,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV33ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
+    void latestV34ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -329,7 +329,8 @@ class PostgresMigrationIT {
                 """, String.class);
         assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
         assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);
-        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones", "cuenta_exportaciones", "cuenta_cierres"));
+        assertTablasLegalesVacias(jdbcTemplate, "public", Set.of("cuenta_reautenticaciones", "cuenta_exportaciones", "cuenta_cierres",
+                "cuenta_cierre_confirmaciones", "cuenta_cierre_operaciones", "cuenta_cierre_efectos"));
 
         var tiposRepresentativos = jdbcTemplate.queryForList("""
                 SELECT table_name || '.' || column_name || ':' || data_type

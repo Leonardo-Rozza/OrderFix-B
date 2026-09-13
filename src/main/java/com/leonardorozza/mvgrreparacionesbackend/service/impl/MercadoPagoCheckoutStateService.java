@@ -2,6 +2,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.mercadopago.MercadoPagoProperties;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureGate;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureEffects;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.BadRequestException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PagoException;
@@ -35,10 +36,13 @@ public class MercadoPagoCheckoutStateService {
     private final MercadoPagoProperties properties;
     private final Clock clock;
     private final WorkshopClosureGate closureGate;
+    private final WorkshopClosureEffects closureEffects;
 
     @Transactional
     public CheckoutPreparation prepare(Long tallerId) {
         closureGate.requireOperational(tallerId);
+        if(closureEffects.blocksWorkshopRenewal(tallerId))
+            throw new ConflictException("La renovación anterior necesita revisión antes de iniciar otra suscripción.");
         Suscripcion suscripcion = suscripcionRepository.findByTallerIdForUpdate(tallerId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El taller no tiene una suscripción asociada."));
@@ -47,13 +51,17 @@ public class MercadoPagoCheckoutStateService {
                 .findFirstBySuscripcionIdAndCurrentTrueOrderByIdDesc(suscripcion.getId())
                 .orElse(null);
 
+        boolean retiredByClosure=current!=null && closureEffects.blocksRenewal(current.getId());
+        if(retiredByClosure && !closureEffects.cancellationConfirmed(current.getId())) {
+            throw new ConflictException("La renovación anterior necesita coordinación antes de iniciar otra suscripción.");
+        }
         String currentStatus = current == null ? null : normalize(current.getStatus());
-        if (current != null && "pending".equals(currentStatus)
+        if (!retiredByClosure && current != null && "pending".equals(currentStatus)
                 && hasText(current.getExternalSubscriptionId()) && hasText(current.getCheckoutUrl())) {
-            return CheckoutPreparation.existing(new CheckoutResponseDto(
+            return CheckoutPreparation.existing(current.getId(), new CheckoutResponseDto(
                     current.getExternalSubscriptionId(), current.getCheckoutUrl()));
         }
-        if (current != null && isCheckoutInProgressStatus(currentStatus)) {
+        if (!retiredByClosure && current != null && isCheckoutInProgressStatus(currentStatus)) {
             if ("creating".equals(currentStatus) && leaseIsActive(current)) {
                 throw new ConflictException(
                         "El checkout de Mercado Pago ya se está creando. Esperá unos segundos y reintentá.");
@@ -68,7 +76,7 @@ public class MercadoPagoCheckoutStateService {
                     current.getExternalReference(), current.getIdempotencyKey());
         }
 
-        if (current != null && !"canceled".equals(normalize(current.getStatus()))) {
+        if (!retiredByClosure && current != null && !"canceled".equals(normalize(current.getStatus()))) {
             throw new ConflictException(
                     "Ya existe una suscripción de Mercado Pago vigente o pausada. Cancelala o reactivala antes de crear otra.");
         }
@@ -157,8 +165,10 @@ public class MercadoPagoCheckoutStateService {
 
     /** Called after complete commits: denying delivery must never roll back the provider identifier. */
     @Transactional(readOnly = true)
-    public void requireCheckoutDelivery(Long tallerId) {
+    public void requireCheckoutDelivery(Long tallerId,Long linkId) {
         closureGate.requireOperational(tallerId);
+        if(linkId==null || linkId<=0 || closureEffects.blocksWorkshopRenewal(tallerId) || closureEffects.blocksRenewal(linkId))
+            throw new ConflictException("El checkout anterior quedó incluido en el cierre del taller.");
     }
 
     private String payerEmail(Suscripcion suscripcion) {
@@ -201,8 +211,8 @@ public class MercadoPagoCheckoutStateService {
             String externalReference,
             String idempotencyKey
     ) {
-        static CheckoutPreparation existing(CheckoutResponseDto response) {
-            return new CheckoutPreparation(true, response, null, null, null, null, null);
+        static CheckoutPreparation existing(Long linkId, CheckoutResponseDto response) {
+            return new CheckoutPreparation(true, response, linkId, null, null, null, null);
         }
 
         static CheckoutPreparation pending(

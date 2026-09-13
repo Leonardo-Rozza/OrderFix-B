@@ -24,11 +24,12 @@ class MercadoPagoClosureStateTest {
     private final SubscriptionPaymentRepository payments=mock(SubscriptionPaymentRepository.class);
     private final MercadoPagoResponseValidator validator=mock(MercadoPagoResponseValidator.class);
     private final WorkshopClosureGate gate=mock(WorkshopClosureGate.class);
+    private final WorkshopClosureEffects effects=mock(WorkshopClosureEffects.class);
     private final Clock clock=Clock.fixed(NOW,ZoneOffset.UTC);
     private final MercadoPagoCheckoutStateService checkout=new MercadoPagoCheckoutStateService(
-            subscriptions,links,new MercadoPagoProperties(),clock,gate);
+            subscriptions,links,new MercadoPagoProperties(),clock,gate,effects);
     private final MercadoPagoSubscriptionStateService observations=new MercadoPagoSubscriptionStateService(
-            links,payments,subscriptions,validator,clock);
+            links,payments,subscriptions,validator,clock,effects);
 
     @Test void blockedCheckoutDoesNotReadOrMutateSubscriptionState() {
         var denied=new WorkshopClosureBlockedException();
@@ -97,6 +98,65 @@ class MercadoPagoClosureStateTest {
         assertThat(link.getStatus()).isEqualTo("canceled");
         assertThat(link.getSuscripcion().getMpStatus()).isEqualTo("canceled");
         assertUnchangedAccess(link.getSuscripcion());
+    }
+
+    @Test void restoredWorkshopCannotGrantProFromALinkMarkedByClosure() {
+        var link=link("ABIERTO");
+        when(links.findMercadoPagoByExternalId("pre-1")).thenReturn(Optional.of(link));
+        when(effects.blocksRenewal(11L)).thenReturn(true);
+        observations.applyPreapproval("pre-1",preapproval("authorized"));
+        assertUnchangedAccess(link.getSuscripcion());
+        assertThat(link.getSuscripcion().getMpStatus()).isEqualTo("authorized");
+    }
+    @Test void historicalAcknowledgementIsPersistedForTheSqlClosureTargetGuard() {
+        var link=link("ABIERTO");link.setCurrent(false);
+        when(links.findByIdForUpdate(11L)).thenReturn(Optional.of(link));
+        checkout.complete(11L,preapproval("pending"));
+        verifyNoInteractions(subscriptions);
+    }
+    @Test void historicalPreapprovalIsPersistedForTheSqlClosureTargetGuard() {
+        var link=link("ABIERTO");link.setCurrent(false);
+        when(links.findMercadoPagoByExternalId("pre-1")).thenReturn(Optional.of(link));
+        observations.applyPreapproval("pre-1",preapproval("authorized"));
+        verifyNoInteractions(subscriptions,payments);
+    }
+    @Test void restoredWorkshopCannotReuseAnUnconfirmedPreviousCheckout() {
+        var link=link("ABIERTO");
+        when(subscriptions.findByTallerIdForUpdate(7L)).thenReturn(Optional.of(link.getSuscripcion()));
+        when(links.findFirstBySuscripcionIdAndCurrentTrueOrderByIdDesc(5L)).thenReturn(Optional.of(link));
+        when(effects.blocksRenewal(11L)).thenReturn(true);
+        assertThatThrownBy(()->checkout.prepare(7L)).isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException.class);
+        verify(links,never()).save(any());verify(subscriptions,never()).save(any());
+    }
+    @Test void unrepresentedEvidencePreventsPreparingAnyNewProviderRequest() {
+        when(effects.blocksWorkshopRenewal(7L)).thenReturn(true);
+        assertThatThrownBy(()->checkout.prepare(7L)).isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException.class);
+        verifyNoInteractions(subscriptions,links);
+    }
+    @Test void restoredDeliveryIsFencedByTheExactOldLinkEvenIfAnotherLinkIsCurrent() {
+        when(effects.blocksRenewal(11L)).thenReturn(true);
+        assertThatThrownBy(()->checkout.requireCheckoutDelivery(7L,11L))
+                .isInstanceOf(com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException.class);
+        verifyNoInteractions(links,subscriptions);
+    }
+    @Test void preservingExistingProDoesNotTreatClosureAsANewGrant() {
+        var link=link("ABIERTO");link.getSuscripcion().setPlan(PlanType.PRO);link.getSuscripcion().setEstado(EstadoSuscripcion.VENCIDA);
+        when(links.findMercadoPagoByExternalId("pre-1")).thenReturn(Optional.of(link));
+        when(effects.blocksRenewal(11L)).thenReturn(true);
+        observations.applyPreapproval("pre-1",preapproval("authorized"));
+        assertThat(link.getSuscripcion().getPlan()).isEqualTo(PlanType.PRO);
+        assertThat(link.getSuscripcion().getEstado()).isEqualTo(EstadoSuscripcion.VENCIDA);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"canceled","cancelled"})
+    void verifiedRemoteCancellationOnRestoredCurrentLinkKeepsTheExistingCancellationBehavior(String status) {
+        var link=link("ABIERTO");link.getSuscripcion().setPlan(PlanType.PRO);link.getSuscripcion().setEstado(EstadoSuscripcion.ACTIVA);
+        when(links.findMercadoPagoByExternalId("pre-1")).thenReturn(Optional.of(link));
+        when(effects.blocksRenewal(11L)).thenReturn(true);
+        observations.applyPreapproval("pre-1",preapproval(status));
+        assertThat(link.getSuscripcion().getPlan()).isEqualTo(PlanType.FREE);
+        assertThat(link.getSuscripcion().getEstado()).isEqualTo(EstadoSuscripcion.ACTIVA);
+        verify(validator).validatePreapproval(any(),eq("pre-1"),eq("ofx_synthetic"));
     }
 
     private static SubscriptionProviderLink link(String state) {

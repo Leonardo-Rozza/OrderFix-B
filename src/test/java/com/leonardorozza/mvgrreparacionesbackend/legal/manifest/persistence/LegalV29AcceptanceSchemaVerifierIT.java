@@ -206,7 +206,7 @@ class LegalV29AcceptanceSchemaVerifierIT {
                     FROM (SELECT max(installed_rank) AS rank FROM flyway_schema_history) previous
                     CROSS JOIN generate_series(1, 16) AS candidate(ordinal)
                     """);
-            assertThat(verifier.snapshot().flyway()).hasSize(8);
+            assertThat(verifier.snapshot().flyway()).hasSize(9);
             assertThatThrownBy(verifier::verify).isInstanceOf(LegalEditorialOperationalException.class);
             status.setRollbackOnly();
         });

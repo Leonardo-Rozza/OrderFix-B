@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.cuenta.closure;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -75,6 +76,8 @@ public class WorkshopClosureStore {
             if(changed!=1) throw rejected(Rejected.Code.CONFLICT);
             return Objects.requireNonNull(read(reference));
         } catch(Rejected rejected) { throw rejected; }
+        // The workshop gate is local to one tenant; closure references are unique across all tenants.
+        catch(DuplicateKeyException collision) { throw rejected(Rejected.Code.CONFLICT); }
         catch(RuntimeException failure) { throw rejected(Rejected.Code.UNAVAILABLE); }
     }
 

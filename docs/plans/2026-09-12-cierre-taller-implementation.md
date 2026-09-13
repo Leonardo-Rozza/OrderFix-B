@@ -1,7 +1,7 @@
 # Cierre coordinado del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
-Estado: A y B cerrados. C–E pendientes. No hay cierre de taller disponible.
+Estado: A, B y C cerrados. D–E pendientes. No hay cierre de taller disponible en la UI.
 
 ## Objetivo y decisiones ya acordadas
 
@@ -321,3 +321,125 @@ proveedores. Diff --check y revisión final aprobados. Un commit atómico por
 repositorio, sin push ni merge. Próximo: C, confirmación específica, propósitos de
 reautenticación y coordinación mediante outbox. B conserva su frontera interna,
 sin API/UI ni activación del cierre o de eliminación real.
+
+
+## Diseño C — confirmación y efectos durables
+
+Continuación autorizada tras B. C conserva el límite interno: sin controller, ruta,
+scheduler ni adaptador real de correo/MP. Se elige una tabla de confirmaciones propia
+para CERRAR/RESTAURAR, preservando EXPORTAR/DESCARGAR y V31. Cada prueba dura como
+máximo cinco minutos y queda ligada al titular, sesión, época, generación, propósito,
+operación UUID y referencia. Sólo se guarda su SHA-256. La frase es fija y exacta:
+`CERRAR MI TALLER` o `RESTAURAR MI TALLER`; no depende del nombre mutable del taller.
+
+El coordinador abre REQUIRES_NEW/READ_COMMITTED, obtiene primero el gate exclusivo,
+revalida al titular y busca una constancia de la operación. Una repetición compatible
+requiere un JWT vigente —debe volver a iniciar sesión tras la revocación— y devuelve
+REUSED sin consumir otra prueba, DML, nuevos plazos ni efectos. La constancia describe
+el estado al confirmar, no promete que siga siendo el estado actual. Una colisión
+de actor/taller/payload falla cerrada. No se acepta un JWT revocado para facilitar
+replay ni se emite una sesión nueva desde el coordinador.
+
+En una operación nueva, consumo, transición B, constancia inmutable e intenciones
+se confirman juntos. El control final del vencimiento original incluye prueba, JWT
+y gracia; no revalida la época que acaba de revocar la propia transición. Todo
+fallo revierte prueba, épocas, historial, archivos y outbox. V34 agrega los objetos
+y sus guardas sin editar V27–V33; los verificadores mantienen la acreditación
+histórica y comprueban un delta exacto.
+
+La outbox captura vínculos actuales e históricos hasta 1.000 y conserva por vínculo
+una marca de cancelación aun después de restaurar el acceso o confirmar el efecto.
+Los ACK tardíos se registran, pero el vínculo marcado no concede beneficios ni se
+reutiliza para un checkout. Restaurar no retira la intención de cancelar renovaciones
+anteriores. FREE o ausencia de ID no acreditan cancelación remota.
+
+Un worker interno invocable usa puertos tipados y pruebas sintéticas: claim acotado,
+I/O fuera de transacción y ACK condicionado por lease e identidad del objetivo.
+No reutiliza el retorno void de SMTP como prueba de envío ni la cancelación global
+que podría afectar otra suscripción vigente. La ambigüedad conserva un estado
+visible pendiente/incierto, sin declarar éxito ni reenviar correos a ciegas.
+
+La restauración conserva el plan previamente registrado y los datos económicos.
+No retira beneficios ya existentes: bloquea nuevas activaciones y reutilización
+del vínculo marcado. La propuesta de forzar FREE fue rechazada por revisión
+automática por exceder la autorización económica; se descartó y no se implementó.
+Se mantiene así la separación acordada entre capacidades previas y contratación.
+Una revisión de renovación incierta bloquea nuevas activaciones hasta resolverla;
+no se presenta la ausencia de evidencia como cancelación confirmada.
+
+La veda sobre activaciones no suprime la semántica anterior de MP: una observación
+remota validada de cancelación, para el vínculo actual de un taller abierto, sigue
+el tratamiento ya existente del plan. Es un efecto acreditado del proveedor,
+separado de restaurar el acceso; la restauración por sí misma conserva el plan.
+
+### Acreditación y pruebas C
+
+Baseline C: backend `1fa29e0`, frontend `fa9aa65`. V34 agrega tres tablas y cinco
+funciones/triggers, con identidad, pertenencia, índices parciales, propietarios,
+ACL y search_path acreditados. No se flexibilizan las huellas históricas ni se
+otorgan permisos sobre los datos de cierre a los roles legales o de fotos.
+La copia final conserva V27–V33 byte por byte.
+
+V34 SHA-256: `738e36c5755fd17d64f908320f764add8ecea2aaf7690c6a0690813e0c0255cb`.
+Checksum Flyway: `-1749634207`. Captura limpia PostgreSQL16 registrada dentro de
+`/private/tmp/ordenfix-closure-c-behavior-final.log`; las capturas anteriores fueron
+diagnósticos intermedios, no acreditan la versión final.
+
+Primer pase de comandos: 21 unitarias y 31 IT aprobadas, con JWT/BCrypt reales de
+prueba, PostgreSQL16 y transacciones Spring. Log:
+`/private/tmp/ordenfix-closure-c-command-first.log`, BUILD SUCCESS en 56,328 s.
+
+El primer pase ampliado ejecutó 78 pruebas Surefire (incluido el diagnóstico de
+esquema) y 91 IT. Terminó BUILD FAILURE con 13 errores exclusivos del fixture nuevo
+de outbox: 12 IDs remotos repetidos entre talleres sintéticos y un restub de Mockito
+que ejecutaba su respuesta anterior con null. Se aislaron los IDs por taller y se
+corrigió el restub, sin alterar constraints. Las otras 78 IT quedaron aprobadas.
+Log: `/private/tmp/ordenfix-closure-c-behavior-final.log`.
+
+La revisión antes del cierre agregó dos regresiones: no iniciar cancelación si la
+inspección agotó la lease y preservar el tratamiento anterior de canceled/cancelled
+remoto validado en un taller abierto. El ajuste no modifica el plan al restaurar.
+Los nuevos casos se repiten junto con las clases MP afectadas.
+
+El gate de consumidores también detectó un matcher de capacidad aún escrito para
+siete placeholders; ahora exige exactamente ocho y LIMIT9. No se amplió el
+clasificador ni se omitieron lecturas. Se repite esa clase completa tras corregir
+el fixture. La evidencia final se registra a continuación.
+
+### Cierre C — 2026-09-12, 21:44:11 -03
+
+El gate de esquema ejecutó 225 IT y terminó con el único fallo de fixture descrito
+arriba; los consumidores, los 55 casos históricos V33 y los 37 nuevos V34 pasaron.
+Log: `/private/tmp/ordenfix-closure-c-schema-gate.log`.
+
+La repetición final de las clases corregidas y regresiones MP terminó BUILD SUCCESS:
+58 unitarias/servicio y 25 IT, sin fallos, errores u omisiones, en 1:23 min. Incluye
+21 casos de efectos, tres integraciones MP y el probe de capacidad corregido. El
+empaquetado sin propiedades secretas también pasó. Log:
+`/private/tmp/ordenfix-closure-c-corrections-final.log`.
+
+Consolidación acotada a las 19 clases de este gate: **79 unitarias/servicio y 318 IT
+aprobadas (397 pruebas)**, sin fallos, errores u omisiones. No se cuentan dos veces
+las repeticiones ni se presentan las corridas intermedias fallidas como exitosas.
+El diagnóstico de catálogo se cuenta aparte. Manifiesto local:
+`/private/tmp/ordenfix-closure-c-consolidated-results.json`. La huella final de las
+588 fuentes/migraciones permanece estable.
+
+Se acreditaron identidad y propósito, contraseña/prueba, replay sin DML, colisión
+concurrente entre talleres, plazo exacto y revocación; rollback de prueba, épocas,
+historial, constancia y efectos; captura de 1.000 vínculos/rechazo de 1.001; puertos
+fuera de transacción, dos workers, lease vencida durante I/O/espera SQL, ACK obsoleto,
+correo ambiguo, identidad remota ajena y respuestas tardías tras restaurar. Las
+operaciones usan transacciones y guards reales en PostgreSQL16 descartable.
+
+Se ejecutaron focales C y de sus consumidores; no se repitió el clean verify de B.
+El integral final permanece en E: C agrega una frontera interna y adapta la
+coordinación MP/esquema, sin cambiar JWT compartido, API de cuenta ni frontend.
+Las pruebas afectadas por esa adaptación quedaron incluidas explícitamente.
+
+V27–V33 congeladas e idénticas a HEAD; V34 queda congelada al cerrar este corte.
+Frontend sólo documenta el resultado, por lo que no requiere build ni navegador.
+Se preservan las 77 rutas ajenas no versionadas. Sin cambios en secretos, datos
+reales, identidad legal, providers reales, push o merge. Un commit atómico por
+repositorio afectado. Próximo: **D, eliminación por categorías y recuperación
+operativa**; después E, API/pantalla y gate integral.

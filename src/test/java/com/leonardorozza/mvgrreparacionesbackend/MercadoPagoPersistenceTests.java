@@ -30,6 +30,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MercadoPagoPersistenceTests extends IntegrationTestBase {
 
+    // Legacy H2 JPA fixture does not install the PostgreSQL outbox; the real integration is covered in PG IT.
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureEffects closureEffects;
+
     @Autowired
     private PaymentEventInboxService inboxService;
 

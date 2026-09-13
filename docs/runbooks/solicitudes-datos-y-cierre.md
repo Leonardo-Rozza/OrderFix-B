@@ -105,10 +105,11 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   [de cierre coordinado](../plans/2026-09-12-cierre-taller-implementation.md) separa
   estado/restricción, solicitud/restauración, eliminación y entrega mediante UI.
   B incorpora estado e historial durables, revocación y coordinación transaccional
-  de escrituras, con acceso restringido del titular. El store es interno: C todavía
-  debe validar confirmación/propósitos y coordinar los efectos remotos mediante
-  outbox; D implementará eliminación por categorías y E API/pantalla. No hay un
-  comando autorizado de soporte para invocar ese store ni SQL operativo de cierre.
+  de escrituras, con acceso restringido del titular. C agrega el comando interno
+  con contraseña/prueba de cinco minutos, propósito y confirmación escrita, además
+  de constancia idempotente e intenciones durables. No habilita un procedimiento
+  SQL de soporte ni un endpoint: D implementará eliminación por categorías y
+  E API/pantalla. La activación real requiere adaptadores y ensayo de proveedores.
   El cierre del taller sigue sin estar disponible. Los plazos técnicos de su política
   no sustituyen decisiones reales de retención ni habilitan publicación del borrador.
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
@@ -156,3 +157,31 @@ las decisiones de retención/entrega y la atención real ya prevista.
 No se reemplazan con el Excel operativo ni con SQL sobre `talleres.activo`.
 Identidad/alta/contactos definitivos mantienen su etapa acordada; este resultado
 no autoriza anunciar un cierre integral disponible ni omitir el gate de salida.
+
+## Coordinación interna de cierre C
+
+El reintento usa la misma operación y una sesión vigente; el JWT revocado por la
+transición no sirve para recuperar la constancia. REUSED conserva las fechas y el
+estado al confirmar, aunque después se haya restaurado el acceso. No amplía gracia
+ni repite avisos o revocaciones. El contrato visual de E deberá distinguir esa
+constancia histórica del estado actual. Nunca pedir contraseña o proof por correo.
+
+Cada vínculo anterior de MP conserva su intención de cancelación tras restaurar.
+Se conservan el plan y los datos económicos registrados, pero eventos de ese
+vínculo no pueden conceder nuevos beneficios ni reutilizar su checkout. Una
+contradicción o evidencia insuficiente exige revisión; FREE/ID ausente no demuestra
+que el proveedor dejó de renovar. La app no procesa pagos taller–cliente.
+
+Estados de efectos: PENDIENTE espera un intento o una identidad remota; EN_CURSO
+tiene un permiso temporal; CONFIRMADO registra la confirmación tipada del puerto;
+INCIERTO exige conciliación. Para avisos, CONFIRMADO significa aceptación del
+servicio de envío, no entrega ni lectura. Un ACK perdido o ambiguo no permite
+reenviar correo automáticamente. La cancelación inspecciona primero el objetivo
+exacto y nunca aplica una respuesta histórica a otro vínculo vigente.
+
+El worker sólo es invocable internamente. No hay scheduler ni adaptadores reales
+de C; ausencia de puertos no consume trabajo ni informa éxito. Los futuros
+adaptadores requieren timeout e idempotencia por clave estable: vencer el permiso
+local no cancela una llamada externa que ya comenzó. Los estados inciertos y los
+objetivos sin ID requieren el circuito de recuperación operativa pendiente.
+La outbox no acredita eliminación de datos ni atención de una solicitud real.

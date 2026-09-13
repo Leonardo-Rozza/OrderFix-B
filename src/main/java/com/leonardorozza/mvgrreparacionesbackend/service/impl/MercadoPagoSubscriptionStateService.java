@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.PagoException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureEffects;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.SubscriptionPayment;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.SubscriptionProviderLink;
@@ -36,6 +37,7 @@ public class MercadoPagoSubscriptionStateService {
     private final SuscripcionRepository suscripcionRepository;
     private final MercadoPagoResponseValidator responseValidator;
     private final Clock clock;
+    private final WorkshopClosureEffects closureEffects;
 
     @Transactional
     public void applyPreapproval(String dataId, MercadoPagoPreapprovalResponse response) {
@@ -79,7 +81,7 @@ public class MercadoPagoSubscriptionStateService {
         }
 
         // Provider observations remain durable; closure is never an entitlement activation.
-        if (!isOperational(suscripcion)) {
+        if (!isOperational(suscripcion) || (closureEffects.blocksRenewal(link.getId()) && !isCanceledStatus(status))) {
             suscripcionRepository.save(suscripcion);
             return;
         }
@@ -171,7 +173,7 @@ public class MercadoPagoSubscriptionStateService {
             if (isCurrentOrNewerPayment(suscripcion, dataId, billingAt)) {
                 suscripcion.setMpLastPaymentAt(billingAt);
                 suscripcion.setMpLastAuthorizedPaymentId(dataId);
-                if (isOperational(suscripcion)) {
+                if (isOperational(suscripcion) && !closureEffects.blocksRenewal(link.getId())) {
                     applyPaymentEntitlement(
                             suscripcion, normalize(link.getStatus()), paymentStatus, statusDetail);
                 }

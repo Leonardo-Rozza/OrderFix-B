@@ -1,6 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
-import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopClosureBlockedException;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.*;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.pago.mercadopago.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +42,10 @@ class MercadoPagoClosureIT {
     @Autowired PlatformTransactionManager manager;
     @Autowired MercadoPagoCheckoutStateService checkout;
     @Autowired MercadoPagoSubscriptionStateService observations;
+    @Autowired WorkshopClosureGate gate;
+    @Autowired WorkshopClosureStore store;
+    @Autowired WorkshopClosureEffects effects;
+    @Autowired Clock clock;
     long workshop;
     @DynamicPropertySource static void database(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url",PG::getJdbcUrl);registry.add("spring.datasource.username",PG::getUsername);
@@ -65,7 +69,7 @@ class MercadoPagoClosureIT {
         String providerId="pre-"+UUID.randomUUID();
         var response=preapproval(providerId,preparation.externalReference(),"pending");
         checkout.complete(preparation.linkId(),response);
-        assertThatThrownBy(()->checkout.requireCheckoutDelivery(workshop)).isInstanceOf(WorkshopClosureBlockedException.class);
+        assertThatThrownBy(()->checkout.requireCheckoutDelivery(workshop,preparation.linkId())).isInstanceOf(WorkshopClosureBlockedException.class);
         assertThat(jdbc.queryForObject("SELECT external_subscription_id FROM subscription_provider_links WHERE id=?",String.class,preparation.linkId())).isEqualTo(providerId);
         assertThat(jdbc.queryForObject("SELECT mp_preapproval_id FROM suscripciones WHERE taller_id=?",String.class,workshop)).isEqualTo(providerId);
 
@@ -90,6 +94,51 @@ class MercadoPagoClosureIT {
         assertThat(jdbc.queryForObject("SELECT cierre_estado FROM talleres WHERE id=?",String.class,workshop)).isEqualTo("RESTRINGIDO");
         assertThatThrownBy(()->checkout.prepare(workshop)).isInstanceOf(WorkshopClosureBlockedException.class);
     }
+    @Test void verifiedRemoteCancellationAfterRestorePreservesExistingCancellationSemantics() {
+        var preparation=checkout.prepare(workshop);String providerId="pre-"+UUID.randomUUID();
+        checkout.complete(preparation.linkId(),preapproval(providerId,preparation.externalReference(),"pending"));
+        observations.applyPreapproval(providerId,preapproval(providerId,preparation.externalReference(),"authorized"));
+        String mark=UUID.randomUUID().toString();
+        long owner=jdbc.queryForObject("INSERT INTO users(username,email,password,role,taller_id,active,email_verificado,token_version) VALUES(?,?,?,'ADMIN',?,true,true,0) RETURNING id",
+                Long.class,mark,mark+"@synthetic.invalid","fixture-password-not-for-login",workshop);
+        UUID reference=UUID.randomUUID();closureTransition(owner,reference,false);closureTransition(owner,reference,true);
+        // Restoration itself preserves the existing plan; the later verified provider event applies its ordinary meaning.
+        assertThat(jdbc.queryForObject("SELECT plan FROM suscripciones WHERE taller_id=?",String.class,workshop)).isEqualTo("PRO");
+        observations.applyPreapproval(providerId,preapproval(providerId,preparation.externalReference(),"canceled"));
+        assertThat(jdbc.queryForMap("SELECT plan,estado,mp_status FROM suscripciones WHERE taller_id=?",workshop))
+                .containsEntry("plan","FREE").containsEntry("estado","ACTIVA").containsEntry("mp_status","canceled");
+        assertThat(jdbc.queryForObject("SELECT cierre_estado FROM talleres WHERE id=?",String.class,workshop)).isEqualTo("ABIERTO");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM cuenta_cierre_efectos WHERE link_id=?",Long.class,preparation.linkId())).isEqualTo(1);
+    }
+    /** SQL proof fixture exercises V34/store guards; JWT/password verification is covered by command IT. */
+    private void closureTransition(long owner,UUID reference,boolean restore) {
+        new TransactionTemplate(manager).executeWithoutResult(status->{
+            gate.lockExclusive(workshop);Instant now=clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            String hash=UUID.randomUUID().toString().replace("-","").repeat(2),purpose=restore?"RESTAURAR":"CERRAR";
+            UUID operation=restore?UUID.randomUUID():reference;
+            long epoch=jdbc.queryForObject("SELECT token_version FROM users WHERE id=?",Long.class,owner);
+            long generation=jdbc.queryForObject("SELECT cierre_version FROM talleres WHERE id=?",Long.class,workshop);
+            jdbc.update("""
+                    INSERT INTO cuenta_cierre_confirmaciones(token_hash,user_id,taller_id,token_version,session_hash,proposito,
+                       operacion_id,cierre_referencia,cierre_version,creada_en,expira_en)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    """,hash,owner,workshop,epoch,hash,purpose,operation,reference,generation,
+                    now.atOffset(ZoneOffset.UTC),now.plusSeconds(120).atOffset(ZoneOffset.UTC));
+            jdbc.update("UPDATE cuenta_cierre_confirmaciones SET usada_en=? WHERE token_hash=?",now.atOffset(ZoneOffset.UTC),hash);
+            var receipt=restore?store.restore(workshop,owner,reference):store.restrict(workshop,owner,reference);
+            Instant completed=clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            jdbc.update("""
+                    INSERT INTO cuenta_cierre_operaciones(operacion_id,taller_id,user_id,proposito,cierre_referencia,cierre_version,
+                       request_digest,proof_hash,estado_resultante,politica,confirmado_en,reversible_hasta,eliminacion_prevista_en,registrada_en)
+                    VALUES(?,?,?,?,?,?,?,?,?,'ordenfix-cierre/1',?,?,?,?)
+                    """,operation,workshop,owner,purpose,reference,generation+1,hash,hash,restore?"ABIERTO":"RESTRINGIDO",
+                    receipt.confirmedAt().atOffset(ZoneOffset.UTC),receipt.reversibleUntil().atOffset(ZoneOffset.UTC),
+                    receipt.deletionExpectedBy().atOffset(ZoneOffset.UTC),completed.atOffset(ZoneOffset.UTC));
+            if(restore)effects.enqueueRestore(operation,reference,workshop,owner,completed);
+            else effects.enqueueClose(operation,reference,workshop,owner,completed);
+        });
+    }
+
     private static MercadoPagoPreapprovalResponse preapproval(String id,String reference,String status) {
         return new MercadoPagoPreapprovalResponse(id,status,"https://www.mercadopago.com.ar/checkout",reference,"payer-synthetic",
                 1L,2L,OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
