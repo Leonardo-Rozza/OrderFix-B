@@ -62,7 +62,7 @@ final class LegalRegistrationSchemaVerifier implements LegalDatabasePreflight {
         acceptance.verify();
         verifyTopology();
         CatalogFingerprint expected = switch (acceptance.workshopClosureSchemaVersion()) {
-            case 34 -> EXPECTED_V34;
+            case 34, 35 -> EXPECTED_V34;
             case 33 -> EXPECTED_V33;
             default -> EXPECTED;
         };

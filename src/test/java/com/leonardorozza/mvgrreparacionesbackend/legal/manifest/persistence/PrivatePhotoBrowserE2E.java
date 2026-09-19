@@ -203,6 +203,24 @@ class PrivatePhotoBrowserE2E {
             assertThat(confirmed).isBetween(started,finished); assertThat(associated).isBetween(confirmed,finished);
             assertThat(time(photo,"expira_en")).isAfter(confirmed).isBeforeOrEqualTo(confirmed.plusSeconds(900));
             assertThat(time(photo,"retener_hasta")).isAfter(associated);
+            var deletion=owner.queryForMap("SELECT * FROM reparacion_foto_eliminaciones WHERE foto_id=?",photo);
+            assertThat(deletion).containsEntry("foto_id",photo).containsEntry("user_id",actor)
+                    .containsEntry("taller_id",account.tallerId()).containsEntry("object_key","ordenfix-private/"+photo)
+                    .containsEntry("resultado","IDENTIDAD_ELIMINADA");
+            assertThat((String)deletion.get("asset_id")).isNotBlank();
+            assertThat((String)deletion.get("asset_version")).isNotBlank();
+            assertThat(owner.queryForObject("""
+                    SELECT d.creada_en>=p.asociada_en AND d.creada_en>=? AND d.observada_en<=?
+                        AND d.identificada_en BETWEEN d.creada_en AND d.observada_en
+                        AND d.confirmada_en=d.observada_en
+                      FROM reparacion_foto_eliminaciones d JOIN reparacion_fotos_privadas p ON p.id=d.foto_id
+                     WHERE d.foto_id=?
+                    """,Boolean.class,java.sql.Timestamp.from(started),java.sql.Timestamp.from(finished),photo)).isTrue();
+            if(liveStorage==null) {
+                var persisted=LocalStorageConfiguration.instance.persisted.get("ordenfix-private/"+photo);
+                assertThat(deletion.get("asset_id")).isEqualTo(persisted.assetId());
+                assertThat(deletion.get("asset_version")).isEqualTo(persisted.version());
+            }
             var evidence=owner.queryForList("""
                     SELECT a.id,a.contexto,a.tipo_acto,a.user_id,a.taller_id,a.afirmacion_sha256,r.afirmacion_sha256 AS source_digest,
                            a.afirmacion,r.afirmacion AS source_statement,f.alcance
@@ -225,6 +243,8 @@ class PrivatePhotoBrowserE2E {
         assertThat(scenarios).containsExactlyInAnyOrder("desktop:nuevo","desktop:existente","mobile-320:nuevo","mobile-320:existente");
         assertThat(owner.queryForList("SELECT id FROM reparacion_fotos_privadas",UUID.class)).containsExactlyInAnyOrderElementsOf(photoIds);
         assertThat(count("reparacion_foto_atestaciones")).isEqualTo(4);
+        assertThat(count("reparacion_foto_eliminaciones")).isEqualTo(4);
+        assertThat(owner.queryForList("SELECT foto_id FROM reparacion_foto_eliminaciones",UUID.class)).containsExactlyInAnyOrderElementsOf(photoIds);
         // The real repair writer advances the workshop's annual order sequence and audit time.
         int year=started.atZone(ZoneId.systemDefault()).getYear();
         assertThat(finished.atZone(ZoneId.systemDefault()).getYear()).as("This finite run does not exercise a year rollover").isEqualTo(year);

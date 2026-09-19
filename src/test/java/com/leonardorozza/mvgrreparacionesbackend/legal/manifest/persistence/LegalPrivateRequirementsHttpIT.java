@@ -304,7 +304,7 @@ class LegalPrivateRequirementsHttpIT {
     void methodsOtherThanExactGetNeverInvokeThePrivateGraph(String method) throws Exception {
         Actor actor = seedActor(owner, "USER");
         openHttp(properties(true, false, false));
-        String token = authorize(actor);
+        String token = authorize(actor, true);
         mvc.perform(request(HttpMethod.valueOf(method), ROOT).header("Authorization", "Bearer " + token))
                 .andExpect(status().is(method.equals("HEAD") ? 405 : 500));
         // Unmapped methods retain the existing global MVC error envelope; HEAD is guarded by this controller.
@@ -315,7 +315,7 @@ class LegalPrivateRequirementsHttpIT {
     void neighboringPathsKeepExistingAuthenticationPolicyAndDoNotBorrowThePrivatePool(String path) throws Exception {
         openHttp(properties(true, false, false));
         mvc.perform(get(path)).andExpect(status().isForbidden());
-        mvc.perform(get(path).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
+        mvc.perform(get(path).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"), true)))
                 .andExpect(status().isInternalServerError());
         // The pre-existing global advice maps a missing handler to 500; it must never reach legal SQL.
         assertNoLegalSql();
@@ -324,7 +324,7 @@ class LegalPrivateRequirementsHttpIT {
     @Test void anEncodedAliasNeverReachesTheLegalReaderEvenWhenMvcDecodesThePath() throws Exception {
         openHttp(properties(true, false, false));
         mvc.perform(get(URI.create("/api/requisitos%2dlegales"))
-                        .header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
+                        .header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"), true)))
                 .andExpect(status().isNotFound());
         assertNoLegalSql();
     }
@@ -465,7 +465,12 @@ class LegalPrivateRequirementsHttpIT {
     }
 
     private String authorize(Actor actor) {
-        AuthenticatedUserPrincipal principal = principal(actor);
+        return authorize(actor, false);
+    }
+
+    /** Routing probes use verified principals; canonical legal flows keep pending-email coverage. */
+    private String authorize(Actor actor, boolean emailVerified) {
+        AuthenticatedUserPrincipal principal = principal(actor, emailVerified);
         String token = "private-http-token-" + actor.userId();
         DecodedJWT decoded = mock(DecodedJWT.class);
         when(decoded.getSubject()).thenReturn(principal.getUsername());
@@ -476,11 +481,16 @@ class LegalPrivateRequirementsHttpIT {
     }
 
     private static AuthenticatedUserPrincipal principal(Actor actor) {
+        return principal(actor, false);
+    }
+
+    private static AuthenticatedUserPrincipal principal(Actor actor, boolean emailVerified) {
         var workshop = new Taller(); workshop.setId(actor.workshopId());
         var user = User.builder().password("server-principal-test-only").build();
         user.setId(actor.userId()); user.setTaller(workshop);
         user.setEmail("actor-" + actor.userId() + "@ordenfix.test");
         user.setActive(true); user.setRole(UserRole.valueOf(actor.role())); user.setTokenVersion(0L);
+        user.setEmailVerificado(emailVerified);
         return new AuthenticatedUserPrincipal(user);
     }
 

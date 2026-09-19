@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 
 import com.leonardorozza.mvgrreparacionesbackend.config.security.AuthenticatedUserPrincipal;
+import com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.*;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportArtifactCodec;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPackageException;
 import com.leonardorozza.mvgrreparacionesbackend.cuenta.export.ExportPhotoReader;
@@ -28,6 +29,11 @@ import java.util.zip.ZipInputStream;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.*;
+import java.time.*;
+import java.time.temporal.ChronoUnit;
+import java.sql.Timestamp;
+import java.util.concurrent.*;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import static com.leonardorozza.mvgrreparacionesbackend.photos.PrivatePhotoDtos.*;
@@ -63,8 +69,9 @@ class LegalPrivatePhotoOperationsIT {
         owner.execute("GRANT UPDATE(estado,asset_id,asset_version,lease_id,lease_hasta,asociada_en) ON public.reparacion_fotos_privadas TO "+ROLE);
         owner.execute("GRANT SELECT(id,taller_id),UPDATE(id) ON public.reparaciones TO "+ROLE);
         owner.execute("GRANT EXECUTE ON FUNCTION public.foto_privada_insert_guard_v30(),public.foto_atestacion_insert_guard_v30(),public.foto_privada_completa_v30(),public.foto_privada_update_guard_v30() TO "+ROLE);
-        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("33").load().migrate();
+        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("35").load().migrate();
         owner.execute("GRANT SELECT(cierre_estado) ON public.talleres TO "+ROLE);
+        grantDeletionEvidence(owner,ROLE);
         JdbcTemplate restricted=new JdbcTemplate(new DriverManagerDataSource(credentials.jdbcUrl(),credentials.username(),credentials.password()));
         new LegalV29AcceptanceSchemaVerifier(restricted,"public").verify();
         new LegalAcceptancePrivilegeVerifier(restricted,credentials.username(),"public",true).verify();
@@ -75,6 +82,10 @@ class LegalPrivatePhotoOperationsIT {
         if(host.contains(":") && !host.startsWith("["))host="["+host+"]";
         String privateUrl="jdbc:postgresql://"+host+":"+postgres.getMappedPort(5432)+"/"+postgres.getDatabaseName();
         return new LegalRestrictedAcceptanceRoleFixture.Credentials(privateUrl,credentials.username(),credentials.password(),credentials.driverClassName());
+    }
+    static void grantDeletionEvidence(JdbcTemplate owner,String role) {
+        owner.execute("GRANT SELECT,INSERT ON public.reparacion_foto_eliminaciones TO "+role);
+        owner.execute("GRANT UPDATE(asset_id,asset_version,identificada_en,resultado,observada_en,confirmada_en) ON public.reparacion_foto_eliminaciones TO "+role);
     }
     static Map<String,String> properties(LegalRestrictedAcceptanceRoleFixture.Credentials credentials) {
         return Map.of("photos.private.enabled","true","photos.private.jdbc-url",credentials.jdbcUrl(),
@@ -89,6 +100,7 @@ class LegalPrivatePhotoOperationsIT {
     @BeforeEach void setup() throws Exception {
         owner.execute("TRUNCATE public.talleres CASCADE");
         actor=actor("ADMIN");other=actor("ADMIN");
+        owner.update("UPDATE users SET email_verificado=true WHERE id=?",actor.userId());
         long employeeId=owner.queryForObject("INSERT INTO users(username,password,email,role,taller_id,active,token_version) VALUES('Photo employee','fixture','employee-photo@fixture.test','USER',?,true,0) RETURNING id",Long.class,actor.tallerId());
         employee=new LegalActorSnapshot(employeeId,actor.tallerId(),UserRole.USER,0,true,true);
         repair=repair(actor);storage=new MemoryStorage();MockEnvironment environment=new MockEnvironment();
@@ -170,13 +182,34 @@ class LegalPrivatePhotoOperationsIT {
         assertThat(count("reparacion_foto_atestaciones")).isEqualTo(1);
     }
 
-    /** Service-state fixture only; coordinated closure transitions are covered by the closure store IT. */
-    private void restrictWorkshop() {
-        fixture(()->owner.update("""
-                UPDATE talleres SET cierre_estado='RESTRINGIDO',cierre_version=1,cierre_referencia=?,
-                    cierre_confirmado_en=statement_timestamp(),cierre_reversible_hasta=statement_timestamp()+INTERVAL '7 days',
-                    cierre_eliminacion_prevista_en=statement_timestamp()+INTERVAL '37 days' WHERE id=?
-                """,UUID.randomUUID(),actor.tallerId()));
+    /** Consumer fixture: real V34 confirmation, store, operation and effects; no disabled closure guard. */
+    private UUID restrictWorkshop() {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(new DataSourceTransactionManager(owner.getDataSource()));
+        tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        return tx.execute(status->{
+            new WorkshopClosureGate(owner).lockExclusive(actor.tallerId());
+            Clock clock=Clock.fixed(Instant.now().truncatedTo(ChronoUnit.MICROS),ZoneOffset.UTC);
+            UUID reference=UUID.randomUUID();String proof=UUID.randomUUID().toString().replace("-","")+UUID.randomUUID().toString().replace("-","");
+            long epoch=owner.queryForObject("SELECT token_version FROM users WHERE id=?",Long.class,actor.userId());
+            long generation=owner.queryForObject("SELECT cierre_version FROM talleres WHERE id=?",Long.class,actor.tallerId());
+            owner.update("""
+                    INSERT INTO cuenta_cierre_confirmaciones(token_hash,user_id,taller_id,token_version,session_hash,proposito,
+                        operacion_id,cierre_referencia,cierre_version,creada_en,expira_en)
+                    VALUES(?,?,?,?,?,'CERRAR',?,?,?,?,?)
+                    """,proof,actor.userId(),actor.tallerId(),epoch,"a".repeat(64),reference,reference,generation,
+                    Timestamp.from(clock.instant()),Timestamp.from(clock.instant().plusSeconds(120)));
+            owner.update("UPDATE cuenta_cierre_confirmaciones SET usada_en=? WHERE token_hash=?",Timestamp.from(clock.instant()),proof);
+            var receipt=new WorkshopClosureStore(owner,clock).restrict(actor.tallerId(),actor.userId(),reference);
+            owner.update("""
+                    INSERT INTO cuenta_cierre_operaciones(operacion_id,taller_id,user_id,proposito,cierre_referencia,cierre_version,
+                        request_digest,proof_hash,estado_resultante,politica,confirmado_en,reversible_hasta,eliminacion_prevista_en,registrada_en)
+                    VALUES(?,?,?,'CERRAR',?,?,?,?,'RESTRINGIDO','ordenfix-cierre/1',?,?,?,?)
+                    """,reference,actor.tallerId(),actor.userId(),reference,generation+1,"b".repeat(64),proof,
+                    Timestamp.from(receipt.confirmedAt()),Timestamp.from(receipt.reversibleUntil()),
+                    Timestamp.from(receipt.deletionExpectedBy()),Timestamp.from(clock.instant()));
+            new WorkshopClosureEffects(owner).enqueueClose(reference,reference,actor.tallerId(),actor.userId(),clock.instant());
+            return reference;
+        });
     }
     private static void fixture(Runnable action) {
         var tx=new org.springframework.transaction.support.TransactionTemplate(new DataSourceTransactionManager(owner.getDataSource()));
@@ -376,15 +409,178 @@ class LegalPrivatePhotoOperationsIT {
         assertThat(owner.queryForObject("SELECT count(*) FROM reparacion_fotos_privadas WHERE estado='LIMPIEZA_PENDIENTE'",Long.class)).isEqualTo(11);
     }
 
+    private Map<String,Object> deletion(UUID id) {
+        return owner.queryForMap("SELECT * FROM reparacion_foto_eliminaciones WHERE foto_id=?",id);
+    }
+    private void confirmed(UUID id) {
+        assertThat(deletion(id)).containsEntry("resultado","IDENTIDAD_ELIMINADA")
+                .containsEntry("asset_id","asset-"+id).containsEntry("asset_version","1")
+                .containsEntry("user_id",actor.userId()).containsEntry("taller_id",actor.tallerId());
+        assertThat(deletion(id).get("confirmada_en")).isNotNull();
+        assertThat(state(id)).isEqualTo("ELIMINADA");
+    }
+    @Test void durableTargetPrecedesProviderEffectAndSurvivesConfirmedPhotoTombstone() throws Exception {
+        var photo=associate();
+        storage.beforeDelete=()->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            assertThat(deletion(photo.id())).containsEntry("resultado","PENDIENTE")
+                    .containsEntry("asset_id","asset-"+photo.id()).containsEntry("asset_version","1");
+            assertThat(deletion(photo.id()).get("identificada_en")).isNotNull();
+        };
+        service.delete(principal(actor),repair,photo.id());confirmed(photo.id());
+        var original=deletion(photo.id());
+        service.delete(principal(actor),repair,photo.id());
+        assertThat(deletion(photo.id())).isEqualTo(original);assertThat(storage.deleteAttempts).hasSize(1);
+        assertThat(owner.queryForObject("SELECT asset_id IS NULL AND asset_version IS NULL FROM reparacion_fotos_privadas WHERE id=?",Boolean.class,photo.id())).isTrue();
+        owner.update("DELETE FROM reparaciones WHERE id=?",repair);
+        assertThat(deletion(photo.id())).isEqualTo(original);
+    }
+    @Test void lostDeleteAcknowledgementLeavesPendingAndRetriesTheSameDurableAssetIdentity() throws Exception {
+        var photo=associate();storage.failDeleteAfterEffect.set(true);
+        code(catchThrowable(()->service.delete(principal(actor),repair,photo.id())),"FOTOS_PRIVADAS_NO_DISPONIBLES");
+        assertThat(storage.assets).isEmpty();assertThat(state(photo.id())).isEqualTo("LIMPIEZA_PENDIENTE");
+        assertThat(deletion(photo.id())).containsEntry("resultado","PENDIENTE").containsEntry("confirmada_en",null);
+        assertThat(service.cleanup()).isEqualTo(1);confirmed(photo.id());
+        assertThat(storage.deleteIdentities).containsExactly("asset-"+photo.id(),"asset-"+photo.id());
+    }
+    @Test void failedEvidenceCompletionAfterRemoteEffectKeepsIdentityForLaterReconciliation() throws Exception {
+        var photo=associate();storage.afterDelete=()->owner.execute("REVOKE UPDATE(confirmada_en) ON reparacion_foto_eliminaciones FROM "+ROLE);
+        try {
+            code(catchThrowable(()->service.delete(principal(actor),repair,photo.id())),"FOTOS_PRIVADAS_NO_DISPONIBLES");
+            assertThat(storage.assets).isEmpty();assertThat(state(photo.id())).isEqualTo("LIMPIEZA_PENDIENTE");
+            assertThat(deletion(photo.id())).containsEntry("resultado","PENDIENTE").containsEntry("confirmada_en",null);
+        } finally {storage.afterDelete=()->{};grantDeletionEvidence(owner,ROLE);}
+        assertThat(service.cleanup()).isEqualTo(1);confirmed(photo.id());
+        assertThat(storage.deleteIdentities).containsExactly("asset-"+photo.id(),"asset-"+photo.id());
+    }
+    @Test void missingReceiptWritePrivilegeCannotProduceAProviderEffect() throws Exception {
+        var photo=associate();owner.execute("REVOKE INSERT ON reparacion_foto_eliminaciones FROM "+ROLE);
+        try {
+            code(catchThrowable(()->service.delete(principal(actor),repair,photo.id())),"FOTOS_PRIVADAS_NO_DISPONIBLES");
+            assertThat(storage.deleteAttempts).isEmpty();assertThat(count("reparacion_foto_eliminaciones")).isZero();
+            assertThat(storage.assets).hasSize(1);
+        } finally {grantDeletionEvidence(owner,ROLE);}
+    }
+    @Test void noRemoteIdentityIsAnAbsenceObservationAndNeverAnIdentityDeletionReceipt() throws Exception {
+        UUID id=create().id();service.delete(principal(actor),repair,id);
+        assertThat(state(id)).isEqualTo("ELIMINADA");
+        assertThat(deletion(id)).containsEntry("resultado","AUSENCIA_OBSERVADA_SIN_IDENTIDAD")
+                .containsEntry("asset_id",null).containsEntry("asset_version",null)
+                .containsEntry("identificada_en",null).containsEntry("confirmada_en",null);
+        assertThat(deletion(id).get("observada_en")).isNotNull();assertThat(storage.deleteAttempts).isEmpty();
+    }
+    @Test void unacknowledgedRemoteBytesMustMatchManifestBeforeIdentityCanBeAdoptedForDeletion() throws Exception {
+        UUID id=create().id();storage.failUpload.set(true);
+        code(catchThrowable(()->service.upload(principal(actor),repair,id,"image/png",image)),"FOTOS_PRIVADAS_NO_DISPONIBLES");
+        byte[] changed=image.clone();changed[changed.length-1]^=1;storage.assets.put("ordenfix-private/"+id,changed);
+        owner.update("UPDATE reparacion_fotos_privadas SET estado='EXPIRADA' WHERE id=?",id);
+        assertThat(service.cleanup()).isZero();assertThat(state(id)).isEqualTo("LIMPIEZA_PENDIENTE");
+        assertThat(storage.deleteAttempts).isEmpty();assertThat(deletion(id)).containsEntry("resultado","PENDIENTE").containsEntry("asset_id",null);
+        storage.assets.put("ordenfix-private/"+id,image.clone());
+        storage.beforeDelete=()->assertThat(deletion(id)).containsEntry("asset_id","asset-"+id);
+        assertThat(service.cleanup()).isEqualTo(1);confirmed(id);
+    }
+    @Test void concurrentApiAndWorkerShareOneImmutableReceiptAndExactRemoteIdentity() throws Exception {
+        var photo=associate();var entered=new CountDownLatch(2);var firstEntered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        storage.beforeDelete=()->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            entered.countDown();firstEntered.countDown();try {assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();}
+            catch(InterruptedException failure){Thread.currentThread().interrupt();throw new IllegalStateException(failure);}
+        };
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            var first=executor.submit(()->service.delete(principal(actor),repair,photo.id()));
+            assertThat(firstEntered.await(10,TimeUnit.SECONDS)).isTrue();
+            var second=executor.submit(service::cleanup);
+            try {assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();} finally {release.countDown();}
+            first.get(15,TimeUnit.SECONDS);assertThat(second.get(15,TimeUnit.SECONDS)).isEqualTo(1);
+        } finally {release.countDown();}
+        confirmed(photo.id());assertThat(count("reparacion_foto_eliminaciones")).isEqualTo(1);
+        assertThat(storage.deleteIdentities).containsExactly("asset-"+photo.id(),"asset-"+photo.id());
+    }
+    @Test void closureInventorySeparatesConfirmedDeletionFromAbsenceObservationAndForeignPhotos() throws Exception {
+        var photo=associate();service.delete(principal(actor),repair,photo.id());
+        UUID absent=create().id();service.delete(principal(actor),repair,absent);
+        long otherRepair=repair(other);create(other,otherRepair,UUID.randomUUID().toString(),body(other,otherRepair));
+        UUID closure=restrictWorkshop();
+        var inventory=new WorkshopClosureDeletionInventory(owner,new DataSourceTransactionManager(owner.getDataSource()),Clock.systemUTC());
+        var result=inventory.inspect(actor.tallerId(),closure);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETION_TARGETS)).isEqualTo(2);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETIONS_CONFIRMED)).isEqualTo(1);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_ABSENCE_ONLY)).isEqualTo(1);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETIONS_PENDING)).isZero();
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTOS_DELETED_WITHOUT_RECEIPT)).isZero();
+        assertThat(result.categories().get(WorkshopClosureDeletionInventory.Category.PRIVATE_PHOTOS).reviewReasons())
+                .contains(WorkshopClosureDeletionInventory.ReviewReason.PHOTO_DELETION_RECONCILIATION_REQUIRED);
+    }
+
+    @Test void aPendingPhotoCannotBecomeDeletedWithoutItsDurableObservation() throws Exception {
+        UUID id=create().id();
+        owner.update("UPDATE reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE' WHERE id=?",id);
+        assertSqlGuard(()->owner.update("UPDATE reparacion_fotos_privadas SET estado='ELIMINADA' WHERE id=?",id),"falta observacion durable");
+        assertThat(state(id)).isEqualTo("LIMPIEZA_PENDIENTE");assertThat(count("reparacion_foto_eliminaciones")).isZero();
+    }
+    @Test void databaseRejectsForeignTargetIdentityRemappingAndConfirmationWithoutAtomicTombstone() throws Exception {
+        UUID absent=create().id();
+        owner.update("UPDATE reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE' WHERE id=?",absent);
+        assertSqlGuard(()->owner.update("""
+                INSERT INTO reparacion_foto_eliminaciones(foto_id,user_id,taller_id,object_key)
+                VALUES(?,?,?,?)
+                """,absent,other.userId(),other.tallerId(),"ordenfix-private/"+absent),"objetivo de eliminacion privado no disponible");
+        var photo=associate();storage.failDelete.set(true);
+        code(catchThrowable(()->service.delete(principal(actor),repair,photo.id())),"FOTOS_PRIVADAS_NO_DISPONIBLES");
+        var target=deletion(photo.id());
+        assertSqlGuard(()->owner.update("UPDATE reparacion_foto_eliminaciones SET asset_id='replacement' WHERE foto_id=?",photo.id()),"observacion remota de eliminacion invalida");
+        assertSqlGuard(()->owner.update("""
+                UPDATE reparacion_foto_eliminaciones SET resultado='IDENTIDAD_ELIMINADA',
+                    observada_en=statement_timestamp(),confirmada_en=statement_timestamp() WHERE foto_id=?
+                """,photo.id()),"observacion y foto privada inconsistentes");
+        assertThat(deletion(photo.id())).isEqualTo(target);assertThat(state(photo.id())).isEqualTo("LIMPIEZA_PENDIENTE");
+        assertSqlGuard(()->owner.update("DELETE FROM reparacion_foto_eliminaciones WHERE foto_id=?",photo.id()),"objetivo de eliminacion privado inmutable");
+    }
+
+    @Test void aHistoricalTombstoneWithoutEvidenceIsReportedAndNeverBackfilledByReplay() throws Exception {
+        var photo=associate();service.delete(principal(actor),repair,photo.id());
+        // Owner-only disposable fixture represents a pre-V35 tombstone. This is not an upgrade test:
+        // the missing receipt intentionally models evidence that history never recorded.
+        owner.execute("TRUNCATE reparacion_foto_eliminaciones");
+        var original=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id());
+        int providerCalls=storage.deleteAttempts.size();
+        service.delete(principal(actor),repair,photo.id());
+        assertThat(count("reparacion_foto_eliminaciones")).isZero();
+        assertThat(storage.deleteAttempts).hasSize(providerCalls);
+        assertThat(owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id())).isEqualTo(original);
+        UUID closure=restrictWorkshop();
+        var inventory=new WorkshopClosureDeletionInventory(owner,new DataSourceTransactionManager(owner.getDataSource()),Clock.systemUTC());
+        var result=inventory.inspect(actor.tallerId(),closure);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTOS_DELETED_WITHOUT_RECEIPT)).isEqualTo(1);
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETION_TARGETS)).isZero();
+        assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETIONS_CONFIRMED)).isZero();
+        assertThat(result.categories().get(WorkshopClosureDeletionInventory.Category.PRIVATE_PHOTOS).reviewReasons())
+                .contains(WorkshopClosureDeletionInventory.ReviewReason.PHOTO_DELETION_RECONCILIATION_REQUIRED);
+    }
+
+    private static void assertSqlGuard(Runnable action,String message) {
+        Throwable failure=catchThrowable(action::run);
+        assertThat(failure).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        var sql=(org.postgresql.util.PSQLException)((org.springframework.dao.DataAccessException)failure).getMostSpecificCause();
+        assertThat(sql.getSQLState()).isEqualTo("23514");
+        assertThat(sql.getServerErrorMessage().getMessage()).contains(message);
+    }
+
     static final class MemoryStorage implements PrivatePhotoStorage {
-        final Map<String,byte[]> assets=new HashMap<>();final AtomicInteger uploads=new AtomicInteger(),reads=new AtomicInteger();
-        Runnable afterUpload=()->{};
-        final Set<String> permanentDeleteFailures=new HashSet<>();final List<String> deleteAttempts=new ArrayList<>();
-        final AtomicBoolean failUpload=new AtomicBoolean(),failDelete=new AtomicBoolean(),hideLookup=new AtomicBoolean();
+        final Map<String,byte[]> assets=new ConcurrentHashMap<>();final AtomicInteger uploads=new AtomicInteger(),reads=new AtomicInteger();
+        Runnable afterUpload=()->{},beforeDelete=()->{},afterDelete=()->{};
+        final Set<String> permanentDeleteFailures=new HashSet<>();final List<String> deleteAttempts=new CopyOnWriteArrayList<>(),deleteIdentities=new CopyOnWriteArrayList<>();
+        final AtomicBoolean failUpload=new AtomicBoolean(),failDelete=new AtomicBoolean(),hideLookup=new AtomicBoolean(),failDeleteAfterEffect=new AtomicBoolean();
         @Override public StoredAsset upload(String key,String mime,byte[] content){uploads.incrementAndGet();assets.put(key,content.clone());afterUpload.run();if(failUpload.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);return asset(key);}
         @Override public Optional<StoredAsset> find(String key){return !hideLookup.get() && assets.containsKey(key)?Optional.of(asset(key)):Optional.empty();}
         StoredAsset asset(String key){return new StoredAsset("asset-"+key.substring(key.lastIndexOf('/')+1),key,"image/png",assets.get(key).length,"1");}
         @Override public byte[] read(StoredAsset expected,int max){reads.incrementAndGet();return assets.get(expected.objectKey()).clone();}
-        @Override public void delete(String key,String id){deleteAttempts.add(key);if(permanentDeleteFailures.contains(key) || failDelete.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);assets.remove(key);}
+        @Override public void delete(String key,String id){
+            beforeDelete.run();deleteAttempts.add(key);deleteIdentities.add(id);
+            if(permanentDeleteFailures.contains(key) || failDelete.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);
+            assets.remove(key);afterDelete.run();
+            if(failDeleteAfterEffect.getAndSet(false))throw new PrivatePhotoStorageException(PrivatePhotoStorageException.Reason.UNAVAILABLE);
+        }
     }
 }

@@ -47,6 +47,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -246,16 +247,20 @@ class LegalPublicDocumentSecurityTest {
         when(jwt.validateToken(decoded, principal)).thenReturn(true);
         when(principal.getAuthorities()).thenReturn(List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
         when(principal.getTallerId()).thenReturn(73L);
+        when(principal.isEmailVerificado()).thenReturn(true);
         JwtFilter filter = new JwtFilter(jwt, users, new LegalPublicDocumentRequestMatcher(true));
         MockHttpServletRequest protectedRequest = new MockHttpServletRequest("GET", "/api/protected");
         protectedRequest.addHeader("Authorization", "Bearer valid-token");
+        var invoked = new AtomicBoolean();
         SecurityContextHolder.clearContext();
         TenantContext.clear();
         try {
             filter.doFilter(protectedRequest, new MockHttpServletResponse(), (request, response) -> {
+                invoked.set(true);
                 assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isSameAs(principal);
                 assertThat(TenantContext.getTallerId()).isEqualTo(73L);
             });
+            assertThat(invoked).isTrue();
             assertThat(TenantContext.getTallerId()).isNull();
             verify(users).loadUserByUsername("owner@fixture.invalid");
             verify(decoded, never()).getClaim(anyString());

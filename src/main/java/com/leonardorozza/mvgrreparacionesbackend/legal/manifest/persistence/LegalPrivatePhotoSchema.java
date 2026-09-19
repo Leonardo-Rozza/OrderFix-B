@@ -42,10 +42,18 @@ final class LegalPrivatePhotoSchema {
             )::text AS photo_catalog
             """;
     static void verify(JdbcTemplate jdbc) {
-        verify(jdbc, new LegalV29AcceptanceSchemaVerifier(jdbc, "public").usesWorkshopClosureSchema());
+        verifyCatalog(jdbc, new LegalV29AcceptanceSchemaVerifier(jdbc, "public").workshopClosureSchemaVersion());
     }
     static void verify(JdbcTemplate jdbc, boolean closure) {
-        try {
+        verifyCatalog(jdbc, closure ? new LegalV29AcceptanceSchemaVerifier(jdbc, "public").workshopClosureSchemaVersion() : 0);
+    }
+    /** All photo-service operations require V35; historical non-photo consumers keep their exact versions. */
+    static void requireDeletionReceipts(JdbcTemplate jdbc) {
+        int version=new LegalV29AcceptanceSchemaVerifier(jdbc,"public").workshopClosureSchemaVersion();
+        if(version!=35)throw new IllegalStateException("Esquema de fotos privadas incompatible");
+        verifyCatalog(jdbc,version);
+    }
+    private static void verifyCatalog(JdbcTemplate jdbc,int version) {
             Boolean trustedOwner=jdbc.queryForObject("""
                     SELECT p.proowner=f.relowner AND p.proowner=r.relowner AND p.proowner=m.relowner
                       FROM pg_catalog.pg_proc p
@@ -58,10 +66,16 @@ final class LegalPrivatePhotoSchema {
                        AND r.oid='public.reparaciones'::regclass AND m.oid='public.flyway_schema_history'::regclass
                     """,Boolean.class);
             if(!Boolean.TRUE.equals(trustedOwner)) throw new IllegalStateException("Esquema de fotos privadas incompatible");
+            String expected=version==35 ? LegalV35PhotoDeletionSchema.PHOTO_CATALOG
+                    : version!=0 ? LegalV33ClosureSchema.PHOTO_CATALOG : EXPECTED;
+            if(!expected.equals(snapshot(jdbc)))throw new IllegalStateException("Esquema de fotos privadas incompatible");
+    }
+    /** Fresh-PG diagnostic hashes catalog metadata only, never photo rows or remote identifiers. */
+    static String snapshot(JdbcTemplate jdbc) {
+        try {
             String raw=jdbc.queryForObject(SQL,String.class);
-            String expected=closure ? LegalV33ClosureSchema.PHOTO_CATALOG : EXPECTED;
-            if(raw==null || !expected.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8)))))
-                throw new IllegalStateException("Esquema de fotos privadas incompatible");
+            if(raw==null)throw new IllegalStateException("Esquema de fotos privadas incompatible");
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8)));
         } catch(java.security.GeneralSecurityException failure) {throw new IllegalStateException("Esquema de fotos privadas incompatible");}
     }
 }

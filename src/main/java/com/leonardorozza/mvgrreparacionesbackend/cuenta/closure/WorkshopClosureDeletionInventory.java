@@ -98,7 +98,13 @@ public final class WorkshopClosureDeletionInventory {
             EnumSet<ReviewReason> reasons = EnumSet.of(ReviewReason.RETENTION_POLICY_REQUIRED);
             switch (category) {
                 case IDENTITY, LEGAL_EVIDENCE, CLOSURE_HISTORY -> reasons.add(ReviewReason.IMMUTABLE_CONTRACT_REVIEW_REQUIRED);
-                case PRIVATE_PHOTOS -> { if (present) reasons.add(ReviewReason.REMOTE_PHOTO_EVIDENCE_REQUIRED); }
+                case PRIVATE_PHOTOS -> {
+                    if (present) reasons.add(ReviewReason.REMOTE_PHOTO_EVIDENCE_REQUIRED);
+                    if (counts.get(Metric.PRIVATE_PHOTO_DELETIONS_PENDING) > 0
+                            || counts.get(Metric.PRIVATE_PHOTO_ABSENCE_ONLY) > 0
+                            || counts.get(Metric.PRIVATE_PHOTOS_DELETED_WITHOUT_RECEIPT) > 0)
+                        reasons.add(ReviewReason.PHOTO_DELETION_RECONCILIATION_REQUIRED);
+                }
                 case LEGACY_PHOTOS -> { if (present) reasons.add(ReviewReason.LEGACY_REMOTE_OWNERSHIP_UNPROVEN); }
                 case TEMPORARY_ACCESS_AND_EXPORTS -> { if (present) reasons.add(ReviewReason.TRANSIENT_CLEANUP_NOT_ATTESTED); }
                 case SUBSCRIPTIONS_AND_EFFECTS -> {
@@ -126,7 +132,8 @@ public final class WorkshopClosureDeletionInventory {
     /** NO_LOCAL_ROWS is a database observation only; neither value certifies deletion. */
     public enum Observation { LOCAL_ROWS_PRESENT, NO_LOCAL_ROWS }
     public enum ReviewReason { RETENTION_POLICY_REQUIRED, IMMUTABLE_CONTRACT_REVIEW_REQUIRED,
-        REMOTE_PHOTO_EVIDENCE_REQUIRED, LEGACY_REMOTE_OWNERSHIP_UNPROVEN, TRANSIENT_CLEANUP_NOT_ATTESTED,
+        REMOTE_PHOTO_EVIDENCE_REQUIRED, PHOTO_DELETION_RECONCILIATION_REQUIRED,
+        LEGACY_REMOTE_OWNERSHIP_UNPROVEN, TRANSIENT_CLEANUP_NOT_ATTESTED,
         EXTERNAL_PROVIDER_RETENTION_UNRESOLVED, RENEWAL_COORDINATION_UNRESOLVED, EFFECT_RECONCILIATION_REQUIRED,
         PAYMENT_EVENT_OWNERSHIP_UNRESOLVED, BACKUP_RESTORE_EVIDENCE_REQUIRED, RESTORATION_WINDOW_ACTIVE }
 
@@ -157,6 +164,11 @@ public final class WorkshopClosureDeletionInventory {
         PRIVATE_PHOTOS_PENDING_CLEANUP(Category.PRIVATE_PHOTOS, "reparacion_fotos_privadas WHERE taller_id=? AND estado='LIMPIEZA_PENDIENTE'"),
         PRIVATE_PHOTOS_WITH_LIVE_LEASE(Category.PRIVATE_PHOTOS, "reparacion_fotos_privadas WHERE taller_id=? AND lease_hasta>CURRENT_TIMESTAMP"),
         PRIVATE_PHOTOS_WITH_ASSET_ID(Category.PRIVATE_PHOTOS, "reparacion_fotos_privadas WHERE taller_id=? AND asset_id IS NOT NULL"),
+        PRIVATE_PHOTO_DELETION_TARGETS(Category.PRIVATE_PHOTOS, "reparacion_foto_eliminaciones WHERE taller_id=?"),
+        PRIVATE_PHOTO_DELETIONS_CONFIRMED(Category.PRIVATE_PHOTOS, "reparacion_foto_eliminaciones WHERE taller_id=? AND resultado='IDENTIDAD_ELIMINADA'"),
+        PRIVATE_PHOTO_ABSENCE_ONLY(Category.PRIVATE_PHOTOS, "reparacion_foto_eliminaciones WHERE taller_id=? AND resultado='AUSENCIA_OBSERVADA_SIN_IDENTIDAD'"),
+        PRIVATE_PHOTO_DELETIONS_PENDING(Category.PRIVATE_PHOTOS, "reparacion_foto_eliminaciones WHERE taller_id=? AND resultado='PENDIENTE'"),
+        PRIVATE_PHOTOS_DELETED_WITHOUT_RECEIPT(Category.PRIVATE_PHOTOS, "reparacion_fotos_privadas p WHERE p.taller_id=? AND p.estado='ELIMINADA' AND NOT EXISTS (SELECT 1 FROM public.reparacion_foto_eliminaciones e WHERE e.foto_id=p.id)"),
         PHOTO_ATTESTATIONS(Category.PRIVATE_PHOTOS, "reparacion_foto_atestaciones WHERE taller_id=?"),
         LEGACY_PHOTO_ROWS(Category.LEGACY_PHOTOS, "reparacion_fotos WHERE taller_id=?"),
         EXPORT_JOBS(Category.TEMPORARY_ACCESS_AND_EXPORTS, "cuenta_exportaciones WHERE taller_id=?"),

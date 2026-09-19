@@ -103,9 +103,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("34");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("35");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -308,7 +308,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV34ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
+    void latestV35ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -319,13 +319,13 @@ class PostgresMigrationIT {
         assertThat(tablasLegales).containsExactlyInAnyOrderElementsOf(TABLAS_LEGALES_LATEST);
         assertTablasLegalesVacias(jdbcTemplate, "public", TABLAS_LEGALES_LATEST);
 
-        var tablasFotosPrivadas = Set.of("reparacion_fotos_privadas", "reparacion_foto_atestaciones");
+        var tablasFotosPrivadas = Set.of("reparacion_fotos_privadas", "reparacion_foto_atestaciones", "reparacion_foto_eliminaciones");
         var tablasFotosMigradas = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables
                 WHERE table_schema = 'public'
                   AND table_type = 'BASE TABLE'
-                  AND table_name IN ('reparacion_fotos_privadas', 'reparacion_foto_atestaciones')
+                  AND table_name IN ('reparacion_fotos_privadas', 'reparacion_foto_atestaciones', 'reparacion_foto_eliminaciones')
                 """, String.class);
         assertThat(tablasFotosMigradas).containsExactlyInAnyOrderElementsOf(tablasFotosPrivadas);
         assertTablasLegalesVacias(jdbcTemplate, "public", tablasFotosPrivadas);

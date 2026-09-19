@@ -1,6 +1,6 @@
 # Atención de solicitudes de datos y cierre
 
-Estado al 2026-09-12: procedimiento preparado, con ensayo técnico local aprobado;
+Estado al 2026-09-19: procedimiento preparado, con ensayos técnicos locales aprobados;
 pendiente de habilitación operativa para solicitudes reales.
 No es un texto contractual ni una constancia de cierre. La referencia técnica del
 corte es `docs/plans/2026-09-12-taller-inactivo-enlaces-publicos-implementation.md`.
@@ -109,8 +109,10 @@ credenciales o archivos descargados en Git, logs de aplicación o capturas públ
   con contraseña/prueba de cinco minutos, propósito y confirmación escrita, además
   de constancia idempotente e intenciones durables. No habilita un procedimiento
   SQL de soporte ni un endpoint: D aporta mantenimiento temporal e inventario;
-  su eliminación integral sigue pendiente. E implementará API/pantalla. La activación real requiere adaptadores y ensayo de proveedores.
-  El cierre del taller sigue sin estar disponible. Los plazos técnicos de su política
+  su eliminación integral sigue pendiente. E ya implementó API/pantalla y sus recorridos
+  locales de restricción/restauración y descarga previa. La activación productiva
+  continúa apagada y requiere completar D y acreditar proveedores/despliegue.
+  Los plazos técnicos de su política
   no sustituyen decisiones reales de retención ni habilitan publicación del borrador.
 - Quitar una referencia de foto no prueba borrado del proveedor ni de backups.
   Un cierre deberá comprobar almacenamiento, retenciones y restauración de backups
@@ -152,8 +154,9 @@ Estos últimos conservan verificación, revisión o ejecución pendientes. No se
 crearon expedientes reales ni se acreditó recepción/respuesta del buzón.
 
 La herramienta de exportación A–D está implementada localmente; resta su activación
-operativa y capacidad del despliegue. Continúan pendientes el cierre coordinado,
-las decisiones de retención/entrega y la atención real ya prevista.
+operativa y capacidad del despliegue. El cierre coordinado E está implementado y
+ensayado localmente; siguen pendientes su eliminación integral y activación, las
+reglas de retención/entrega y la atención real ya prevista.
 No se reemplazan con el Excel operativo ni con SQL sobre `talleres.activo`.
 Identidad/alta/contactos definitivos mantienen su etapa acordada; este resultado
 no autoriza anunciar un cierre integral disponible ni omitir el gate de salida.

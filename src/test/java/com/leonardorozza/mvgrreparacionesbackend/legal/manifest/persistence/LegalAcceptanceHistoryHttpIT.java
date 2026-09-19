@@ -328,7 +328,7 @@ class LegalAcceptanceHistoryHttpIT {
     @ParameterizedTest @ValueSource(strings = {"HEAD", "POST", "PUT", "PATCH", "DELETE"})
     void methodsOtherThanGetNeverReachTheHistoryReader(String method) throws Exception {
         openHttp(properties(true, false, false));
-        mvc.perform(request(HttpMethod.valueOf(method), ROOT).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
+        mvc.perform(request(HttpMethod.valueOf(method), ROOT).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"), true)))
                 .andExpect(status().is(method.equals("HEAD") ? 405 : 500));
         assertNoLegalSql();
     }
@@ -337,7 +337,7 @@ class LegalAcceptanceHistoryHttpIT {
     void neighborsKeepExistingAuthenticationAndUnmappedBehaviorWithoutSql(String path) throws Exception {
         openHttp(properties(true, false, false));
         mvc.perform(get(path)).andExpect(status().isForbidden());
-        mvc.perform(get(path).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
+        mvc.perform(get(path).header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"), true)))
                 .andExpect(status().isInternalServerError());
         assertNoLegalSql();
     }
@@ -345,7 +345,7 @@ class LegalAcceptanceHistoryHttpIT {
     @Test void encodedAliasDoesNotReadEvenWhenMvcDecodesItsPath() throws Exception {
         openHttp(properties(true, false, false));
         mvc.perform(get(URI.create("/api/aceptaciones%2dlegales"))
-                        .header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"))))
+                        .header("Authorization", "Bearer " + authorize(seedActor(owner, "USER"), true)))
                 .andExpect(status().isNotFound()); assertNoLegalSql();
     }
 
@@ -444,7 +444,12 @@ class LegalAcceptanceHistoryHttpIT {
     }
 
     private String authorize(Actor actor) {
-        AuthenticatedUserPrincipal principal = principal(actor);
+        return authorize(actor, false);
+    }
+
+    /** Routing probes use verified principals; canonical legal flows keep pending-email coverage. */
+    private String authorize(Actor actor, boolean emailVerified) {
+        AuthenticatedUserPrincipal principal = principal(actor, emailVerified);
         String token = "private-http-token-" + actor.userId();
         DecodedJWT decoded = mock(DecodedJWT.class);
         when(decoded.getSubject()).thenReturn(principal.getUsername());
@@ -455,11 +460,16 @@ class LegalAcceptanceHistoryHttpIT {
     }
 
     private static AuthenticatedUserPrincipal principal(Actor actor) {
+        return principal(actor, false);
+    }
+
+    private static AuthenticatedUserPrincipal principal(Actor actor, boolean emailVerified) {
         var workshop = new Taller(); workshop.setId(actor.workshopId());
         var user = User.builder().password("server-principal-test-only").build();
         user.setId(actor.userId()); user.setTaller(workshop);
         user.setEmail("actor-" + actor.userId() + "@ordenfix.test");
         user.setActive(true); user.setRole(UserRole.valueOf(actor.role())); user.setTokenVersion(0L);
+        user.setEmailVerificado(emailVerified);
         return new AuthenticatedUserPrincipal(user);
     }
 

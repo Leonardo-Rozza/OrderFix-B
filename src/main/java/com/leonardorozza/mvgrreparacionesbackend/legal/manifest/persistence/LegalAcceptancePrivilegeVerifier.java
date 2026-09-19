@@ -120,6 +120,10 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
     }
 
     LegalAcceptancePrivilegeVerifier(JdbcTemplate jdbc,String expectedRole,String expectedSchema,boolean photos) {
+        this(jdbc,expectedRole,expectedSchema,photos,false);
+    }
+
+    private LegalAcceptancePrivilegeVerifier(JdbcTemplate jdbc,String expectedRole,String expectedSchema,boolean photos,boolean receipts) {
         this.photos=photos;
         readTables=new HashSet<>(READ_TABLES);
         insertTables=new HashSet<>(INSERT_TABLES);
@@ -138,6 +142,14 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
             schemaFunctions.addAll(extra); privilegedFunctions.addAll(extra);
             // Referential trigger runs without granting callers an executable SECURITY DEFINER capability.
             privilegedFunctions.remove("foto_privada_conservar_objetos_v30()");
+            if (receipts) {
+                readTables.add("reparacion_foto_eliminaciones");
+                insertTables.add("reparacion_foto_eliminaciones");
+                updateColumns.put("reparacion_foto_eliminaciones", Set.of(
+                        "asset_id", "asset_version", "identificada_en", "resultado", "observada_en", "confirmada_en"));
+                // Trigger-only SECURITY DEFINER functions never become a callable role capability.
+                LegalV35PhotoDeletionSchema.FUNCTIONS.forEach(name -> schemaFunctions.add(name + "()"));
+            }
         }
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.expectedRole = requireText(expectedRole, "expectedRole");
@@ -146,6 +158,16 @@ final class LegalAcceptancePrivilegeVerifier implements LegalDatabasePreflight {
 
     @Override
     public void verify() {
+        // Resolve version-dependent capabilities only inside the caller's deadline/transaction.
+        // Each verification owns its derived sets; concurrent calls never mutate shared state.
+        if (photos && new LegalV29AcceptanceSchemaVerifier(jdbc, expectedSchema).usesPhotoDeletionSchema()) {
+            new LegalAcceptancePrivilegeVerifier(jdbc,expectedRole,expectedSchema,true,true).verifyResolved();
+        } else {
+            verifyResolved();
+        }
+    }
+
+    private void verifyResolved() {
         RoleState role = verifyRoleIdentity();
         verifyNoMembership(role.oid());
         verifyNoDatabaseOwnership(role.oid());

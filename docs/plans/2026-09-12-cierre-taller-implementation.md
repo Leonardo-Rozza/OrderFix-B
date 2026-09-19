@@ -834,3 +834,27 @@ migraciones congeladas. El runbook contiene el comando reproducible y los límit
 La coincidencia conserva NO_AUTORIZA_REAPERTURA; no se implementó journal externo,
 reconciliación, cuarentena automática ni supresión integral. D continúa parcial y
 los flags productivos siguen apagados. Cambios de UI/email ajenos preservados.
+
+
+## Continuación D — objetivos y constancias de fotos V35 (2026-09-19)
+
+Se retoma el frente de cierres/datos antes de adaptar otros tipos de equipos. V35
+resuelve la pérdida de identidad al terminar el borrado de una foto privada: tanto
+DELETE como cleanup guardan primero el objetivo y conservan el resultado durable.
+El [diseño del corte](2026-09-19-cierre-recibos-fotos-design.md) distingue identidad
+eliminada, ausencia observada sin identidad y pendientes, sin backfill de históricos.
+
+El inventario incorpora cantidades de objetivos/resultados y solicita conciliación
+si hay pendientes, ausencias sin identidad o fotos ELIMINADA sin constancia. Los
+recibos son evidencia técnica del adaptador; no certifican CDN, backups, cargas
+tardías, fotos legacy ni eliminación integral del taller. No se ligan retrospectivamente
+a una generación de cierre. La lectura interna del inventario requiere SELECT
+sobre la nueva tabla además de sus lecturas anteriores.
+
+Esto completa la constancia por objetivo de las rutas privadas actuales del punto 3
+de D, no todos sus efectos remotos. Siguen pendientes la política real por categoría,
+supresión de negocio/identidad y estado terminal, conciliación/alertas, journal externo
+y recuperación del despliegue. E permanece aprobado en local; flags productivos
+conservan su estado anterior. No se opera sobre cuentas ni fotos reales en este corte.
+
+La validación del corte se registra en el diseño antes de realizar su commit.

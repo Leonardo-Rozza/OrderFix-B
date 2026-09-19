@@ -42,7 +42,7 @@ class WorkshopClosureDeletionInventoryIT {
 
     @BeforeAll static void database() {
         var source = new DriverManagerDataSource(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword());
-        Flyway.configure().dataSource(source).locations("classpath:db/migration").target("34").load().migrate();
+        Flyway.configure().dataSource(source).locations("classpath:db/migration").target("35").load().migrate();
         jdbc = new JdbcTemplate(source);
         manager = new DataSourceTransactionManager(source);
         gate = new WorkshopClosureGate(jdbc);
@@ -83,6 +83,11 @@ class WorkshopClosureDeletionInventoryIT {
         assertThat(report.count(Metric.PRIVATE_PHOTOS_PENDING_CLEANUP)).isZero();
         assertThat(report.count(Metric.PRIVATE_PHOTOS_WITH_LIVE_LEASE)).isZero();
         assertThat(report.count(Metric.PRIVATE_PHOTOS_WITH_ASSET_ID)).isZero();
+        for (Metric metric : List.of(Metric.PRIVATE_PHOTO_DELETION_TARGETS, Metric.PRIVATE_PHOTO_DELETIONS_CONFIRMED,
+                Metric.PRIVATE_PHOTO_ABSENCE_ONLY, Metric.PRIVATE_PHOTO_DELETIONS_PENDING,
+                Metric.PRIVATE_PHOTOS_DELETED_WITHOUT_RECEIPT)) assertThat(report.count(metric)).as(metric.name()).isZero();
+        assertThat(report.categories().get(Category.PRIVATE_PHOTOS).reviewReasons())
+                .doesNotContain(ReviewReason.PHOTO_DELETION_RECONCILIATION_REQUIRED);
         assertThat(report.reviewReasons()).contains(ReviewReason.BACKUP_RESTORE_EVIDENCE_REQUIRED,
                 ReviewReason.RETENTION_POLICY_REQUIRED, ReviewReason.RESTORATION_WINDOW_ACTIVE);
         assertThat(jdbc.queryForObject("SELECT cierre_estado FROM talleres WHERE id=?", String.class, own.workshop()))

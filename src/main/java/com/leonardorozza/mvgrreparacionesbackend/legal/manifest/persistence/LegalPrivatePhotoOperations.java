@@ -35,6 +35,7 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
     private final LegalRequiredSetAggregateStore aggregates;
     private final LegalAcceptanceSelection selector=new LegalAcceptanceSelection();
     private final PrivatePhotoStorage storage;
+    private final LegalPrivatePhotoDeletionStore deletions;
     private final long retentionSeconds;
     private CleanupCursor cleanupCursor;
     private final LegalApplicableScopeResolver scopes=new LegalApplicableScopeResolver((profile,audience)-> {
@@ -77,6 +78,7 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
         this.pool=pool;this.storage=storage;this.retentionSeconds=retentionSeconds;
         source=new LegalPrivateRequirementsDataSource(pool,Duration.ofSeconds(15),System::nanoTime,1_000);
         jdbc=new JdbcTemplate(source);
+        deletions=new LegalPrivatePhotoDeletionStore(jdbc);
         var manager=new DataSourceTransactionManager(source);manager.setRollbackOnCommitFailure(false);
         var template=new TransactionTemplate(manager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -249,20 +251,23 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
         } catch(RuntimeException failure) {throw failure instanceof PrivatePhotoException typed?typed:PrivatePhotoException.unavailable();}
     }
     @Override public void delete(AuthenticatedUserPrincipal principal,long repair,UUID id) {
-        Row row=tx(principal,repair,(actor,deadline)-> {
+        DeletionWork work=tx(principal,repair,(actor,deadline)-> {
+            deletions.admit(actor.tallerId());
             lockActor(actor,false);Row found=load(id,actor,repair,true);
-            if(found.state().equals("ELIMINADA"))return found;
+            if(found.state().equals("ELIMINADA"))return new DeletionWork(found,null);
             requireNoLease(found);
-            jdbc.update("UPDATE public.reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE',lease_id=NULL,lease_hasta=NULL WHERE id=?",id);
-            return load(id,actor,repair,false);
+            if(!found.state().equals("LIMPIEZA_PENDIENTE"))jdbc.update(
+                    "UPDATE public.reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE',lease_id=NULL,lease_hasta=NULL WHERE id=?",id);
+            var target=deletions.prepare(deletionPhoto(found));
+            jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");deadline.check();
+            return new DeletionWork(found,target);
         });
-        if(row.state().equals("ELIMINADA"))return;
-        removeObject(row);
+        if(work.target()==null)return; // Historical ELIMINADA rows are never given invented receipts.
+        Removal observation=removeObject(work);
         tx(principal,repair,(actor,deadline)-> {
-            lockActor(actor,false);Row found=load(id,actor,repair,true);
-            if(!found.state().equals("LIMPIEZA_PENDIENTE") && !found.state().equals("ELIMINADA"))throw PrivatePhotoException.unavailable();
-            jdbc.update("UPDATE public.reparacion_fotos_privadas SET estado='ELIMINADA',asset_id=NULL,asset_version=NULL,lease_id=NULL,lease_hasta=NULL WHERE id=?",id);
-            return Boolean.TRUE;
+            deletions.admit(actor.tallerId());lockActor(actor,false);
+            completeDeletion(work.row(),observation);
+            deadline.check();return Boolean.TRUE;
         });
     }
 
@@ -278,23 +283,26 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
         int cleaned=0;
         for(Row candidate:candidates) {
             try {
-                Row pending=system(deadline->{
-                    var rows=jdbc.query(SELECT+" WHERE id=? FOR UPDATE",(rs,n)->row(rs),candidate.id());
-                    if(rows.size()!=1)throw PrivatePhotoException.unavailable();Row current=rows.getFirst();
-                    if(current.state().equals("ELIMINADA"))return current;
+                DeletionWork work=system(deadline->{
+                    deletions.admit(candidate.workshop());
+                    Row current=lockDeletionRow(candidate);
+                    if(current.state().equals("ELIMINADA"))return new DeletionWork(current,null);
                     requireNoLease(current);
                     if(!Set.of("EXPIRADA","FALLIDA","LIMPIEZA_PENDIENTE").contains(current.state())
                             && current.retention().isAfter(now()) && (current.state().equals("ASOCIADA") || current.expires().isAfter(now())))
                         throw PrivatePhotoException.unavailable();
-                    jdbc.update("UPDATE public.reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE',lease_id=NULL,lease_hasta=NULL WHERE id=?",current.id());
-                    return current;
+                    if(!current.state().equals("LIMPIEZA_PENDIENTE"))jdbc.update(
+                            "UPDATE public.reparacion_fotos_privadas SET estado='LIMPIEZA_PENDIENTE',lease_id=NULL,lease_hasta=NULL WHERE id=?",current.id());
+                    var target=deletions.prepare(deletionPhoto(current));
+                    jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");deadline.check();
+                    return new DeletionWork(current,target);
                 });
-                if(!pending.state().equals("ELIMINADA")) {
-                    removeObject(pending);
-                    system(deadline->{jdbc.update("UPDATE public.reparacion_fotos_privadas SET estado='ELIMINADA',asset_id=NULL,asset_version=NULL,lease_id=NULL,lease_hasta=NULL WHERE id=? AND estado='LIMPIEZA_PENDIENTE'",pending.id());return Boolean.TRUE;});
+                if(work.target()!=null) {
+                    Removal observation=removeObject(work);
+                    system(deadline->{completeDeletion(work.row(),observation);deadline.check();return Boolean.TRUE;});
                 }
                 cleaned++;
-            } catch(RuntimeException failure) { /* retain exact object identity for the next bounded pass */ }
+            } catch(RuntimeException failure) { /* retain the durable target and exact identity for the next bounded pass */ }
         }
         return cleaned;
     }
@@ -306,21 +314,56 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
                 : jdbc.query(eligible+" AND (confirmado_en,id)>(?,?)"+order,(rs,n)->row(rs),
                     OffsetDateTime.ofInstant(after.confirmedAt(),java.time.ZoneOffset.UTC),after.id());
     }
-    private void removeObject(Row row) {
+    /** All external deletion paths use this committed target; no storage I/O occurs in a JDBC transaction. */
+    private Removal removeObject(DeletionWork work) {
+        Row row=work.row();var target=work.target();
         try {
-            if(row.assetId()!=null) {
-                // A missing old objectKey is not proof that the known asset identity was deleted.
-                storage.delete(row.key(),row.assetId());
-            } else {
-                var found=storage.find(row.key());
+            if(!target.knownIdentity()) {
+                var found=storage.find(target.key());
                 if(found.isPresent()) {
-                    StoredAsset actual=found.get();
-                    if(!row.key().equals(actual.objectKey()) || actual.assetId()==null || actual.assetId().isBlank())throw PrivatePhotoException.unavailable();
-                    storage.delete(row.key(),actual.assetId());
+                    StoredAsset actual=found.get();accredit(actual,row);
+                    byte[] original=storage.read(actual,PrivatePhotoImageValidator.MAX_BYTES);
+                    try {PrivatePhotoImageValidator.validate(row.mime(),original,row.bytes(),row.sha());}
+                    finally {if(original!=null)Arrays.fill(original,(byte)0);}
+                    var expected=target;
+                    target=system(deadline->{
+                        deletions.admit(row.workshop());Row current=lockDeletionRow(row);
+                        var identified=deletions.identify(deletionPhoto(current),expected,actual);
+                        jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");deadline.check();return identified;
+                    });
+                } else {
+                    // Preserve the existing empty-intention lifecycle without inventing a remote receipt.
+                    // A point-in-time absent key does not rule out an uncertain or delayed upload.
+                    if(storage.find(target.key()).isPresent())throw PrivatePhotoException.unavailable();
+                    return new Removal(target,LegalPrivatePhotoDeletionStore.Result.AUSENCIA_OBSERVADA_SIN_IDENTIDAD);
                 }
             }
-            if(storage.find(row.key()).isPresent())throw PrivatePhotoException.unavailable();
+            if(target.terminal())return new Removal(target,target.result());
+            // A missing public key never substitutes for deleting/checking the known immutable asset identity.
+            storage.delete(target.key(),target.assetId());
+            if(storage.find(target.key()).isPresent())throw PrivatePhotoException.unavailable();
+            return new Removal(target,LegalPrivatePhotoDeletionStore.Result.IDENTIDAD_ELIMINADA);
         } catch(RuntimeException failure) {throw PrivatePhotoException.unavailable();}
+    }
+    private Row lockDeletionRow(Row expected) {
+        var rows=jdbc.query(SELECT+" WHERE id=? AND taller_id=? FOR UPDATE",(rs,n)->row(rs),expected.id(),expected.workshop());
+        if(rows.size()!=1)throw PrivatePhotoException.unavailable();Row current=rows.getFirst();
+        if(current.user()!=expected.user() || !current.key().equals(expected.key()))throw PrivatePhotoException.unavailable();
+        return current;
+    }
+    private void completeDeletion(Row expected,Removal observation) {
+        deletions.admit(expected.workshop());Row current=lockDeletionRow(expected);
+        if(!Set.of("LIMPIEZA_PENDIENTE","ELIMINADA").contains(current.state()))throw PrivatePhotoException.unavailable();
+        requireNoLease(current);
+        deletions.complete(deletionPhoto(current),observation.target(),observation.result());
+        if(!current.state().equals("ELIMINADA") && jdbc.update("""
+                UPDATE public.reparacion_fotos_privadas SET estado='ELIMINADA',asset_id=NULL,asset_version=NULL,lease_id=NULL,lease_hasta=NULL
+                WHERE id=? AND estado='LIMPIEZA_PENDIENTE'
+                """,current.id())!=1)throw PrivatePhotoException.unavailable();
+        jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
+    }
+    private static LegalPrivatePhotoDeletionStore.Photo deletionPhoto(Row row) {
+        return new LegalPrivatePhotoDeletionStore.Photo(row.id(),row.user(),row.workshop(),row.key(),row.assetId(),row.version());
     }
     private Lease claim(AuthenticatedUserPrincipal principal,long repair,UUID id,boolean upload) {
         return tx(principal,repair,(actor,deadline)-> {
@@ -359,7 +402,7 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
     }
     private <T>T system(SystemWork<T> work) {
         var completion=new LegalTransactionCompletionState<T>();
-        try {return boundary.execute(completion,(status,deadline)->{LegalPrivatePhotoSchema.verify(jdbc);return work.run(deadline);});}
+        try {return boundary.execute(completion,(status,deadline)->{LegalPrivatePhotoSchema.requireDeletionReceipts(jdbc);return work.run(deadline);});}
         catch(RuntimeException failure) {
             var state=completion.snapshot();
             if(state.completion()==LegalTransactionCompletionState.Completion.ROLLED_BACK && state.persistence()==LegalTransactionCompletionState.Persistence.NOT_PERSISTED) {
@@ -439,6 +482,12 @@ public final class LegalPrivatePhotoOperations implements PrivatePhotoService {
     private static Photo photo(Row row) {return new Photo(row.id(),row.moment(),row.mime(),row.bytes(),row.sha(),row.associated());}
     private record Current(LegalRequiredSetAggregateReceipt aggregate,LegalAuthenticatedRequirements legal,Requirements wire) { }
     private record Row(UUID id,long repair,long workshop,long user,String name,String fingerprint,String scope,String keyHmac,int keyVersion,String mime,long bytes,String sha,MomentoFoto moment,String state,Instant expires,Instant retention,Instant associated,String key,String assetId,String version,UUID lease,Instant leaseUntil,Instant confirmedAt) { }
+    private record DeletionWork(Row row,LegalPrivatePhotoDeletionStore.Target target) {
+        @Override public String toString(){return "PrivatePhotoDeletionWork[redacted]";}
+    }
+    private record Removal(LegalPrivatePhotoDeletionStore.Target target,LegalPrivatePhotoDeletionStore.Result result) {
+        @Override public String toString(){return "PrivatePhotoRemovalObservation[redacted]";}
+    }
     private record CleanupCursor(Instant confirmedAt,UUID id) { }
     private record Lease(Row row,UUID token) { }
     @FunctionalInterface private interface Work<T> {T run(LegalActorSnapshot actor,LegalPrivateRequirementsDeadline deadline);}
