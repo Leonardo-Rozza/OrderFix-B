@@ -78,6 +78,31 @@ de backups/CDN. El intento de transformación denegado no prueba una variante
 preexistente; el adapter no crea derivados. Continúan los requisitos operativos que
 siguen y la acreditación completa en staging.
 
+### Recorrido completo local con Cloudinary — 2026-09-19
+
+`PrivatePhotoBrowserE2E` ahora admite el modo explícito
+`ORDENFIX_PHOTOS_BROWSER_CLOUDINARY=synthetic-only`, con
+`ORDENFIX_CLOUDINARY_CREDENTIALS_FILE` apuntando al archivo privado. El runner frontend
+`npm run test:e2e:photos-real` conserva almacenamiento local por defecto. Con las dos
+variables, el mismo recorrido usa el adapter productivo y Cloudinary real; PostgreSQL
+16, usuarios y roles siguen siendo de laboratorio. No importa la configuración completa.
+
+**Cuatro casos aprobados** (escritorio/320 px × equipo nuevo/existente) acreditaron
+consentimiento, carga única, recuperación de una respuesta perdida inducida, finalización,
+lectura por titular/empleado, aislamiento entre talleres y borrado real. Los probes al
+original y al intento de transformación respondieron 401 anónimo, con asset presente.
+Las cuatro imágenes sintéticas quedaron eliminadas, sin limpieza pendiente.
+
+El decorador de ensayo limita claves a cuatro filas de esta base y verifica ausencia
+previa, bytes/identidad y limpieza exacta; no borra históricos ni prefijos. Mantiene un
+journal fuera del directorio efímero de JUnit para fallos inciertos. El modo local y 17
+pruebas de guardas también aprobaron. Email y MP permanecen apagados. La limpieza
+programada de fotos sólo opera sobre la base descartable.
+
+El [acta del recorrido completo](../plans/2026-09-19-fotos-cloudinary-browser-design.md)
+registra comandos, resultados, limpieza y límites. Esto acredita la integración local
+con el proveedor, no el rol/configuración del despliegue ni retención/backups/CDN.
+
 El indicador admite `true` o `false` exactos. La URL debe ser PostgreSQL TCP, sin fragmento; sus únicos parámetros admitidos son `sslmode`, `sslrootcert`, `sslcert`, `sslkey` y `sslpassword`. Usuario/contraseña no van en la URL. No hay fallback a credenciales de aplicación. Cada keyring contiene entre una y ocho versiones positivas, con claves distintas de 32 bytes; HMAC y AES tampoco pueden coincidir entre sí. Mantener las versiones históricas necesarias según la política de rotación legal existente. Usar fuentes de propiedades enumerables con los nombres canónicos anteriores; no asumir que cualquier alias de variable de entorno será descubierto como entrada del keyring.
 
 `photos.private.retention` debe representar segundos enteros, superar 15 minutos y no superar 315.360.000 segundos. Se guarda el vencimiento por intención al crearla; cambiar la configuración no recalcula filas existentes. La retención AES de metadata legal es independiente. `ordenfix.legal.idempotency.result-ttl` es opcional: predeterminado `PT25H`, mínimo 24 horas; no es el plazo de retención del archivo ni el vencimiento de la intención.
@@ -128,4 +153,4 @@ borrado remoto, y esta decisión no fija la retención de futuros datos de clien
 
 Con el flag activo, crear/actualizar una reparación no puede introducir URLs legacy nuevas, duplicarlas ni cambiarles el momento. Se preserva la lectura de URLs ya existentes y su eliminación de la lista; no hay migración automática ni privatización/borrado remoto de esos objetos históricos. Con el flag apagado, permanece el comportamiento legacy anterior: el flag no es una medida para cerrar las referencias antiguas en el proveedor.
 
-El laboratorio local de navegador usa PostgreSQL y HTTP reales con almacenamiento de pruebas que conserva bytes. Los tests predeterminados del adapter usan un servidor controlado. El ensayo opt-in del 2026-09-12 acredita por separado la cuenta Cloudinary real y el adapter productivo, según la sección anterior; sumar ambos resultados no equivale a una corrida navegador → HTTP → PostgreSQL → Cloudinary. Queda pendiente staging con el rol/configuración reales y el recorrido completo: acceso por taller, lectura sólo vía backend, denegación anónima, borrado y reintento. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. La ausencia del asset en Admin API no acredita destrucción de todas las copias de backup ni invalidación de cachés CDN. No activar MP ni transporte de email para acreditar este flujo.
+El laboratorio de navegador conserva PostgreSQL y HTTP reales con almacenamiento local por defecto; los tests predeterminados del adapter usan un servidor controlado. Además del ensayo separado del 2026-09-12, la corrida opt-in del 2026-09-19 acreditó navegador → HTTP → PostgreSQL → Cloudinary real según la sección anterior. Queda repetir ese recorrido en staging con su rol/configuración reales: acceso por taller, lectura sólo vía backend, denegación anónima, borrado y reintento. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. La ausencia del asset en Admin API no acredita destrucción de todas las copias de backup ni invalidación de cachés CDN. No activar MP ni transporte de email para acreditar este flujo.

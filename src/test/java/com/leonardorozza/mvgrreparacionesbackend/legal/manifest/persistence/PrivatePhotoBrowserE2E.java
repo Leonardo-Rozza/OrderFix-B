@@ -6,6 +6,7 @@ import com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplicat
 import com.leonardorozza.mvgrreparacionesbackend.photos.storage.PrivatePhotoStorage;
 import com.leonardorozza.mvgrreparacionesbackend.photos.storage.PrivatePhotoStorageException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,7 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Opt-in browser gate: its name matches neither the default *Test nor *IT patterns.
  * Real Boot/Tomcat, PostgreSQL and browser; the sole external-provider replacement stores actual
  * image bytes in this test's temporary directory and loses its first successful upload ACK.
- * This proves the application's recovery and authorization, not a real Cloudinary account. */
+ * Explicit synthetic-only opt-in selects the real Cloudinary adapter under the same lost-ACK guard;
+ * the default laboratory never reads provider credentials or contacts Cloudinary. */
 @SpringBootTest(classes={PrivatePhotoBrowserE2E.LocalStorageConfiguration.class, MvgrReparacionesBackendApplication.class},
         webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties={"spring.config.import=", "spring.config.additional-location=",
@@ -67,10 +69,12 @@ class PrivatePhotoBrowserE2E {
     @Container static final PostgreSQLContainer POSTGRES=new PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("ordenfix_legal_acceptance_photos_browser").withUsername("ordenfix").withPassword("ordenfix");
     @Autowired JdbcTemplate applicationJdbc;
-    @Autowired LocalStorage storage;
+    @Autowired PrivatePhotoStorage storage;
+    static BrowserCloudinaryStorage liveStorage;
     @LocalServerPort int port;
 
     @DynamicPropertySource static synchronized void properties(DynamicPropertyRegistry registry) throws Exception {
+        BrowserCloudinaryStorage.enabled(System.getenv()); // Reject malformed opt-in before preparing the laboratory.
         if(privateCredentials==null) {
             assertThat(ownedDirectory).isDirectory();
             privateCredentials=LegalPrivatePhotoOperationsIT.prepare(POSTGRES,ownedDirectory.resolve("publication"));
@@ -99,6 +103,9 @@ class PrivatePhotoBrowserE2E {
         values.put("security.jwt.expiration","3600000");
         values.put("DEVICE_CREDENTIALS_ENCRYPTION_KEY",Base64.getEncoder().encodeToString("dddddddddddddddddddddddddddddddd".getBytes(StandardCharsets.US_ASCII)));
         values.put("mail.enabled","false"); values.put("mercadopago.enabled","false"); values.put("mercadopago.checkout-enabled","false");
+        values.put("exports.jobs.enabled","false");
+        values.put("ordenfix.legal.maintenance.enabled","false"); values.put("ordenfix.legal.maintenance.scheduled","false"); values.put("ordenfix.cuenta.cierre.http-enabled","false");
+        // The photo cleanup scheduler remains real, bounded to rows in this disposable database.
         values.put("admin.user","Unused photo fixture"); values.put("admin.email","unused-photo@ordenfix-e2e.test");
         values.put("admin.password","Unused-synthetic-password-123");
         values.put("ordenfix.legal.account-read.enabled","false"); values.put("ordenfix.legal.account-acceptance.enabled","false");
@@ -107,7 +114,7 @@ class PrivatePhotoBrowserE2E {
         values.forEach((key,value)->registry.add(key,()->value));
     }
 
-    @Test void browserConfirmsUploadsRecoversReadsAndDeletesPrivatePhotos() throws Exception {
+    @Test void browserConfirmsUploadsRecoversReadsAndDeletesPrivatePhotos() throws Throwable {
         assertThat(port).isPositive();
         assertThat(applicationJdbc.queryForObject("SELECT current_user",String.class)).isEqualTo(APP_ROLE);
         assertThat(owner.queryForObject("SELECT has_table_privilege(?, 'public.legal_aceptaciones', 'INSERT')",Boolean.class,APP_ROLE)).isFalse();
@@ -146,10 +153,15 @@ class PrivatePhotoBrowserE2E {
             assertThat(unchangedRows()).isEqualTo(unchanged);
         } catch(Throwable failure) { primary=failure; throw failure; }
         finally {
-            try { stopOwnedProcesses(process,descendants); }
-            catch(Throwable cleanup) { if(primary!=null)primary.addSuppressed(cleanup);else throw cleanup; }
+            Throwable cleanupFailure=null;
+            try { stopOwnedProcesses(process,descendants); } catch(Throwable failure) { cleanupFailure=failure; }
+            try { if(liveStorage!=null)liveStorage.cleanupOwned(); }
+            catch(Throwable failure) { if(cleanupFailure==null)cleanupFailure=failure;else cleanupFailure.addSuppressed(failure); }
+            if(cleanupFailure!=null) { if(primary!=null)primary.addSuppressed(cleanupFailure);else throw cleanupFailure; }
         }
     }
+
+    @AfterAll static void closeLiveProvider() { if(liveStorage!=null)liveStorage.close(); }
 
     private static void verifyReport(Path path,Instant started,Instant finished) throws Exception {
         assertThat(path).isRegularFile(); assertThat(Files.size(path)).isBetween(1L,65_536L);
@@ -220,6 +232,7 @@ class PrivatePhotoBrowserE2E {
             assertThat(owner.queryForObject("SELECT secuencia_orden=2 AND anio_secuencia_orden=? AND updated_at IS NOT NULL FROM talleres WHERE id=?",Boolean.class,year,account.tallerId())).isTrue();
             assertThat(owner.queryForObject("SELECT t.secuencia_orden=0 AND t.anio_secuencia_orden IS NULL FROM talleres t JOIN users u ON u.taller_id=t.id WHERE u.id=?",Boolean.class,account.otherId())).isTrue();
         }
+        if(liveStorage!=null) { liveStorage.verifyComplete();return; }
         LocalStorage instance=LocalStorageConfiguration.instance;
         assertThat(instance.uploadCalls).hasSize(4).allSatisfy((key,count)->assertThat(count).isEqualTo(1));
         assertThat(instance.firstWriteFailures).hasSize(4); assertThat(instance.deleted).hasSize(4);
@@ -227,8 +240,9 @@ class PrivatePhotoBrowserE2E {
         try(var files=Files.list(instance.directory)) { assertThat(files.toList()).isEmpty(); }
     }
     private static void storageRecord(String photo,long bytes,String sha) {
-        LocalStorage instance=LocalStorageConfiguration.instance;
         String key="ordenfix-private/"+photo;
+        if(liveStorage!=null) { liveStorage.verifyRecord(key,bytes,sha);return; }
+        LocalStorage instance=LocalStorageConfiguration.instance;
         assertThat(instance.persisted.get(key).bytes()).isEqualTo(bytes); assertThat(instance.sha.get(key)).isEqualTo(sha);
         assertThat(instance.findCalls.getOrDefault(key,0)).as("retry recovers the already persisted asset").isPositive();
         assertThat(instance.readCalls.getOrDefault(key,0)).isPositive();
@@ -292,8 +306,38 @@ class PrivatePhotoBrowserE2E {
     @TestConfiguration(proxyBeanMethods=false)
     static class LocalStorageConfiguration {
         static LocalStorage instance;
-        @Bean LocalStorage privatePhotoStorage() throws IOException { instance=new LocalStorage(ownedDirectory.resolve("assets"));return instance; }
+        @Bean(destroyMethod="") PrivatePhotoStorage privatePhotoStorage() throws IOException {
+            if(BrowserCloudinaryStorage.enabled(System.getenv())) {
+                liveStorage=BrowserCloudinaryStorage.open(System.getenv(),UUID.fromString(RUN_ID),PrivatePhotoBrowserE2E::ownedPhoto);
+                return liveStorage;
+            }
+            instance=new LocalStorage(ownedDirectory.resolve("assets"));return instance;
+        }
     }
+    /** Admission is tied to rows of this container and these freshly seeded actors, not a provider prefix. */
+    private static BrowserCloudinaryStorage.Expected ownedPhoto(UUID id) {
+        assertThat(owner.queryForObject("SELECT current_database()",String.class)).isEqualTo(POSTGRES.getDatabaseName());
+        var rows=owner.queryForList("""
+                SELECT p.taller_id,p.user_id,p.rol_wire,p.bytes,p.sha256,p.mime_type,p.nombre,p.momento,p.object_key,
+                       r.taller_id AS repair_workshop,u.taller_id AS user_workshop,u.role,u.active,u.email_verificado
+                  FROM reparacion_fotos_privadas p JOIN reparaciones r ON r.id=p.reparacion_id
+                  JOIN users u ON u.id=p.user_id WHERE p.id=?
+                """,id);
+        if(rows.size()!=1)throw new IllegalStateException("Photo is outside this synthetic laboratory.");
+        var row=rows.getFirst();
+        long workshop=((Number)row.get("taller_id")).longValue(), actor=((Number)row.get("user_id")).longValue();
+        Account account=ACCOUNTS.values().stream().filter(a->a.tallerId()==workshop).findFirst().orElseThrow(()->new IllegalStateException("Unknown synthetic workshop."));
+        boolean ownAdmin=actor==account.ownerId(), ownEmployee=actor==account.employeeId();
+        String role=ownAdmin?"ADMIN":"USER";
+        if((!ownAdmin&&!ownEmployee) || ((Number)row.get("repair_workshop")).longValue()!=workshop
+                || ((Number)row.get("user_workshop")).longValue()!=workshop || !role.equals(row.get("role"))
+                || !role.equals(row.get("rol_wire")) || !Boolean.TRUE.equals(row.get("active"))
+                || !Boolean.TRUE.equals(row.get("email_verificado")) || !"foto-sintetica.png".equals(row.get("nombre"))
+                || !"INGRESO".equals(row.get("momento")) || !("ordenfix-private/"+id).equals(row.get("object_key")))
+            throw new IllegalStateException("Photo is outside this synthetic laboratory.");
+        return new BrowserCloudinaryStorage.Expected(((Number)row.get("bytes")).longValue(),(String)row.get("sha256"),(String)row.get("mime_type"));
+    }
+
     static final class LocalStorage implements PrivatePhotoStorage {
         final Path directory;
         final Map<String,StoredAsset> current=new LinkedHashMap<>(),persisted=new LinkedHashMap<>();
