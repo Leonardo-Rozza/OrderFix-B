@@ -108,6 +108,19 @@ HTML real, reemplazo/uso único del enlace, revocación de la sesión anterior e
 con la nueva clave. Usa un buzón sintético y no entrega correos a proveedores;
 Email C conserva la validación del recorrido desplegado.
 
+## Entrega real desde local — 2026-09-19
+
+La [prueba de alta y recuperación](../plans/2026-09-19-email-entrega-recorridos-local-design.md)
+quedó aprobada con dos envíos autorizados por el titular. Ambos llegaron a Recibidos
+en Gmail, con SPF/DKIM aprobados y HTML/texto alternativo; se revisó su formato en
+Gmail web. Los enlaces extraídos de esos mensajes verificaron la cuenta descartable
+y permitieron cambiar la clave e ingresar de nuevo en la app local.
+
+El laboratorio utilizó PostgreSQL descartable y terminó detenido, sin tocar la base
+habitual ni cambiar secretos o DNS. Los enlaces están consumidos y el entorno fue
+eliminado. Esto completa la entrega real desde local; Email C sigue requiriendo el
+recorrido desplegado con HTTPS y comprobación desde otro dispositivo.
+
 ## Dominio configurado y siguiente entorno
 
 El dominio de envío ya configurado es `cuenta.orden-fix.com.ar`, con remitente
