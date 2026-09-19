@@ -95,3 +95,50 @@ reenvía correos, cancela suscripciones ni modifica la configuración de arranqu
 Las herramientas de borrado por categorías, política real de conservación, journal
 externo, reconciliación y barrera automática de arranque siguen pendientes. El cierre
 D parcial y una comparación compatible no sustituyen esos requisitos.
+
+## Ensayo automatizado local
+
+`WorkshopClosureBackupRecoveryIT` realiza el ensayo reproducible con dos PostgreSQL
+16 descartables y datos sintéticos. Crea bases nuevas por caso, migra sólo la fuente
+y usa `pg_dump --format=custom` y `pg_restore --exit-on-error --single-transaction
+--no-owner` para recuperar el destino vacío. Los comandos corren dentro de esos
+contenedores, con un límite de 45 segundos; los puertos PostgreSQL sólo se publican
+en loopback y se comprueba esa configuración. No se inicia la aplicación ni se
+instancian workers, clientes de proveedores o controladores HTTP.
+
+El harness compara las filas de todas las tablas públicas, las secuencias y los
+triggers entre el backup y la recuperación. Comprueba además el rechazo efectivo de
+una escritura en un taller restringido. La transferencia verifica SHA-256 contra el
+archivo local generado: acredita igualdad de esos bytes, no procedencia ni autoridad
+de un backup externo. Los archivos temporales tienen permisos 0600 y pertenecen a
+JUnit/los contenedores descartables.
+
+Los fixtures coordinan pruebas y operaciones sintéticas con Store, Effects y gate
+reales, sin desactivar triggers. Recuperar un backup anterior al cierre o a una
+restauración reproduce retrocesos de estado, versiones de sesiones, operaciones,
+exportaciones y avisos pendientes. El diagnóstico compara sólo su contrato: épocas
+de empleados, payloads y outbox se comprueban aparte en la prueba. Los bytes de
+exportación son opacos y sintéticos; no prueban ZIP, cifrado o descarga autorizada.
+
+Una copia actual puede coincidir y conservar `NO_AUTORIZA_REAPERTURA`. Un taller
+creado después del backup sólo aparece como ausente si está en la evidencia aportada;
+el ensayo muestra expresamente que una lista incompleta también puede coincidir.
+El caso truncado debe fallar y dejar el destino sin tablas operativas; el comparador
+rechaza entonces la consulta como no disponible.
+
+Ejecución focal (Java 21 y Docker disponibles):
+
+```sh
+DOCKER_AUTH_CONFIG='{"auths":{}}' ./mvnw -B \
+  -Dtest=WorkshopClosureBackupCheckTest \
+  -Dit.test=WorkshopClosureBackupRecoveryIT,WorkshopClosureBackupCheckIT verify
+```
+
+El aislamiento lo establece este harness, no un gate de arranque de OrdenFix. Es un
+backup lógico con el mismo rol sintético en ambas instancias y ACL del archivo; no
+acredita roles globales, cuentas restringidas de producción, infraestructura, claves,
+WAL/PITR, backups cifrados, objetos remotos ni tiempos de recuperación a volumen real.
+Tampoco constituye un journal externo completo, reconciliación o aprobación de
+reapertura. La eliminación integral del corte D conserva sus pendientes.
+El diseño y el resultado de ejecución se registran en
+[el acta del ensayo](../plans/2026-09-19-recuperacion-backup-local-design.md).

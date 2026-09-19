@@ -818,3 +818,19 @@ E queda cerrado **en local**. D conserva sus dependencias reales, y la activaci�
 productiva sigue apagada. Entrega: un commit atómico backend
 `feat(cuenta): expone cierre y restauracion del taller`, acompañado por el commit
 frontend `feat(cuenta): integra cierre y restauracion del taller`. Sin push ni merge.
+
+## Ensayo local de backup — 2026-09-19
+
+Se completó la recuperación lógica real en dos PostgreSQL 16 descartables del
+[plan de ensayo](2026-09-19-recuperacion-backup-local-design.md). La nueva IT usa
+`pg_dump`/`pg_restore`, fuentes migradas hasta V34 y destinos vacíos, con todas las
+restricciones activas. Prueba copias anteriores al cierre/restauración, copia actual,
+evidencia incompleta y archivo truncado. Incluye épocas de titular/empleados,
+exportaciones, operaciones/outbox, datos de otro taller y diagnóstico sin DML.
+
+Validación focal final: **27 casos aprobados** (15 unitarios y 12 IT), sin fallos,
+errores ni omisiones; BUILD SUCCESS en 48,616 s. No cambió código productivo ni las
+migraciones congeladas. El runbook contiene el comando reproducible y los límites.
+La coincidencia conserva NO_AUTORIZA_REAPERTURA; no se implementó journal externo,
+reconciliación, cuarentena automática ni supresión integral. D continúa parcial y
+los flags productivos siguen apagados. Cambios de UI/email ajenos preservados.
