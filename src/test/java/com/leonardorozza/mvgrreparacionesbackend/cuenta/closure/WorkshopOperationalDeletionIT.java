@@ -10,6 +10,8 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -21,6 +23,7 @@ import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.leonardorozza.mvgrreparacionesbackend.cuenta.closure.WorkshopOperationalDeletionService.*;
 import static org.assertj.core.api.Assertions.*;
@@ -431,6 +434,315 @@ class WorkshopOperationalDeletionIT {
             assertThat(deletion.get(5, TimeUnit.SECONDS).deleted()).isEqualTo(1);
         } finally { release.countDown(); }
         assertNoContext();
+    }
+
+    @Test void progressReadsAllEightCategoriesWithoutWritingAndKeepsTenantScope() {
+        graph(own); Actor foreign = actor(); graph(foreign); graph(foreign);
+        close(own, closure, dbNow().minusDays(8));
+        String before = fingerprint(own), foreignBefore = fingerprint(foreign);
+        var progress = new WorkshopOperationalDeletionProgress(jdbc, manager);
+        var snapshot = progress.read(own.taller(), closure);
+        assertThat(snapshot.tallerId()).isEqualTo(own.taller());
+        assertThat(snapshot.closureReference()).isEqualTo(closure);
+        assertThat(snapshot.generation()).isEqualTo(1);
+        assertThat(snapshot.remaining()).hasSize(Category.values().length);
+        for (Category category : Category.values()) assertThat(snapshot.remaining()).containsEntry(category, 1L);
+        assertThat(snapshot.hasRows()).isTrue();
+        assertThat(snapshot.photosPending()).isFalse();
+        assertThat(snapshot.graceExpired()).isTrue();
+        assertThat(snapshot.observedAt()).isAfter(snapshot.reversibleUntil());
+        assertThatThrownBy(() -> snapshot.remaining().clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(progress.read(own.taller(), closure).remaining()).isEqualTo(snapshot.remaining());
+        assertThat(fingerprint(own)).isEqualTo(before);
+        assertThat(fingerprint(foreign)).isEqualTo(foreignBefore);
+        assertNoContext();
+    }
+
+    @Test void workerFinishesEightCategoriesWhileKeepingQrIdentityClosureAndSubscriptionEvidence() {
+        graph(own); subscriptionEvidence(own);
+        jdbc.update("INSERT INTO taller_qr_cobro(taller_id,png,sha256) VALUES(?,?,?)", own.taller(), new byte[]{1}, "0".repeat(64));
+        Actor foreign = actor(); graph(foreign);
+        close(own, closure, dbNow().minusDays(8));
+        String retained = retained(own), qr = rows("taller_qr_cobro", "taller_id=?", own.taller());
+        String foreignBefore = fingerprint(foreign);
+        var result = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(result.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(result.attempts()).isEqualTo(8);
+        assertThat(result.observed().hasRows()).isFalse();
+        assertThat(result.observed().photosPending()).isFalse();
+        for (String table : OPERATIONAL) assertThat(count(table, own)).as(table).isZero();
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(8);
+        assertThat(receiptTotal()).isEqualTo(8);
+        assertThat(retained(own)).isEqualTo(retained);
+        assertThat(rows("taller_qr_cobro", "taller_id=?", own.taller())).isEqualTo(qr);
+        assertThat(fingerprint(foreign)).isEqualTo(foreignBefore);
+        String complete = fingerprint(own);
+        var repeated = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(repeated.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(repeated.attempts()).isZero();
+        assertThat(fingerprint(own)).isEqualTo(complete);
+        assertThat(rows("taller_qr_cobro", "taller_id=?", own.taller())).isEqualTo(qr);
+        assertNoContext();
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 2, 8})
+    void workerHonorsItsBudgetAndANewInstanceResumesFromCommittedProgress(int budget) {
+        for (int i = 0; i < 25 * budget + 1; i++) article(own);
+        close(own, closure, dbNow().minusDays(8));
+        var bounded = worker(jdbc, budget).run(own.taller(), closure);
+        assertThat(bounded.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.WORK_REMAINS);
+        assertThat(bounded.attempts()).isEqualTo(budget);
+        assertThat(bounded.observed().remaining()).containsEntry(Category.ARTICULOS, 1L);
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(budget);
+        assertThat(receiptTotal()).isEqualTo(25L * budget);
+        var resumed = worker(jdbc, 1).run(own.taller(), closure);
+        assertThat(resumed.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(resumed.attempts()).isEqualTo(1);
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(budget + 1L);
+        assertThat(receiptTotal()).isEqualTo(25L * budget + 1);
+        assertNoContext();
+    }
+
+    @Test void lostResponseAfterTheLastCommitIsResolvedByFreshObservationWithoutAnotherMutation() {
+        article(own); close(own, closure, dbNow().minusDays(8));
+        AtomicInteger attempts = new AtomicInteger();
+        var result = worker(lostCommitResponse(attempts), 8).run(own.taller(), closure);
+        assertThat(result.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(result.attempts()).isEqualTo(1);
+        assertThat(attempts).hasValue(1);
+        assertThat(result.observed().hasRows()).isFalse();
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(1);
+        assertThat(receiptTotal()).isEqualTo(1);
+        String committed = fingerprint(own);
+        assertThat(worker(jdbc, 8).run(own.taller(), closure).attempts()).isZero();
+        assertThat(fingerprint(own)).isEqualTo(committed);
+        assertNoContext();
+    }
+
+    @Test void lostResponseWithRemainingRowsStopsAndANewInstanceContinuesDurably() {
+        for (int i = 0; i < 26; i++) article(own);
+        close(own, closure, dbNow().minusDays(8));
+        AtomicInteger attempts = new AtomicInteger();
+        var uncertain = worker(lostCommitResponse(attempts), 8).run(own.taller(), closure);
+        assertThat(uncertain.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.RETRY_LATER);
+        assertThat(uncertain.attempts()).isEqualTo(1);
+        assertThat(attempts).hasValue(1);
+        assertThat(uncertain.observed().remaining()).containsEntry(Category.ARTICULOS, 1L);
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(1);
+        assertThat(receiptTotal()).isEqualTo(25);
+        var resumed = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(resumed.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(resumed.attempts()).isEqualTo(1);
+        assertThat(receiptTotal()).isEqualTo(26);
+        assertNoContext();
+    }
+
+    @Test void failureBeforeTheSecondCommitKeepsTheFirstBatchAndRollsBackOnlyTheCurrentBatch() {
+        for (int i = 0; i < 26; i++) article(own);
+        close(own, closure, dbNow().minusDays(8));
+        String retained = retained(own);
+        AtomicInteger attempts = new AtomicInteger();
+        JdbcTemplate failing = new JdbcTemplate(source) {
+            @Override public <T> T queryForObject(String sql, RowMapper<T> mapper, Object... args) {
+                T result = super.queryForObject(sql, mapper, args);
+                if (sql.contains("cuenta_cierre_borrar_lote_v37(") && attempts.incrementAndGet() == 2)
+                    throw new IllegalStateException("synthetic failure before current commit");
+                return result;
+            }
+        };
+        var interrupted = worker(failing, 8).run(own.taller(), closure);
+        assertThat(interrupted.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.RETRY_LATER);
+        assertThat(interrupted.attempts()).isEqualTo(2);
+        assertThat(attempts).hasValue(2);
+        assertThat(interrupted.observed().remaining()).containsEntry(Category.ARTICULOS, 1L);
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(1);
+        assertThat(receiptTotal()).isEqualTo(25);
+        assertThat(retained(own)).isEqualTo(retained);
+        assertNoContext();
+        assertThat(worker(jdbc, 8).run(own.taller(), closure).state())
+                .isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(receiptTotal()).isEqualTo(26);
+    }
+
+    @Test void workerReportsDependencyCyclesWithoutConsumingItsWholeBudgetOrInventingReceipts() {
+        long equipment = equipment(own, client(own));
+        long first = repair(own, equipment), second = repair(own, equipment);
+        jdbc.update("UPDATE reparaciones SET reparacion_origen_id=? WHERE id=?", first, second);
+        jdbc.update("UPDATE reparaciones SET reparacion_origen_id=? WHERE id=?", second, first);
+        article(own);
+        close(own, closure, dbNow().minusDays(8));
+        String before = fingerprint(own);
+        var blocked = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(blocked.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.DEPENDENCIES_PENDING);
+        assertThat(blocked.attempts()).isEqualTo(1);
+        assertThat(blocked.observed().remaining()).containsEntry(Category.REPARACIONES, 2L);
+        assertThat(fingerprint(own)).isEqualTo(before);
+        assertThat(worker(jdbc, 8).run(own.taller(), closure).state())
+                .isEqualTo(WorkshopOperationalDeletionWorker.State.DEPENDENCIES_PENDING);
+        assertThat(fingerprint(own)).isEqualTo(before);
+        assertNoContext();
+    }
+
+    @Test void workerObservesPendingLegacyPhotosBeforeTryingAnyCategory() {
+        Graph graph = graph(own);
+        jdbc.update("INSERT INTO reparacion_fotos(reparacion_id,url) VALUES(?,?)",
+                graph.repair(), "https://synthetic.invalid/legacy-photo-not-contacted.png");
+        close(own, closure, dbNow().minusDays(8));
+        String before = fingerprint(own);
+        var blocked = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(blocked.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.PHOTOS_PENDING);
+        assertThat(blocked.attempts()).isZero();
+        assertThat(blocked.observed().photosPending()).isTrue();
+        assertThat(fingerprint(own)).isEqualTo(before);
+        assertNoContext();
+    }
+
+    @Test void workerWaitsForTheSevenDayWindowWithoutWritingEvenWhenThereAreNoRows() {
+        close(own, closure, dbNow());
+        String before = fingerprint(own);
+        var waiting = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(waiting.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.WAITING_GRACE);
+        assertThat(waiting.attempts()).isZero();
+        assertThat(waiting.observed().graceExpired()).isFalse();
+        assertThat(waiting.observed().hasRows()).isFalse();
+        assertThat(fingerprint(own)).isEqualTo(before);
+        assertNoContext();
+    }
+
+    @Test void workerNeverDeclaresAnOpenForeignOrRestoredReferenceComplete() {
+        var worker = worker(jdbc, 8);
+        workerReject(() -> worker.run(own.taller(), closure), WorkshopOperationalDeletionWorker.Rejected.Code.UNAVAILABLE);
+        Actor foreign = actor(); UUID foreignClosure = UUID.randomUUID();
+        close(foreign, foreignClosure, dbNow().minusDays(8));
+        close(own, closure, dbNow());
+        workerReject(() -> worker.run(own.taller(), foreignClosure), WorkshopOperationalDeletionWorker.Rejected.Code.UNAVAILABLE);
+        workerReject(() -> worker.run(foreign.taller(), closure), WorkshopOperationalDeletionWorker.Rejected.Code.UNAVAILABLE);
+        new TransactionTemplate(manager).executeWithoutResult(status -> {
+            new WorkshopClosureGate(jdbc).lockExclusive(own.taller());
+            new WorkshopClosureStore(jdbc, Clock.systemUTC()).restore(own.taller(), own.user(), closure);
+        });
+        String restored = fingerprint(own), foreignBefore = fingerprint(foreign);
+        workerReject(() -> worker.run(own.taller(), closure), WorkshopOperationalDeletionWorker.Rejected.Code.UNAVAILABLE);
+        assertThat(fingerprint(own)).isEqualTo(restored);
+        assertThat(fingerprint(foreign)).isEqualTo(foreignBefore);
+        assertNoContext();
+    }
+
+    @Test void workerRejectsDisabledInvalidAndCallerTransactionInvocationsBeforeDatabaseAccess() {
+        JdbcTemplate never = new JdbcTemplate(source) {
+            @Override public void execute(String sql) { throw new AssertionError("Database must remain untouched"); }
+        };
+        var progress = new WorkshopOperationalDeletionProgress(never, manager);
+        var deletion = new WorkshopOperationalDeletionService(never, manager, true);
+        var disabled = new WorkshopOperationalDeletionWorker(progress, deletion, false, 8);
+        workerReject(() -> disabled.run(own.taller(), closure), WorkshopOperationalDeletionWorker.Rejected.Code.DISABLED);
+        var enabled = new WorkshopOperationalDeletionWorker(progress, deletion, true, 8);
+        workerReject(() -> enabled.run(0, closure), WorkshopOperationalDeletionWorker.Rejected.Code.INVALID_TARGET);
+        workerReject(() -> enabled.run(own.taller(), null), WorkshopOperationalDeletionWorker.Rejected.Code.INVALID_TARGET);
+        new TransactionTemplate(manager).executeWithoutResult(status -> workerReject(() -> enabled.run(own.taller(), closure),
+                WorkshopOperationalDeletionWorker.Rejected.Code.CALLER_TRANSACTION));
+        assertThatThrownBy(() -> new WorkshopOperationalDeletionWorker(progress, deletion, true, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkshopOperationalDeletionWorker(progress, deletion, true, 9)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void concurrentWorkersLeaveOnlyDurableDisjointBatchesAndAFreshInvocationFinishes() throws Exception {
+        for (int i = 0; i < 51; i++) article(own);
+        close(own, closure, dbNow().minusDays(8));
+        String retained = retained(own);
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            Callable<Object> call = () -> {
+                var worker = worker(jdbc, 2);
+                await(start);
+                try { return worker.run(own.taller(), closure); }
+                catch (WorkshopOperationalDeletionWorker.Rejected unavailable) { return unavailable; }
+            };
+            Future<Object> first = executor.submit(call), second = executor.submit(call);
+            start.countDown();
+            for (Object outcome : List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS))) {
+                if (outcome instanceof WorkshopOperationalDeletionWorker.Result result)
+                    assertThat(result.attempts()).isBetween(0, 2);
+                else assertThat(outcome).isInstanceOfSatisfying(WorkshopOperationalDeletionWorker.Rejected.class,
+                        rejected -> {
+                            assertThat(rejected.code()).isEqualTo(WorkshopOperationalDeletionWorker.Rejected.Code.UNAVAILABLE);
+                            assertThat(rejected).hasNoCause();
+                        });
+            }
+        }
+        assertThat(receiptTotal()).isBetween(1L, 51L);
+        assertThat(receiptTotal() + count("articulos", own)).isEqualTo(51);
+        var resumed = worker(jdbc, 8).run(own.taller(), closure);
+        assertThat(resumed.state()).isEqualTo(WorkshopOperationalDeletionWorker.State.NO_PENDING_ROWS);
+        assertThat(receiptTotal()).isEqualTo(51);
+        assertThat(count("cuenta_borrado_lotes", own)).isEqualTo(3);
+        assertThat(retained(own)).isEqualTo(retained);
+        assertNoContext();
+    }
+
+    @Test void candidatePagesRotatePastBlockedWorkAndExcludeEmptyOpenAndGraceWorkshops() {
+        article(own); close(own, closure, dbNow().minusDays(8));
+        Actor empty = actor();
+        jdbc.update("INSERT INTO taller_qr_cobro(taller_id,png,sha256) VALUES(?,?,?)", empty.taller(), new byte[]{1}, "0".repeat(64));
+        close(empty, UUID.randomUUID(), dbNow().minusDays(8));
+        Actor grace = actor(); article(grace); close(grace, UUID.randomUUID(), dbNow());
+        Actor open = actor(); article(open);
+        Actor legacy = actor(); Graph graph = graph(legacy);
+        jdbc.update("INSERT INTO reparacion_fotos(reparacion_id,url) VALUES(?,?)",
+                graph.repair(), "https://synthetic.invalid/pending-discovery-photo.png");
+        UUID legacyClosure = UUID.randomUUID(); close(legacy, legacyClosure, dbNow().minusDays(8));
+        Actor last = actor(); article(last);
+        UUID lastClosure = UUID.randomUUID(); close(last, lastClosure, dbNow().minusDays(8));
+        Map<Actor, String> before = new HashMap<>();
+        for (Actor actor : List.of(own, empty, grace, open, legacy, last)) before.put(actor, fingerprint(actor));
+        String emptyQr = rows("taller_qr_cobro", "taller_id=?", empty.taller());
+        var candidates = new WorkshopOperationalDeletionCandidates(jdbc, manager);
+        var first = candidates.next(own.taller() - 1);
+        assertThat(first.hasMore()).isTrue();
+        assertThat(first.candidates()).extracting(WorkshopOperationalDeletionCandidates.Candidate::tallerId)
+                .containsExactly(own.taller(), legacy.taller());
+        assertThat(first.candidates()).extracting(WorkshopOperationalDeletionCandidates.Candidate::closureReference)
+                .containsExactly(closure, legacyClosure);
+        var second = candidates.next(legacy.taller());
+        assertThat(second.hasMore()).isFalse();
+        assertThat(second.candidates()).extracting(WorkshopOperationalDeletionCandidates.Candidate::tallerId)
+                .containsExactly(last.taller());
+        assertThat(second.candidates()).extracting(WorkshopOperationalDeletionCandidates.Candidate::closureReference)
+                .containsExactly(lastClosure);
+        var end = candidates.next(last.taller());
+        assertThat(end.candidates()).isEmpty();
+        assertThat(end.hasMore()).isFalse();
+        before.forEach((actor, fingerprint) -> assertThat(fingerprint(actor)).isEqualTo(fingerprint));
+        assertThat(rows("taller_qr_cobro", "taller_id=?", empty.taller())).isEqualTo(emptyQr);
+        assertNoContext();
+    }
+
+    private WorkshopOperationalDeletionWorker worker(JdbcTemplate batchJdbc, int budget) {
+        return new WorkshopOperationalDeletionWorker(new WorkshopOperationalDeletionProgress(jdbc, manager),
+                new WorkshopOperationalDeletionService(batchJdbc, manager, true), true, budget);
+    }
+    private JdbcTemplate lostCommitResponse(AtomicInteger attempts) {
+        return new JdbcTemplate(source) {
+            @Override public <T> T queryForObject(String sql, RowMapper<T> mapper, Object... args) {
+                T result = super.queryForObject(sql, mapper, args);
+                if (sql.contains("cuenta_cierre_borrar_lote_v37(")) {
+                    attempts.incrementAndGet();
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override public void afterCommit() {
+                            throw new IllegalStateException("synthetic response loss after durable commit");
+                        }
+                    });
+                }
+                return result;
+            }
+        };
+    }
+    private long receiptTotal() {
+        return jdbc.queryForObject("SELECT coalesce(sum(eliminados),0) FROM cuenta_borrado_lotes WHERE taller_id=? AND cierre_referencia=?",
+                Long.class, own.taller(), closure);
+    }
+    private static void workerReject(Runnable action, WorkshopOperationalDeletionWorker.Rejected.Code code) {
+        assertThatThrownBy(action::run).isInstanceOfSatisfying(WorkshopOperationalDeletionWorker.Rejected.class,
+                rejected -> assertThat(rejected.code()).isEqualTo(code)).hasNoCause();
     }
 
     private Batch sql(Category category) { return sql(own, closure, UUID.randomUUID(), category); }

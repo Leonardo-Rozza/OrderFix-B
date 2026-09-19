@@ -564,6 +564,8 @@ class LegalPrivatePhotoOperationsIT {
         var receipt=deletion(photo.id());
         var attestation=owner.queryForMap("SELECT to_jsonb(a)::text AS content,xmin::text AS version FROM reparacion_foto_atestaciones a WHERE foto_id=?",photo.id());
         UUID closure=expiredOperationalClosure();
+        var progress=new WorkshopOperationalDeletionProgress(owner,new DataSourceTransactionManager(owner.getDataSource()));
+        assertThat(progress.read(actor.tallerId(),closure).photosPending()).isFalse();
         var photoBefore=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id());
         int calls=storage.deleteAttempts.size();
         assertThatThrownBy(()->owner.update("DELETE FROM reparaciones WHERE id=?",repair)).isInstanceOf(RuntimeException.class);
@@ -571,6 +573,9 @@ class LegalPrivatePhotoOperationsIT {
         var result=deletionService.deleteBatch(actor.tallerId(),closure,UUID.randomUUID(),WorkshopOperationalDeletionService.Category.REPARACIONES);
         assertThat(result.status()).isEqualTo(WorkshopOperationalDeletionService.Status.DELETED);
         assertThat(result.deleted()).isEqualTo(1);
+        var afterDeletion=progress.read(actor.tallerId(),closure);
+        assertThat(afterDeletion.photosPending()).isFalse();
+        assertThat(afterDeletion.remaining()).containsEntry(WorkshopOperationalDeletionService.Category.REPARACIONES,0L);
         var photoAfter=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id());
         assertThat(photoAfter).containsEntry("reparacion_id",null).containsEntry("reparacion_original_id",repair);
         photoBefore.remove("reparacion_id");photoAfter.remove("reparacion_id");assertThat(photoAfter).isEqualTo(photoBefore);
@@ -594,6 +599,8 @@ class LegalPrivatePhotoOperationsIT {
             }
         }
         UUID closure=expiredOperationalClosure();
+        var progress=new WorkshopOperationalDeletionProgress(owner,new DataSourceTransactionManager(owner.getDataSource()));
+        assertThat(progress.read(actor.tallerId(),closure).photosPending()).isTrue();
         var before=owner.queryForMap("SELECT to_jsonb(f)::text AS content,xmin::text AS version FROM reparacion_fotos_privadas f WHERE id=?",id);
         long receipts=count("cuenta_borrado_lotes");int calls=storage.deleteAttempts.size();
         var deletionService=new WorkshopOperationalDeletionService(owner,new DataSourceTransactionManager(owner.getDataSource()),true);

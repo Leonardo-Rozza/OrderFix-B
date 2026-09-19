@@ -1,8 +1,8 @@
 # Cierre coordinado del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
-Estado: A, B y C cerrados. D tiene mantenimiento, diagnóstico y borrado operativo
-interno implementados; la eliminación integral sigue pendiente. E queda cerrado en local con API, pantalla
+Estado: A, B y C cerrados. D tiene mantenimiento, diagnóstico, borrado operativo
+y orquestación interna implementados; la eliminación integral sigue pendiente. E queda cerrado en local con API, pantalla
 y gate integral aprobados. Sus flags permanecen apagados; activación productiva
 condicionada por D y los requisitos reales de salida.
 
@@ -916,3 +916,29 @@ propiedades secretas. Evidencia combinada: **9.929 casos distintos sin pendiente
 El diseño enlazado conserva el resultado original y el comando de corrección; no
 se afirma una segunda corrida integral. V27–V36 y frontend intactos. Entrega
 atómica sin push; D sigue parcial para el alcance integral de cuenta.
+
+
+## Continuación D — orquestación del borrado V37 (2026-09-19)
+
+Se conecta el borrado por categorías con un lector de progreso, un worker acotado y
+un scheduler opt-in. El [diseño y plan del corte](2026-09-19-borrado-operativo-orquestacion-design.md)
+registra la decisión de reconstruir el avance a partir de filas y recibos V37,
+sin otra migración ni un segundo estado durable de trabajo. V27–V37 se conservan.
+
+Cada ejecución usa hasta cuatro lotes (máximo configurable ocho), observa antes y
+después y se detiene ante fotos, dependencias o fallos. NO_PENDING_ROWS acredita
+sólo las ocho categorías observadas vacías; QR, identidad, legal, suscripciones,
+respaldos y efectos remotos no forman parte de ese resultado. Un reinicio retoma
+lo restante; una respuesta perdida no provoca otra mutación ciega ni doble conteo.
+
+El scheduler rota páginas de dos talleres, incluso cuando encuentra bloqueos.
+Permanece apagado con los flags de borrado y worker por defecto. No agrega endpoint,
+alertas externas ni activa los puertos de proveedores. La baja integral, retención,
+registro externo y recuperación del despliegue siguen pendientes; D permanece parcial.
+
+Validación focal: **151 casos aprobados (58 unitarias + 93 IT)**, cero fallos,
+errores u omisiones; BUILD SUCCESS en 02:50 min. Incluye arranque/migraciones,
+recuperación del avance, concurrencia, fotos y control de JAR sin propiedades
+secretas. V27–V37 y frontend intactos; no se repitió clean verify ni se activaron
+flags/proveedores. Comando y evidencia en el diseño enlazado. Commit atómico local
+`feat(cuenta): orquesta borrado operativo por lotes`, sin push.

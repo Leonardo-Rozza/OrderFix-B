@@ -256,7 +256,8 @@ El alcance confirmado comprende ítems de presupuestos, presupuestos, registros 
 cobros, repuestos, reparaciones, equipos, clientes y artículos. La operación interna
 `WorkshopOperationalDeletionService.deleteBatch(taller,cierre,lote,categoria)`
 requiere V37 acreditada y opt-in explícito; permanece deshabilitada por defecto.
-Es una herramienta de desarrollo/operación controlada, sin endpoint o scheduler.
+Es una herramienta de desarrollo/operación controlada sin endpoint; el scheduler
+opt-in de la sección siguiente coordina su ejecución por categorías.
 Los IDs no reemplazan autorización HTTP ni facultan a soporte a ejecutar SQL libre.
 
 Cada invocación elige hasta 25 filas elegibles de una sola categoría. Procesar las
@@ -278,3 +279,55 @@ el mantenimiento temporal existente; sus copias no se incluyen en la constancia 
 borrado de filas operativas. Continúan pendientes retención final, supresión de
 identidad, efectos remotos restantes, registro externo y recuperación del despliegue.
 El estado continúa RESTRINGIDO y el cierre productivo conserva su gate pendiente.
+
+
+### Orquestación del borrado operativo
+
+`WorkshopOperationalDeletionWorker.run(taller,cierre)` reconstruye lo pendiente
+mediante `WorkshopOperationalDeletionProgress.read`. No usar los indicadores
+históricos de un recibo como estado actual ni sumar DELETED/REUSED para calcular
+el total eliminado. Los recibos V37 y las filas restantes sobreviven al reinicio;
+el worker no necesita recrear una cola ni una marca de finalización.
+
+| Resultado | Significado y continuación |
+| --- | --- |
+| NO_PENDING_ROWS | Las ocho categorías V37 están vacías en la captura válida indicada. No acredita baja integral ni borrado remoto. |
+| WORK_REMAINS | Se agotó el presupuesto de lotes; continuar en otra ejecución. |
+| WAITING_GRACE | Todavía rige la recuperación de siete días; no hubo nuevos borrados. |
+| PHOTOS_PENDING | Hay fotos legacy o evidencia privada insuficiente; resolver por el circuito fotográfico. |
+| DEPENDENCIES_PENDING | Un lote no encontró objetivos elegibles y la categoría todavía tiene filas; revisar dependencias/ciclos, sin forzar cascadas. |
+| RETRY_LATER | Fallo desconocido o resultado incierto; detener esta ejecución y volver a observar en la siguiente. |
+
+Cada resultado incluye la última observación exitosa y su fecha. En RETRY_LATER
+esa captura puede ser anterior al intento incierto; no presentarla como resultado
+final. Una respuesta perdida después de un commit se resuelve releyendo filas, sin
+una segunda mutación a ciegas en la misma ejecución. Lo ya confirmado permanece.
+El worker rechaza una transacción exterior: mantener un gate mientras se invoca
+el servicio REQUIRES_NEW bloquearía la propia operación.
+
+Los valores predeterminados son:
+
+```properties
+ordenfix.cuenta.cierre.operational-deletion-enabled=false
+ordenfix.cuenta.cierre.operational-worker-enabled=false
+ordenfix.cuenta.cierre.operational-worker-max-batches=4
+```
+
+El scheduler sólo existe con ambos flags en true. Espera sesenta segundos al
+arrancar y entre rondas. Descubre dos talleres por página más un centinela y procesa
+hasta cuatro lotes por taller por defecto, con un máximo configurable de ocho.
+Cada lote conserva el máximo de 25 filas; los límites son por invocación, no una
+cuota global entre instancias. La consulta usa gracia vencida según PostgreSQL y
+el worker vuelve a acreditar alcance y precondiciones antes de borrar.
+
+El cursor avanza incluso ante un taller bloqueado o fallido, y rota al inicio al
+terminar. Ese cursor y `lastRun()` viven sólo en memoria; no son evidencia durable
+ni un registro externo. Los logs contienen cantidades/estados, sin identificadores,
+SQL ni causas internas. No se agregó transporte de alertas. Los roles de lectura
+internos requieren las consultas nominales a ancla/historial/titular, las ocho tablas,
+fotos y sus constancias; no se añaden permisos sobre `cuenta_borrado_lotes` ni se
+modifican las ACL V37. No habilitar un rol con acceso ampliado para sortear preflight.
+
+Esta configuración queda apagada en el corte. No habilita el cierre público,
+no llama a MP/Cloudinary/email y no modifica las excepciones de conservación.
+Las pruebas se ejecutan sólo con talleres sintéticos en PostgreSQL descartable.
