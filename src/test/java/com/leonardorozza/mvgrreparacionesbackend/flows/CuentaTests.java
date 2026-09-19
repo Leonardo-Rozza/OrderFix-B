@@ -106,7 +106,7 @@ class CuentaTests extends IntegrationTestBase {
 
     @Test
     void reenviarVerificacionMandaTokenNuevoUtilizable() throws Exception {
-        registrar("Taller Verif2", "verif2@test.com");
+        registrarSinVerificar("Taller Verif2", "verif2@test.com");
         String original = emails.ultimoToken("verif2@test.com");
 
         publicPost("/api/auth/verificar-email/reenviar", Map.of("email", "verif2@test.com"))

@@ -34,6 +34,7 @@ public class UsuarioService {
     private final TenantService tenantService;
     private final PlanFeatureService planFeatureService;
     private final UserSecurityStateLock securityState;
+    private final CuentaService cuentaService;
 
     public UsuarioResponseDTO crear(CrearUsuarioRequestDTO request) {
         validarRolDeEmpleado(request.getRole());
@@ -53,12 +54,14 @@ public class UsuarioService {
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(UserRole.USER)
                 .active(true)
-                // Lo da de alta el ADMIN del taller: el email viene "avalado", no se verifica
-                .emailVerificado(true)
+                .emailVerificado(false)
                 .taller(tenantService.currentTallerRef())
                 .build();
 
-        return toDTO(userRepository.save(user));
+        User saved = userRepository.save(user);
+        // Reuse the registration flow: issue and deliver only after this employee commits.
+        cuentaService.enviarVerificacion(saved);
+        return toDTO(saved);
     }
 
     @Transactional(readOnly = true)

@@ -16,6 +16,7 @@ class RolTests extends IntegrationTestBase {
         authPost("/api/usuarios", adminToken, json(Map.of(
                 "username", "Empleado", "email", email, "password", "secret123")))
                 .andExpect(status().isCreated());
+        verificarEmail(email);
         return login(email, "secret123");
     }
 
@@ -125,6 +126,7 @@ class RolTests extends IntegrationTestBase {
         long empId = idOf(authPost("/api/usuarios", admin, json(Map.of(
                 "username", "Emp3", "email", "rol3-emp@test.com", "password", "secret123")))
                 .andExpect(status().isCreated()));
+        verificarEmail("rol3-emp@test.com");
         String emp = login("rol3-emp@test.com", "secret123");
 
         // Con el token vigente el empleado opera normal

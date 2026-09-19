@@ -12,6 +12,7 @@ import com.leonardorozza.mvgrreparacionesbackend.legal.manifest.core.LegalIdempo
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoActoLegal;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.RegisterRequestDto;
 import com.leonardorozza.mvgrreparacionesbackend.service.impl.LegacyRegistrationAccountWriter;
+import com.leonardorozza.mvgrreparacionesbackend.support.RecordingEmailSender;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -94,6 +95,7 @@ class LegalRegistrationBrowserE2E {
 
     @Autowired ConfigurableApplicationContext application;
     @Autowired JdbcTemplate applicationJdbc;
+    @Autowired RecordingEmailSender recordingEmails;
     @LocalServerPort int port;
     @TempDir Path evidenceDirectory;
 
@@ -127,7 +129,7 @@ class LegalRegistrationBrowserE2E {
         values.put("security.rate-limit.trust-forwarded-headers", "false");
         values.put("security.rate-limit.register.requests", "20");
         values.put("security.rate-limit.login.requests", "30"); // Includes two sessions per employee in the access-exit drill; production remains ten.
-        values.put("security.rate-limit.account-recovery.requests", "10"); // Six exit attempts across both viewports; production remains five.
+        values.put("security.rate-limit.account-recovery.requests", "30"); // Twelve email confirmations plus account exits across both viewports; production remains five.
         values.put("security.rate-limit.register.window", "1h");
         values.put("security.jwt.secret", LegalRegistrationHttpITSupport.JWT_SECRET);
         values.put("security.jwt.issuer", "ordenfix-registration-browser");
@@ -176,6 +178,8 @@ class LegalRegistrationBrowserE2E {
         assertThat(baseline.get("users")).as("DataLoader baseline exists before any browser request").isPositive();
         BaselineAccount otherWorkshop = baselineAccount();
         Instant started = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
+        Path mailbox = Files.createDirectory(evidenceDirectory.resolve("mailbox"));
+        recordingEmails.captureVerificationTokens(mailbox);
         Path report = evidenceDirectory.resolve("browser-evidence.json");
         Path log = evidenceDirectory.resolve("playwright.log");
         ProcessBuilder builder = new ProcessBuilder("npm", "exec", "--", "playwright", "test", "--config=playwright.registration-real.config.ts")
@@ -183,6 +187,7 @@ class LegalRegistrationBrowserE2E {
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_API_URL", "http://127.0.0.1:" + port);
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_RUN_ID", RUN_ID);
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_REPORT", report.toString());
+        builder.environment().put("ORDENFIX_REGISTRATION_E2E_MAILBOX", mailbox.toString());
         Process process = builder.start();
         Map<Long, OwnedProcess> descendants = new LinkedHashMap<>();
         Throwable primary = null;
@@ -201,6 +206,7 @@ class LegalRegistrationBrowserE2E {
         } catch (Throwable failure) {
             primary = failure; throw failure;
         } finally {
+            recordingEmails.captureVerificationTokens(null);
             try { stopOwnedProcesses(process, descendants); }
             catch (Throwable cleanup) { if (primary != null) primary.addSuppressed(cleanup); else throw cleanup; }
         }
@@ -308,7 +314,8 @@ class LegalRegistrationBrowserE2E {
         for (String table : List.of("presupuestos", "presupuesto_items")) {
             assertThat(after.get(table) - baseline.get(table)).as("repair graph delta for %s", table).isEqualTo(4);
         }
-        for (String table : List.of("talleres", "suscripciones", "auth_tokens", "legal_aceptacion_lotes",
+        assertThat(after.get("auth_tokens") - baseline.get("auth_tokens")).isEqualTo(12);
+        for (String table : List.of("talleres", "suscripciones", "legal_aceptacion_lotes",
                 "legal_aceptacion_metadatos", "legal_idempotencia_resultados")) {
             assertThat(after.get(table) - baseline.get(table)).as("durable delta for %s", table).isEqualTo(8);
         }
@@ -348,7 +355,7 @@ class LegalRegistrationBrowserE2E {
         assertThat(new BCryptPasswordEncoder().matches(PASSWORD, (String) user.get("password"))).isTrue();
         assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=?", Long.class, owner.tallerId()))
                 .containsExactlyInAnyOrder(owner.userId(), employeeId);
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, employeeId)).isZero();
+        assertEmailConfirmed(employeeId);
         long clientId = positiveId(entry, "clientId"), equipmentId = positiveId(entry, "equipmentId"), repairId = positiveId(entry, "repairId");
         var repairRows = fixture.owner.queryForList("""
                 SELECT r.estado,r.descripcion_problema,r.precio_estimado,r.precio_final,r.created_at,
@@ -579,7 +586,7 @@ class LegalRegistrationBrowserE2E {
         assertThat(new BCryptPasswordEncoder().matches(PASSWORD, (String) user.get("password"))).isTrue();
         assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=?", Long.class, owner.tallerId()))
                 .containsExactlyInAnyOrder(owner.userId(), employeeId);
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, employeeId)).isZero();
+        assertEmailConfirmed(employeeId);
         var clients = fixture.owner.queryForList("SELECT id,taller_id,nombre,apellido,telefono,email,direccion FROM clientes WHERE id=?", clientId);
         assertThat(clients).hasSize(1); var saved = clients.getFirst();
         assertThat(((Number) saved.get("taller_id")).longValue()).isEqualTo(owner.tallerId());
@@ -609,7 +616,7 @@ class LegalRegistrationBrowserE2E {
         assertThat(row.get("username")).isEqualTo("Prueba local"); assertThat(row.get("nombre")).isEqualTo("Laboratorio OrdenFix");
         assertThat(row.get("telefono")).isNull(); assertThat(row.get("role")).isEqualTo("ADMIN");
         assertThat(row.get("active")).isEqualTo(true); assertThat(row.get("activo")).isEqualTo(true);
-        assertThat(row.get("email_verificado")).isEqualTo(false); assertThat(((Number) row.get("token_version")).longValue()).isZero();
+        assertThat(row.get("email_verificado")).isEqualTo(true); assertThat(((Number) row.get("token_version")).longValue()).isZero();
         assertThat(row.get("plan")).isEqualTo("FREE"); assertThat(row.get("estado")).isEqualTo("TRIAL");
         LocalDate start = ((java.sql.Date) row.get("fecha_inicio")).toLocalDate();
         assertThat(((java.sql.Date) row.get("fecha_fin_trial")).toLocalDate()).isEqualTo(start.plusDays(14));
@@ -649,8 +656,13 @@ class LegalRegistrationBrowserE2E {
         assertThat(fields).extracting(LegalAcceptanceMetadataITSupport.CipherRow::type).containsExactly("IP", "USER_AGENT");
         assertThat(LegalAcceptanceMetadataITSupport.decrypt(lot, fields.getFirst())).isEqualTo("127.0.0.1");
         assertThat(LegalAcceptanceMetadataITSupport.decrypt(lot, fields.getLast())).contains("Chrome/");
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=? AND tipo='VERIFICACION_EMAIL' AND usado_en IS NULL AND expira_en>created_at", Long.class, userId)).isEqualTo(1);
+        assertEmailConfirmed(userId);
         return new Identity(userId, tallerId);
+    }
+
+    private void assertEmailConfirmed(long userId) {
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, userId)).isEqualTo(1);
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=? AND tipo='VERIFICACION_EMAIL' AND usado_en IS NOT NULL AND usado_en>=created_at AND usado_en<expira_en", Long.class, userId)).isEqualTo(1);
     }
 
     private void assertPhysicalRoles() {

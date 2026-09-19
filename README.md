@@ -153,6 +153,10 @@ Base URL local: `http://localhost:8080`. HTTP es válido para el API durante des
 Pago activo, el retorno y el webhook deben usar URLs HTTPS públicas mediante un túnel o staging.
 Detalle de cada request/response en `FRONTEND_INTEGRATION.md`.
 **PRO** = requiere plan PRO (si no, 402). **ADMIN** = requiere rol ADMIN (si no, 403).
+La operatoria y las lecturas privadas requieren email verificado; si está pendiente devuelven
+`403 EMAIL_NO_VERIFICADO`. `GET /api/perfil` publica `usuario.emailVerificado` y sigue disponible,
+junto con verificación/reenvío y las excepciones de cuenta detalladas en `FRONTEND_INTEGRATION.md`.
+Los empleados nuevos también deben confirmar su email. El estado de los usuarios existentes se conserva.
 
 | Área | Endpoints | Notas |
 |------|-----------|-------|
@@ -179,7 +183,7 @@ Detalle de cada request/response en `FRONTEND_INTEGRATION.md`.
 { "timestamp": "...", "status": 402, "error": "Límite del plan alcanzado", "message": "...", "path": "/api/..." }
 ```
 Códigos: `400` validación · `401` login rechazado o firma MP inválida · `402` límite/función PRO ·
-`403` JWT ausente/inválido/revocado o rol insuficiente ·
+`403` JWT ausente/inválido/revocado, rol insuficiente o email pendiente (`EMAIL_NO_VERIFICADO`) ·
 `404` no encontrado (o de otro taller) · `409` conflicto (dependencias, unicidad o transición no permitida) ·
 `429` límite temporal · `502/503` proveedor externo no disponible.
 

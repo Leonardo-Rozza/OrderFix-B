@@ -5,6 +5,11 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Base64;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -21,9 +26,26 @@ public class RecordingEmailSender implements EmailSender {
 
     private final Map<String, String> ultimoCuerpoPorEmail = new ConcurrentHashMap<>();
 
+    private volatile Path verificationMailbox;
+
+    /** Opt-in browser harness capture. No production endpoint or external email delivery. */
+    public void captureVerificationTokens(Path directory) {
+        if (directory != null && !Files.isDirectory(directory)) throw new IllegalArgumentException("Mailbox directory does not exist");
+        verificationMailbox = directory;
+    }
+
     @Override
     public void enviar(String para, String asunto, String cuerpoHtml) {
         ultimoCuerpoPorEmail.put(para, cuerpoHtml);
+        Path directory = verificationMailbox;
+        if (directory != null && asunto.equals("Confirmá tu email de OrdenFix")) {
+            Matcher match = TOKEN.matcher(cuerpoHtml);
+            if (match.find()) {
+                String filename = Base64.getUrlEncoder().withoutPadding().encodeToString(para.getBytes(StandardCharsets.UTF_8)) + ".txt";
+                try { Files.writeString(directory.resolve(filename), match.group(1), StandardCharsets.UTF_8); }
+                catch (IOException failure) { throw new IllegalStateException("Could not capture synthetic verification email", failure); }
+            }
+        }
     }
 
     public String ultimoCuerpo(String email) {

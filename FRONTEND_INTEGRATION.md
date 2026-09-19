@@ -34,7 +34,7 @@ Si venís de una versión anterior del contrato, esto es lo que cambió / se agr
 9. **Exportar datos**: `GET /api/export/excel` (solo ADMIN, todos los planes) descarga un `.xlsx`
    con clientes, órdenes, cobros y presupuestos del taller (§4.14).
 10. **Cuentas por email** (§4.1): login/register ahora devuelven **`emailVerificado`** (mostrar
-    banner "Confirmá tu email" si es `false` — puede operar igual). Nuevas pantallas:
+    vista previa "Confirmá tu email" si es `false`, sin datos ni operaciones del taller). Nuevas pantallas:
     **olvidé mi contraseña** (`/password/olvide` + `/password/reset`) y **verificación de email**
     (`/verificar-email` + `/verificar-email/reenviar`). El front necesita las rutas
     `/reset-password?token=...` y `/verificar-email?token=...` (ahí llegan los links del email).
@@ -145,8 +145,9 @@ CORS habilitado para:
 2. Guardar el token (localStorage) y mandarlo en el header en todas las llamadas.
 3. Un **401** en login significa credenciales rechazadas; no hay sesión válida que conservar.
 4. En rutas protegidas, un **403** puede significar tanto sesión ausente/inválida/revocada como falta
-   de rol. Al iniciar la app, validar primero `GET /api/perfil`; un `401/403` en ese perfil propio
-   exige login nuevo. Sólo un perfil operativo continúa con `GET /api/suscripcion` para acceder
+   de rol o email pendiente. Un `403` con `code: "EMAIL_NO_VERIFICADO"` conserva la sesión y exige
+   volver a la vista previa. Al iniciar la app, validar primero `GET /api/perfil`; un `401/403` en ese perfil propio
+   exige login nuevo. Sólo un perfil operativo con `usuario.emailVerificado: true` continúa con `GET /api/suscripcion` para acceder
    a la aplicación comercial. En una acción conocida como solo-ADMIN, mostrar "sin permisos"
    al USER; ante un `403` inesperado, comprobar la sesión antes de decidir. Para Cuenta y una
    sesión restringida por cierre (§4.2.b), basta la validación del perfil: `/api/suscripcion`
@@ -194,14 +195,39 @@ Errores: `401` genérico (email/contraseña incorrectos o usuario/taller deshabi
 Desde 15K, el login relee la cuenta por sus IDs persistidos y vuelve a comprobar contraseña y estado
 actuales antes de emitir la sesión. Email, `emailVerificado`, rol, tenant y `tokenVersion` provienen
 de esa lectura; la forma del JWT y de la respuesta permanece igual. La desactivación del taller
-invalida también sus sesiones existentes al validar el siguiente request. No es un bloqueo por
-suscripción ni por verificación de email. Las rutas legales conservan sus errores 401/403 propios.
+invalida también sus sesiones existentes al validar el siguiente request. El login sigue disponible
+para una cuenta pendiente de verificación, pero su sesión sólo permite vista previa y las excepciones siguientes. Las rutas legales conservan sus errores 401/403 propios.
 Desde 15M3C, el registro legal y su replay usan esa emisión por IDs después de confirmar el alta.
 El registro legacy también conserva la escritura confirmada antes de emitir sesión.
 
-> **`emailVerificado`** también viene en el register: inicialmente `false`; en replay refleja el estado actual. Si es `false`,
-> mostrá un banner "Confirmá tu email (revisá tu casilla)" con botón de reenviar — el usuario
-> **puede operar igual** (verificación suave).
+**Verificación obligatoria antes de operar.** `emailVerificado` también viene en el registro:
+inicialmente `false`; en replay refleja el estado actual. La fuente vigente para la UI es
+`GET /api/perfil` → `usuario.emailVerificado`, leído del usuario persistido. Si es `false`, mostrar
+la estructura de la UI en vista previa, sin consultar registros privados ni montar formularios
+operativos. Ofrecer reenviar y consultar de nuevo la confirmación. Después de abrir cualquier link,
+refrescar el perfil de la sesión actual: verificar el email de otra cuenta no debe desbloquearla.
+Un estado ausente/desconocido nunca habilita operatoria por sí mismo.
+
+El backend aplica la política en cada request autenticado, activa por defecto y sin flag ni
+migración de estados históricos. Las lecturas y escrituras privadas fuera de esta lista responden
+`403 { "status": 403, "code": "EMAIL_NO_VERIFICADO", "message": "Verificá tu email para continuar." }`,
+con `Cache-Control: private, no-store`:
+
+| Excepción privada exacta | Finalidad y permisos que permanecen |
+| --- | --- |
+| `GET /api/perfil` | Identidad y estado de verificación del usuario actual |
+| `GET /api/requisitos-legales` | Requisitos propios, con sus flags y validaciones existentes |
+| `GET /api/aceptaciones-legales` | Historial propio; mantiene paginación y filtros validados |
+| `POST /api/aceptaciones-legales` | Actos propios; mantiene contrato y flags existentes |
+| `POST /api/cuenta/baja-acceso` | Baja propia de empleado USER, exige su contraseña |
+| `GET /api/suscripcion` | Sólo ADMIN pendiente: consultar el plan para poder cancelarlo |
+| `POST /api/pagos/suscripcion/cancelar` | Sólo ADMIN: conserva la cancelación de planes históricos |
+
+Login/registro, recuperación, verificación/reenvío, documentos/requisitos públicos, seguimiento
+público, health y webhook conservan su acceso público existente. Iniciar un checkout, exportar,
+leer datos del taller y operar siguen bloqueados. Cierre/exportación conservan además sus
+comprobaciones propias de email confirmado. `accesoTaller: RESTRICTED` sigue significando cierre
+reversible del taller; es independiente de la verificación pendiente.
 
 #### Olvidé mi contraseña — `POST /api/auth/password/olvide` / `POST /api/auth/password/reset`
 
@@ -1415,7 +1441,8 @@ No requiere plan PRO. Tanto ADMIN como USER reciben únicamente su propio usuari
     "id": 17,
     "username": "Juan",
     "email": "juan@celexpress.com",
-    "role": "ADMIN"
+    "role": "ADMIN",
+    "emailVerificado": true
   },
   "taller": {
     "id": 4,
@@ -1435,7 +1462,8 @@ correcta. No es un claim ni un permiso deducido de la suscripción. `RESTRICTED`
 titular activo, con email verificado, dentro de la gracia del cierre; un acceso denegado no se
 publica como perfil utilizable. Validar de nuevo este GET al entrar a Cuenta, aislado por la sesión
 actual y sin depender de `/api/suscripcion`. No usar un perfil cacheado de otra sesión para decidir
-el acceso. El perfil no publica `emailVerificado`; el servicio de cierre comprueba esa condición.
+el acceso. `usuario.emailVerificado` es un boolean obligatorio leído del usuario persistido.
+El servicio de cierre mantiene su comprobación independiente de esa condición.
 Este GET devuelve `Cache-Control: private, no-store` y `X-Content-Type-Options: nosniff`.
 
 ---
@@ -2051,6 +2079,11 @@ Pensado para que el cliente del taller siga su equipo. Datos mínimos, sin info 
 
 ### 4.10 Usuarios / Empleados — solo ADMIN  (`/api/usuarios`)
 
+Los empleados nuevos se crean con `emailVerificado: false`. Después de confirmar su alta en la
+base de datos reciben el mismo enlace de verificación que un titular. Pueden iniciar sesión y
+reenviar el enlace, pero no acceder a datos u operaciones hasta confirmarlo. El alta no altera
+el estado de verificación de los usuarios existentes.
+
 Gestión de los empleados del taller. **Todo el grupo requiere rol ADMIN** (un USER recibe `403`).
 `ADMIN` representa al **titular único** del taller; no es un nivel asignable desde esta API.
 
@@ -2491,7 +2524,7 @@ export type UserRole = "ADMIN" | "USER";
 
 export interface AuthResponse { token: string; type: string; email: string; emailVerificado: boolean; }
 export interface Perfil {
-  usuario: { id: number; username: string; email: string; role: UserRole };
+  usuario: { id: number; username: string; email: string; role: UserRole; emailVerificado: boolean };
   taller: { id: number; nombre: string; telefono: string | null };
   accesoTaller: "OPERATIVE" | "RESTRICTED";
 }
@@ -2654,7 +2687,7 @@ window.location.href = data.initPoint;
 
 **Listo y funcionando:**
 - Auth (registro + login por email), JWT con tenant.
-- **Recuperación de contraseña** por email y **verificación de email** suave (§4.1) — emails vía Resend.
+- **Recuperación de contraseña** por email y **verificación de email** obligatoria para operar (§4.1) — emails vía Resend.
 - Multi-tenancy con aislamiento total por taller.
 - CRUD de Clientes, Equipos, Reparaciones, Repuestos.
 - Suscripciones freemium (FREE/PRO) con límite mensual y gating 402.

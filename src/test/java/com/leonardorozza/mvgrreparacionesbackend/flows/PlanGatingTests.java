@@ -141,6 +141,7 @@ class PlanGatingTests extends IntegrationTestBase {
         authPost("/api/usuarios", admin, json(Map.of(
                 "username", "Empleado Oferta", "email", "oferta-empleado@test.com", "password", "secret123")))
                 .andExpect(status().isCreated());
+        verificarEmail("oferta-empleado@test.com");
         String empleado = login("oferta-empleado@test.com", "secret123");
 
         JsonNode respuesta = node(authGet("/api/suscripcion", admin).andExpect(status().isOk()));

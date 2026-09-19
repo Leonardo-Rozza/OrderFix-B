@@ -55,7 +55,7 @@ public class JwtFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getServletPath();
+        String path = pathWithinApplication(request);
         // No filtramos login, el webhook de MercadoPago ni el health (entran sin JWT).
         return legalPublicDocumentRequestMatcher.matches(request)
                 || legalPublicRequirementsRequestMatcher.matches(request)
@@ -81,6 +81,16 @@ public class JwtFilter extends OncePerRequestFilter {
                 response.setContentType("application/json");
                 response.setCharacterEncoding("UTF-8");
                 response.getWriter().write("{\"status\":423,\"code\":\"CUENTA_EN_CIERRE\",\"message\":\"El taller está en cierre. Esta operación no está disponible en la cuenta restringida.\"}");
+                return;
+            }
+            if (authentication != null && authentication.getPrincipal() instanceof AuthenticatedUserPrincipal principal
+                    && !principal.isEmailVerificado() && !unverifiedEmailAccessAllowed(request, principal)) {
+                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                response.setHeader("Cache-Control", "private, no-store");
+                response.setHeader("X-Content-Type-Options", "nosniff");
+                response.setContentType("application/json");
+                response.setCharacterEncoding("UTF-8");
+                response.getWriter().write("{\"status\":403,\"code\":\"EMAIL_NO_VERIFICADO\",\"message\":\"Verificá tu email para continuar.\"}");
                 return;
             }
             filterChain.doFilter(request, response);
@@ -110,6 +120,34 @@ public class JwtFilter extends OncePerRequestFilter {
                     || path.matches("/api/exportaciones/" + id + "/archivo");
             default -> false;
         };
+    }
+
+    /** Account self-service remains available; all business reads and writes require verified email.
+     * Public routes are handled by shouldNotFilter. Admitted controllers retain their own query,
+     * role, credential and feature checks; this allowlist never grants those permissions.
+     */
+    private static boolean unverifiedEmailAccessAllowed(HttpServletRequest request, AuthenticatedUserPrincipal principal) {
+        if (LegalPrivateRequirementsAuthenticationEntryPoint.isPrivateGet(request)
+                || LegalPrivateRequirementsAuthenticationEntryPoint.isHistoryGet(request)
+                || LegalPrivateRequirementsAuthenticationEntryPoint.isAcceptancePost(request)) return true;
+        String uri = request.getRequestURI(), context = request.getContextPath();
+        if (uri == null || context == null || (!context.isEmpty()
+                && (!context.startsWith("/") || context.endsWith("/") || !uri.startsWith(context + "/")))) return false;
+        String path = uri.substring(context.length());
+        // Existing owners must still be able to inspect and stop a paid subscription.
+        boolean owner = principal.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+        if (owner && (("GET".equals(request.getMethod()) && path.equals("/api/suscripcion"))
+                || ("POST".equals(request.getMethod()) && path.equals("/api/pagos/suscripcion/cancelar")))) return true;
+        return ("GET".equals(request.getMethod()) && path.equals("/api/perfil"))
+                || ("POST".equals(request.getMethod()) && path.equals("/api/cuenta/baja-acceso"));
+    }
+
+    private static String pathWithinApplication(HttpServletRequest request) {
+        String uri = request.getRequestURI(), context = request.getContextPath();
+        if (uri == null || context == null || (!context.isEmpty()
+                && (!context.startsWith("/") || context.endsWith("/") || !uri.startsWith(context + "/")))) return "";
+        return uri.substring(context.length());
     }
 
     private void authenticateRequest(HttpServletRequest request) {

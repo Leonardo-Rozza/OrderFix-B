@@ -201,6 +201,7 @@ class QrCobroTests extends IntegrationTestBase {
                 "email", "qr-roles-user@test.com",
                 "password", "secret123")))
                 .andExpect(status().isCreated());
+        verificarEmail("qr-roles-user@test.com");
         String user = login("qr-roles-user@test.com", "secret123");
 
         authGet(URL, user).andExpect(status().isOk());

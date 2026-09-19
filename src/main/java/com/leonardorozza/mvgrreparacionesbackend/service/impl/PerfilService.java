@@ -46,7 +46,8 @@ public class PerfilService {
         Taller taller = user.getTaller();
 
         return new PerfilResponseDTO(
-                new PerfilUsuarioDTO(user.getId(), user.getUsername(), user.getEmail(), user.getRole()),
+                new PerfilUsuarioDTO(user.getId(), user.getUsername(), user.getEmail(), user.getRole(),
+                        Boolean.TRUE.equals(user.getEmailVerificado())),
                 new PerfilTallerDTO(taller.getId(), taller.getNombre(), taller.getTelefono()),
                 accessMode
         );

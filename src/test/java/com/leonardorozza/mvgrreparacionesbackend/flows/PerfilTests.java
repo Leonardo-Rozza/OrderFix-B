@@ -32,7 +32,7 @@ class PerfilTests extends IntegrationTestBase {
         assertThat(usuario.has("password")).isFalse();
         assertThat(usuario.has("tokenVersion")).isFalse();
         assertThat(usuario.has("active")).isFalse();
-        assertThat(usuario.has("emailVerificado")).isFalse();
+        assertThat(usuario.get("emailVerificado").asBoolean()).isTrue();
 
         JsonNode taller = perfil.get("taller");
         assertThat(taller.get("id").asLong()).isPositive();
@@ -57,6 +57,7 @@ class PerfilTests extends IntegrationTestBase {
         assertThat(perfilEmpleado.at("/usuario/username").asText()).isEqualTo("María Empleada");
         assertThat(perfilEmpleado.at("/usuario/email").asText()).isEqualTo("perfil-equipo-user@test.com");
         assertThat(perfilEmpleado.at("/usuario/role").asText()).isEqualTo("USER");
+        assertThat(perfilEmpleado.at("/usuario/emailVerificado").asBoolean()).isFalse();
         assertThat(perfilEmpleado.at("/usuario/id").asLong())
                 .isNotEqualTo(perfilAdmin.at("/usuario/id").asLong());
         assertThat(perfilEmpleado.at("/taller/id").asLong())

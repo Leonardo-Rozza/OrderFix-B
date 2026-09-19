@@ -60,8 +60,15 @@ public abstract class IntegrationTestBase {
                 .build();
     }
 
-    /** Registra un taller nuevo (con su admin) y devuelve el token JWT. */
+    /** Business fixtures explicitly complete the real email confirmation before operating. */
     protected String registrar(String nombreTaller, String email) throws Exception {
+        String token = registrarSinVerificar(nombreTaller, email);
+        verificarEmail(email);
+        return token;
+    }
+
+    /** Registration returns a preview session until its email is confirmed. */
+    protected String registrarSinVerificar(String nombreTaller, String email) throws Exception {
         String body = json(Map.of(
                 "nombreTaller", nombreTaller,
                 "telefonoTaller", "1100000000",
@@ -72,6 +79,14 @@ public abstract class IntegrationTestBase {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return token(resp);
+    }
+
+    protected void verificarEmail(String email) throws Exception {
+        String verification = emails.ultimoToken(email);
+        org.assertj.core.api.Assertions.assertThat(verification).as("verification email for %s", email).isNotBlank();
+        mvc.perform(post("/api/auth/verificar-email").contentType(APPLICATION_JSON)
+                        .content(json(Map.of("token", verification))))
+                .andExpect(status().isOk());
     }
 
     protected String login(String email, String password) throws Exception {

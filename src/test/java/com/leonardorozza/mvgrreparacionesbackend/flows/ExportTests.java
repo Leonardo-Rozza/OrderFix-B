@@ -166,6 +166,7 @@ class ExportTests extends IntegrationTestBase {
         authPost("/api/usuarios", admin, json(Map.of(
                 "username", "EmpExport", "email", "exp-emp@test.com", "password", "secret123")))
                 .andExpect(status().isCreated());
+        verificarEmail("exp-emp@test.com");
         String emp = login("exp-emp@test.com", "secret123");
 
         authGet("/api/export/excel", emp).andExpect(status().isForbidden());

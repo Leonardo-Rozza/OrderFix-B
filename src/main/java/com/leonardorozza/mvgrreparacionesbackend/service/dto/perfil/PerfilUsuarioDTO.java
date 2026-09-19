@@ -6,6 +6,7 @@ public record PerfilUsuarioDTO(
         Long id,
         String username,
         String email,
-        UserRole role
+        UserRole role,
+        boolean emailVerificado
 ) {
 }
