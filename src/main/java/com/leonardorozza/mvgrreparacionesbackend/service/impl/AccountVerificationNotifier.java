@@ -1,11 +1,11 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 
 import com.leonardorozza.mvgrreparacionesbackend.service.email.EmailSender;
+import com.leonardorozza.mvgrreparacionesbackend.service.email.AccountEmailTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.util.HtmlUtils;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -37,14 +37,9 @@ public class AccountVerificationNotifier {
         if (delivery.isEmpty()) return;
         try {
             var value = delivery.get();
-            String link = HtmlUtils.htmlEscape(publicUrl + "/verificar-email?token=" + value.rawToken());
-            String name = HtmlUtils.htmlEscape(value.displayName());
-            emailSender.enviar(value.recipient(), "Confirmá tu email de OrdenFix",
-                    """
-                    <p>Hola %s, ¡bienvenido a OrdenFix!</p>
-                    <p>Confirmá tu email haciendo clic en el link (vence en %d horas):</p>
-                    <p><a href="%s">%s</a></p>
-                    """.formatted(name, value.validityHours(), link, link));
+            String link = publicUrl + "/verificar-email?token=" + value.rawToken();
+            var content = AccountEmailTemplate.verification(value.displayName(), link, value.validityHours());
+            emailSender.enviar(value.recipient(), content.subject(), content.plainText(), content.html());
         } catch (RuntimeException deliveryFailure) {
             LOG.warn("Verificación de email omitida: DELIVERY_FAILED.");
         }

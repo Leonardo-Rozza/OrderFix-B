@@ -415,6 +415,9 @@ class LegacyRegistrationPostCommitIT {
         @Override public void enviar(String recipient, String subject, String html) {
             assertThat(PROBE.created).isNotNull();
             var match = TOKEN_LINK.matcher(html); assertThat(match.find()).isTrue(); String raw = match.group(1);
+            // The CTA and fallback repeat one committed token, not two independent credentials.
+            assertThat(match.find()).isTrue();
+            assertThat(match.group(1)).isEqualTo(raw);
             assertThat(match.find()).isFalse();
             String hash;
             try { hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8))); }

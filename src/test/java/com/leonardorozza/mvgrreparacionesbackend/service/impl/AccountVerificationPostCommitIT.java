@@ -137,7 +137,7 @@ class AccountVerificationPostCommitIT {
         Identity identity = created.get();
         Captured sent = onlyEmail(identity);
         assertThat(sent.subject()).isEqualTo("Confirmá tu email de OrdenFix");
-        assertThat(sent.html()).contains("¡bienvenido a OrdenFix!", "48 horas", "https://verification.synthetic.invalid/verificar-email?token=");
+        assertThat(sent.html()).contains("Tu cuenta de OrdenFix ya está creada.", "Confirmar mi email", "48 horas", "https://verification.synthetic.invalid/verificar-email?token=");
         assertThat(sent.observedRows()).hasSize(1).isEqualTo(tokenRows(identity));
         TokenRow token = sent.observedRows().getFirst();
         assertThat(token.hash()).isEqualTo(sha(sent.rawToken())).hasSize(64);
@@ -479,7 +479,11 @@ class AccountVerificationPostCommitIT {
             var match = TOKEN_LINK.matcher(html);
             // AssertionError is deliberate: best-effort handling cannot hide a broken observation.
             assertThat(match.find()).isTrue(); String rawToken = match.group(1);
-            assertThat(rawToken).hasSize(43); assertThat(match.find()).isFalse();
+            assertThat(rawToken).hasSize(43);
+            // The CTA and fallback repeat one committed token, not two independent credentials.
+            assertThat(match.find()).isTrue();
+            assertThat(match.group(1)).isEqualTo(rawToken);
+            assertThat(match.find()).isFalse();
             var identities = owner().query("SELECT id,taller_id FROM users WHERE email = ?",
                     (rs, row) -> new Identity(rs.getLong(1), rs.getLong(2), recipient), recipient);
             assertThat(identities).hasSize(1);

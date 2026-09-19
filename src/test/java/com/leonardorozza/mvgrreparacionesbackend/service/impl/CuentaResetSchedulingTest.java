@@ -79,7 +79,7 @@ class CuentaResetSchedulingTest {
         doAnswer(invocation -> {
             assertThat(manager.commits).isEqualTo(1);
             return null;
-        }).when(sender).enviar(anyString(), anyString(), anyString());
+        }).when(sender).enviar(anyString(), anyString(), anyString(), anyString());
 
         transaction.executeWithoutResult(status -> {
             cuenta.olvidePassword(RECIPIENT);
@@ -91,7 +91,7 @@ class CuentaResetSchedulingTest {
         });
 
         String html = capturedHtml();
-        assertThat(html).contains("<p>Hola " + NAME + ",</p>", "vence en 2 hora/s", URL + "/reset-password?token=")
+        assertThat(html).contains("Hola " + NAME + ",</p>", "vence en 2 horas", URL + "/reset-password?token=")
                 .doesNotContain("Nombre reemplazado", "replacement.synthetic.invalid");
         assertThat(manager.commits).isEqualTo(1);
         assertThat(manager.rollbacks).isZero();
@@ -111,8 +111,8 @@ class CuentaResetSchedulingTest {
         var token = Pattern.compile("token=([A-Za-z0-9_-]+)").matcher(html);
         assertThat(token.find()).isTrue();
         String link = HtmlUtils.htmlEscape(base + "/reset-password?token=" + token.group(1));
-        assertThat(html).contains("<p>Hola " + HtmlUtils.htmlEscape(name) + ",</p>",
-                "<a href=\"" + link + "\">" + link + "</a>")
+        assertThat(html).contains("Hola " + HtmlUtils.htmlEscape(name) + ",</p>",
+                "href=\"" + link + "\"", ">" + link + "</a>")
                 .doesNotContain(name, base + "/reset-password?token=");
     }
 
@@ -157,14 +157,14 @@ class CuentaResetSchedulingTest {
         when(users.findByEmail(RECIPIENT)).thenReturn(Optional.of(account(NAME)));
         doAnswer(invocation -> {
             assertThat(manager.commits).isEqualTo(1);
-            throw new IllegalStateException(RECIPIENT + invocation.getArgument(2));
-        }).when(sender).enviar(anyString(), anyString(), anyString());
+            throw new IllegalStateException(RECIPIENT + invocation.getArgument(3));
+        }).when(sender).enviar(anyString(), anyString(), anyString(), anyString());
 
         assertThatCode(() -> transaction.executeWithoutResult(status -> cuenta.olvidePassword(RECIPIENT)))
                 .doesNotThrowAnyException();
 
         verify(tokens, times(1)).save(any(AuthToken.class));
-        verify(sender, times(1)).enviar(eq(RECIPIENT), anyString(), anyString());
+        verify(sender, times(1)).enviar(eq(RECIPIENT), anyString(), anyString(), anyString());
         assertThat(manager.commits).isEqualTo(1);
         assertThat(manager.rollbacks).isZero();
         assertFixedWarning("DELIVERY_FAILED");
@@ -196,7 +196,9 @@ class CuentaResetSchedulingTest {
 
     private String capturedHtml() {
         var html = ArgumentCaptor.forClass(String.class);
-        verify(sender).enviar(eq(RECIPIENT), eq("Restablecer tu contraseña de OrdenFix"), html.capture());
+        var text = ArgumentCaptor.forClass(String.class);
+        verify(sender).enviar(eq(RECIPIENT), eq("Restablecer tu contraseña de OrdenFix"), text.capture(), html.capture());
+        assertThat(text.getValue()).contains("Crear nueva contraseña", "vence en 2 horas", "Tu contraseña sigue igual.");
         return html.getValue();
     }
 

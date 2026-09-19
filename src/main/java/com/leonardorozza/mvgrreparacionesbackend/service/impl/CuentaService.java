@@ -7,6 +7,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.TipoAu
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.AuthTokenRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.UserRepository;
 import com.leonardorozza.mvgrreparacionesbackend.service.email.EmailSender;
+import com.leonardorozza.mvgrreparacionesbackend.service.email.AccountEmailTemplate;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +17,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.web.util.HtmlUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -74,18 +74,13 @@ public class CuentaService {
             log.warn("Recuperación de contraseña omitida: COMMIT_CALLBACK_UNAVAILABLE.");
             return;
         }
-        String link = HtmlUtils.htmlEscape(publicUrl + "/reset-password?token=" + token);
-        String html = """
-                <p>Hola %s,</p>
-                <p>Pediste restablecer tu contraseña. Hacé clic en el link (vence en %d hora/s):</p>
-                <p><a href="%s">%s</a></p>
-                <p>Si no fuiste vos, ignorá este email: tu contraseña sigue igual.</p>
-                """.formatted(HtmlUtils.htmlEscape(displayName), resetHoras, link, link);
-        // Capture immutable delivery strings, never a managed User or AuthToken.
+        String link = publicUrl + "/reset-password?token=" + token;
+        var content = AccountEmailTemplate.passwordReset(displayName, link, resetHoras);
+        // Capture immutable presentation strings, never a managed User or AuthToken.
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() {
                 try {
-                    emailSender.enviar(recipient, "Restablecer tu contraseña de OrdenFix", html);
+                    emailSender.enviar(recipient, content.subject(), content.plainText(), content.html());
                 } catch (RuntimeException deliveryFailure) {
                     // The token is already committed; preserve the generic account response.
                     log.warn("Recuperación de contraseña omitida: DELIVERY_FAILED.");

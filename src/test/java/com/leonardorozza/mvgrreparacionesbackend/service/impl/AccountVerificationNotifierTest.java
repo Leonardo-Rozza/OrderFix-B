@@ -56,16 +56,16 @@ class AccountVerificationNotifierTest {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
         var returned = new AtomicBoolean();
         when(issuer.issue(7L, 19L)).thenAnswer(invocation -> { returned.set(true); return Optional.of(delivery()); });
-        doAnswer(invocation -> { assertThat(returned).isTrue(); return null; }).when(sender).enviar(anyString(), anyString(), anyString());
+        doAnswer(invocation -> { assertThat(returned).isTrue(); return null; }).when(sender).enviar(anyString(), anyString(), anyString(), anyString());
         new AccountVerificationNotifier(issuer, sender, URL).notifyVerification(7L, 19L);
         String link = URL + "/verificar-email?token=" + TOKEN;
         var order = inOrder(issuer, sender);
         order.verify(issuer).issue(7L, 19L);
-        order.verify(sender).enviar(RECIPIENT, "Confirmá tu email de OrdenFix", """
-                <p>Hola Nombre actual, ¡bienvenido a OrdenFix!</p>
-                <p>Confirmá tu email haciendo clic en el link (vence en 48 horas):</p>
-                <p><a href="%s">%s</a></p>
-                """.formatted(link, link));
+        var text = ArgumentCaptor.forClass(String.class);
+        var html = ArgumentCaptor.forClass(String.class);
+        order.verify(sender).enviar(eq(RECIPIENT), eq("Confirmá tu email de OrdenFix"), text.capture(), html.capture());
+        assertThat(text.getValue()).contains(NAME, link, "48 horas", "Confirmar mi email");
+        assertThat(html.getValue()).contains(NAME, "href=\"" + link + "\"", "48 horas", "Confirmar mi email");
         order.verifyNoMoreInteractions();
     }
 
@@ -77,7 +77,7 @@ class AccountVerificationNotifierTest {
         when(issuer.issue(7L, 19L)).thenReturn(Optional.of(value));
         new AccountVerificationNotifier(issuer, sender, base).notifyVerification(7L, 19L);
         var html = ArgumentCaptor.forClass(String.class);
-        verify(sender).enviar(eq(RECIPIENT), eq("Confirmá tu email de OrdenFix"), html.capture());
+        verify(sender).enviar(eq(RECIPIENT), eq("Confirmá tu email de OrdenFix"), anyString(), html.capture());
         assertThat(html.getValue()).contains(HtmlUtils.htmlEscape(name),
                 HtmlUtils.htmlEscape(base + "/verificar-email?token=" + TOKEN), "vence en 3 horas");
         assertThat(html.getValue()).doesNotContain(name, base + "/verificar-email?token=" + TOKEN);
@@ -107,10 +107,10 @@ class AccountVerificationNotifierTest {
     @Test void senderFailureIsAbsorbedWithoutReissuingTheAlreadyCommittedToken() {
         var issuer = mock(AccountVerificationTokenIssuer.class); var sender = mock(EmailSender.class);
         when(issuer.issue(7L, 19L)).thenReturn(Optional.of(delivery()));
-        doThrow(new IllegalStateException(TOKEN + RECIPIENT + URL)).when(sender).enviar(anyString(), anyString(), anyString());
+        doThrow(new IllegalStateException(TOKEN + RECIPIENT + URL)).when(sender).enviar(anyString(), anyString(), anyString(), anyString());
         assertThatCode(() -> new AccountVerificationNotifier(issuer, sender, URL).notifyVerification(7L, 19L))
                 .doesNotThrowAnyException();
-        verify(issuer, times(1)).issue(7L, 19L); verify(sender, times(1)).enviar(anyString(), anyString(), anyString());
+        verify(issuer, times(1)).issue(7L, 19L); verify(sender, times(1)).enviar(anyString(), anyString(), anyString(), anyString());
         verifyNoMoreInteractions(issuer, sender);
         assertFixedWarning("DELIVERY_FAILED");
     }

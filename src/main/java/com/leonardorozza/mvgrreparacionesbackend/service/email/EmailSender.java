@@ -7,4 +7,9 @@ package com.leonardorozza.mvgrreparacionesbackend.service.email;
 public interface EmailSender {
 
     void enviar(String para, String asunto, String cuerpoHtml);
+
+    /** Existing senders retain their HTML contract; SMTP may provide both alternatives. */
+    default void enviar(String para, String asunto, String cuerpoTexto, String cuerpoHtml) {
+        enviar(para, asunto, cuerpoHtml);
+    }
 }

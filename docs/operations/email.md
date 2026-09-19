@@ -78,6 +78,30 @@ commit; si hay rollback no se envía. Una falla de correo conserva la respuesta 
 para evitar revelar si existe la cuenta. No hay reintento durable ni garantía de entrega;
 el usuario puede volver a solicitar un enlace dentro de los límites existentes.
 
+## Presentación de los correos — 2026-09-19
+
+`AccountEmailTemplate` comparte el formato de verificación/alta y recuperación:
+marca OrdenFix, botón principal, vigencia, aviso ante una solicitud no reconocida
+y enlace completo alternativo. HTML usa tablas y estilos inline, tipografía de
+sistema y ningún recurso remoto. SMTP envía `multipart/alternative` con texto y
+HTML UTF-8, sin adjuntos. El asunto y el remitente configurado se conservan.
+
+El alta del titular y del empleado usa la confirmación de email; no dispara un
+segundo correo de bienvenida. La contraseña del empleado sigue siendo definida
+por el titular, nunca incluida en el mensaje. El botón de recuperación lleva al
+formulario: abrir el email o el enlace no cambia la contraseña por sí mismo.
+Los plazos actuales son 48 horas para verificar y una hora para recuperar; el
+render recibe el plazo del emisor. Reenviar conserva el reemplazo de tokens previo.
+
+Nombre y enlace se escapan al renderizar HTML. Las dos representaciones contienen
+el mismo enlace de un solo uso y no se registran en logs. La entrega sigue después
+del commit, con los mismos límites y respuesta genérica ante fallos.
+
+La [validación local del formato](../plans/2026-09-19-emails-cuenta-formato-design.md)
+incluye MIME y previews de navegador con datos sintéticos. Antes de cerrar Email C,
+comprobar los mensajes recibidos y sus enlaces en los clientes de correo elegidos,
+incluido móvil. Un preview de HTML no acredita el render del cliente receptor.
+
 ## Dominio configurado y siguiente entorno
 
 El dominio de envío ya configurado es `cuenta.orden-fix.com.ar`, con remitente
