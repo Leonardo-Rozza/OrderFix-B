@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.legal.manifest.persistence;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication;
+import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPrivateRequirementsHttpConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPublicDocumentHttpConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalPublicRequirementsHttpConfiguration;
 import com.leonardorozza.mvgrreparacionesbackend.legal.http.LegalRegistrationHttpConfiguration;
@@ -75,6 +76,8 @@ class LegalRegistrationBrowserE2E {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String DOC_ROLE = "registration_browser_documents";
     private static final String DOC_PASSWORD = "registration-browser-documents-fixture";
+    private static final String ACCOUNT_ROLE = "registration_browser_account";
+    private static final String ACCOUNT_PASSWORD = "registration-browser-account-fixture";
     private static final String FRONTEND_ORIGIN = "http://127.0.0.1:5175";
     private static final String PASSWORD = "Clave-sintetica-E2E-123";
     private static final String RUN_ID = UUID.randomUUID().toString();
@@ -106,6 +109,7 @@ class LegalRegistrationBrowserE2E {
             fixture.reset(publicationDirectory, LegalRegistrationBrowserE2E.class);
             extendOnlyTheEphemeralApplicationRole();
             provisionDocumentRole();
+            provisionAccountRole();
         }
         Map<String, String> values = new LinkedHashMap<>();
         values.put("spring.datasource.url", POSTGRES.getJdbcUrl());
@@ -145,7 +149,7 @@ class LegalRegistrationBrowserE2E {
         values.put("admin.password", "Browser-baseline-synthetic-123");
         values.put("plan.trial-dias", "14");
         values.put("plan.free.max-reparaciones-mes", "25"); // Explicit production default; test properties otherwise use 50.
-        values.put("ordenfix.legal.account-read.enabled", "false");
+        values.put(LegalPrivateRequirementsDatabaseConfiguration.ENABLED_PROPERTY, "true");
         values.put("ordenfix.legal.account-acceptance.enabled", "false");
         values.put(LegalRegistrationHttpConfiguration.CONSENT_PROPERTY, "true");
         values.put(LegalRegistrationHttpConfiguration.ENFORCEMENT_PROPERTY, "true");
@@ -156,6 +160,7 @@ class LegalRegistrationBrowserE2E {
         credentials(values, LegalPublicRequirementsDatabaseConfiguration.PROPERTY_PREFIX,
                 LegalRegistrationHttpITSupport.PUBLIC_ROLE, LegalRegistrationHttpITSupport.PUBLIC_PASSWORD);
         credentials(values, LegalPublicDocumentReadDatabaseConfiguration.PROPERTY_PREFIX, DOC_ROLE, DOC_PASSWORD);
+        credentials(values, LegalPrivateRequirementsDatabaseConfiguration.PROPERTY_PREFIX, ACCOUNT_ROLE, ACCOUNT_PASSWORD);
         values.put(LegalAcceptanceKeyConfiguration.IDEMPOTENCY_PREFIX + "keyring.1", LegalRegistrationWriterITSupport.HMAC);
         values.put(LegalAcceptanceKeyConfiguration.IDEMPOTENCY_PREFIX + "active-write-version", "1");
         values.put(LegalAcceptanceKeyConfiguration.METADATA_PREFIX + "keyring.7", LegalRegistrationWriterITSupport.AES);
@@ -248,10 +253,11 @@ class LegalRegistrationBrowserE2E {
             }
             Set<String> fields = scenario.equals("blocked") ? Set.of("case", "project", "email")
                     : scenario.equals("employees") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances",
-                            "idempotencyKey", "employee", "client", "ownerId", "otherOwnerId")
+                            "idempotencyKey", "employee", "client", "ownerId", "otherOwnerId", "employeeLegalHistoryTotal")
                     : scenario.equals("collections") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances",
                             "idempotencyKey", "ownerId", "employee", "clientId", "equipmentId", "repairId",
                             "originalCobroId", "correctedCobroId", "otherOwnerId")
+                    : scenario.equals("created") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey", "legalHistoryAcceptanceIds")
                     : Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey");
             assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrderElementsOf(fields);
             assertThat(email).isEqualTo(scenario + "-" + project + "-" + RUN_ID + "@ordenfix-e2e.test");
@@ -267,7 +273,13 @@ class LegalRegistrationBrowserE2E {
             assertThat(users.add(identity.userId())).isTrue(); assertThat(workshops.add(identity.tallerId())).isTrue();
             assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=? AND role='ADMIN'", Long.class,
                     identity.tallerId())).containsExactly(identity.userId());
-            if (scenario.equals("employees")) {
+            if (scenario.equals("created")) {
+                verifyOwnLegalHistory(entry, identity);
+            } else if (scenario.equals("employees")) {
+                assertThat(entry.path("employeeLegalHistoryTotal").isIntegralNumber()).isTrue();
+                assertThat(entry.path("employeeLegalHistoryTotal").intValue()).isZero();
+                long employeeId = positiveId(entry.path("employee"), "id");
+                assertThat(fixture.owner.queryForObject("SELECT count(*) FROM legal_aceptaciones WHERE user_id=?", Long.class, employeeId)).isZero();
                 verifyEmployee(entry, project, identity, otherWorkshop);
                 assertThat(employees.add(positiveId(entry.path("employee"), "id"))).isTrue();
                 assertThat(clients.add(positiveId(entry.path("client"), "id"))).isTrue();
@@ -323,6 +335,20 @@ class LegalRegistrationBrowserE2E {
         assertThat(after.get("legal_aceptacion_documentos") - baseline.get("legal_aceptacion_documentos")).isEqualTo(documents);
         assertThat(after.get("legal_aceptacion_metadatos_cifrados") - baseline.get("legal_aceptacion_metadatos_cifrados")).isEqualTo(16);
         assertThat(after.get("legal_idempotencia_sin_actos")).isEqualTo(baseline.get("legal_idempotencia_sin_actos"));
+    }
+
+    private void verifyOwnLegalHistory(JsonNode entry, Identity identity) {
+        JsonNode ids = entry.path("legalHistoryAcceptanceIds");
+        assertThat(ids.isArray()).isTrue();
+        assertThat(ids).isNotEmpty();
+        List<UUID> observed = new ArrayList<>();
+        for (JsonNode id : ids) {
+            assertThat(id.isTextual()).isTrue();
+            observed.add(UUID.fromString(id.textValue()));
+        }
+        assertThat(observed).doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(
+                fixture.owner.queryForList("SELECT id FROM legal_aceptaciones WHERE user_id=? AND taller_id=?",
+                        UUID.class, identity.userId(), identity.tallerId()));
     }
 
     private Map<Long, String> cobroRows() {
@@ -670,14 +696,18 @@ class LegalRegistrationBrowserE2E {
         var registration = child(application.getBean(LegalRegistrationHttpConfiguration.Capability.class), "registrationContext");
         var requirements = child(application.getBean(LegalPublicRequirementsHttpConfiguration.class), "requirementsContext");
         var documents = child(application.getBean(LegalPublicDocumentHttpConfiguration.class), "readerContext");
+        var account = child(application.getBean(LegalPrivateRequirementsHttpConfiguration.class), "requirementsContext");
+        String accountRole = account.getBean(LegalPrivateRequirementsDataSource.class).withinDeadline(deadline -> account.getBean(JdbcTemplate.class).queryForObject("SELECT current_user", String.class));
         String writerRole = registration.getBean(LegalPrivateRequirementsDataSource.class).withinDeadline(deadline -> registration.getBean(JdbcTemplate.class).queryForObject("SELECT current_user", String.class));
         String requirementsRole = requirements.getBean(LegalPublicRequirementsDataSource.class).withinDeadline(deadline -> requirements.getBean(JdbcTemplate.class).queryForObject("SELECT current_user", String.class));
         String documentsRole = documents.getBean(LegalPublicDocumentDataSource.class).withinDeadline(deadline -> documents.getBean(JdbcTemplate.class).queryForObject("SELECT current_user", String.class));
-        assertThat(List.of(appRole, writerRole, requirementsRole, documentsRole)).containsExactly(
-                LegalRegistrationHttpITSupport.APP_ROLE, LegalRegistrationWriterITSupport.ROLE, LegalRegistrationHttpITSupport.PUBLIC_ROLE, DOC_ROLE).doesNotHaveDuplicates();
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM pg_roles WHERE rolname IN (?,?,?,?) AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolbypassrls AND NOT rolreplication", Long.class,
-                appRole, writerRole, requirementsRole, documentsRole)).isEqualTo(4);
-        assertThat(fixture.owner.queryForObject("SELECT has_table_privilege(?, 'public.legal_aceptaciones', 'INSERT')", Boolean.class, appRole)).isFalse();
+        assertThat(List.of(appRole, writerRole, requirementsRole, documentsRole, accountRole)).containsExactly(
+                LegalRegistrationHttpITSupport.APP_ROLE, LegalRegistrationWriterITSupport.ROLE, LegalRegistrationHttpITSupport.PUBLIC_ROLE, DOC_ROLE, ACCOUNT_ROLE).doesNotHaveDuplicates();
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM pg_roles WHERE rolname IN (?,?,?,?,?) AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolbypassrls AND NOT rolreplication", Long.class,
+                appRole, writerRole, requirementsRole, documentsRole, accountRole)).isEqualTo(5);
+        for (String role : List.of(appRole, accountRole)) {
+            assertThat(fixture.owner.queryForObject("SELECT has_table_privilege(?, 'public.legal_aceptaciones', 'INSERT')", Boolean.class, role)).isFalse();
+        }
     }
     private static AnnotationConfigApplicationContext child(Object owner, String field) {
         var context = (AnnotationConfigApplicationContext) ReflectionTestUtils.getField(owner, field);
@@ -732,6 +762,28 @@ class LegalRegistrationBrowserE2E {
         var reader = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), DOC_ROLE, DOC_PASSWORD));
         new LegalV28AggregateSchemaVerifier(reader, "public").verify();
         new LegalPublicDocumentPrivilegeVerifier(reader, DOC_ROLE, "public").verify();
+    }
+    /** Dedicated account consumer: grants follow the existing exact verifier, never the app/writer role. */
+    private static void provisionAccountRole() {
+        LegalRestrictedRegistrationRoleFixture.requireSafeEphemeralDatabase(fixture.owner);
+        fixture.owner.execute("CREATE ROLE " + ACCOUNT_ROLE + " LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + ACCOUNT_PASSWORD + "'");
+        fixture.owner.execute("GRANT CONNECT ON DATABASE " + POSTGRES.getDatabaseName() + " TO " + ACCOUNT_ROLE);
+        fixture.owner.execute("GRANT USAGE ON SCHEMA public TO " + ACCOUNT_ROLE);
+        fixture.owner.execute("GRANT SELECT ON TABLE " + qualified(LegalPrivateRequirementsPrivilegeVerifier.READ_TABLES) + " TO " + ACCOUNT_ROLE);
+        LegalPrivateRequirementsPrivilegeVerifier.SELECT_COLUMNS.forEach((table, columns) ->
+                fixture.owner.execute("GRANT SELECT (" + String.join(",", columns.stream().sorted().toList())
+                        + ") ON TABLE public." + table + " TO " + ACCOUNT_ROLE));
+        fixture.owner.execute("GRANT INSERT ON TABLE " + qualified(LegalPrivateRequirementsPrivilegeVerifier.INSERT_TABLES) + " TO " + ACCOUNT_ROLE);
+        LegalPrivateRequirementsPrivilegeVerifier.UPDATE_COLUMNS.forEach((table, columns) ->
+                fixture.owner.execute("GRANT UPDATE (" + String.join(",", columns.stream().sorted().toList())
+                        + ") ON TABLE public." + table + " TO " + ACCOUNT_ROLE));
+        fixture.owner.execute("GRANT EXECUTE ON FUNCTION " + qualified(LegalPrivateRequirementsPrivilegeVerifier.PRIVILEGED_FUNCTIONS) + " TO " + ACCOUNT_ROLE);
+        fixture.owner.execute("ALTER ROLE " + ACCOUNT_ROLE + " IN DATABASE " + POSTGRES.getDatabaseName() + " SET search_path TO pg_catalog,public,pg_temp");
+        fixture.owner.execute("ALTER ROLE " + ACCOUNT_ROLE + " IN DATABASE " + POSTGRES.getDatabaseName() + " SET session_replication_role TO origin");
+        fixture.owner.execute("ALTER ROLE " + ACCOUNT_ROLE + " IN DATABASE " + POSTGRES.getDatabaseName() + " SET lo_compat_privileges TO off");
+        var reader = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), ACCOUNT_ROLE, ACCOUNT_PASSWORD));
+        new LegalV29AcceptanceSchemaVerifier(reader, "public").verify();
+        new LegalPrivateRequirementsPrivilegeVerifier(reader, ACCOUNT_ROLE, "public").verify();
     }
     private static String qualified(Collection<String> names) { return names.stream().map(value -> "public." + value).collect(Collectors.joining(",")); }
 
