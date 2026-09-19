@@ -66,7 +66,8 @@ final class LegalPrivatePhotoSchema {
                        AND r.oid='public.reparaciones'::regclass AND m.oid='public.flyway_schema_history'::regclass
                     """,Boolean.class);
             if(!Boolean.TRUE.equals(trustedOwner)) throw new IllegalStateException("Esquema de fotos privadas incompatible");
-            String expected=version>=35 ? LegalV35PhotoDeletionSchema.PHOTO_CATALOG
+            String expected=version>=37 ? LegalV37OperationalDeletionSchema.PHOTO_CATALOG
+                    : version>=35 ? LegalV35PhotoDeletionSchema.PHOTO_CATALOG
                     : version!=0 ? LegalV33ClosureSchema.PHOTO_CATALOG : EXPECTED;
             if(!expected.equals(snapshot(jdbc)))throw new IllegalStateException("Esquema de fotos privadas incompatible");
     }

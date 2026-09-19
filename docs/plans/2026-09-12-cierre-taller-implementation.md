@@ -1,8 +1,8 @@
 # Cierre coordinado del taller — implementación por cortes
 
 Fecha: 2026-09-12. Baselines backend `f3c67ca`, frontend `50eed86`.
-Estado: A, B y C cerrados. D tiene mantenimiento y diagnóstico local implementados;
-la eliminación integral sigue pendiente. E queda cerrado en local con API, pantalla
+Estado: A, B y C cerrados. D tiene mantenimiento, diagnóstico y borrado operativo
+interno implementados; la eliminación integral sigue pendiente. E queda cerrado en local con API, pantalla
 y gate integral aprobados. Sus flags permanecen apagados; activación productiva
 condicionada por D y los requisitos reales de salida.
 
@@ -887,3 +887,32 @@ nuevas de conciliación. BUILD SUCCESS en 1:06 min, PostgreSQL 16 descartable y
 control de empaquetado sin propiedades secretas aprobado. Se conservaron V27–V36
 y el frontend sin cambios. Detalle y comando reproducible en el diseño enlazado;
 no se afirma un nuevo clean verify integral. Entrega atómica sin push.
+
+
+## Continuación D — borrado operativo V37 (2026-09-19)
+
+El usuario confirmó eliminar datos operativos después de los siete días de
+recuperación, conservando por separado evidencia legal y suscripciones hasta
+definir su conservación. Se implementa esa capacidad en una migración nueva;
+V27–V36 no se editan. El [diseño del corte](2026-09-19-cierre-borrado-operativo-design.md)
+registra alcance, decisiones, controles y validación.
+
+`WorkshopOperationalDeletionService.deleteBatch` elimina hasta 25 objetivos de una
+categoría con gate exclusivo, capacidad V37 acreditada, cierre actual coherente y
+gracia vencida. Conserva un recibo durable para replay sin DML. Dependencias,
+pertenencia cruzada y fotos no acreditadas impiden un borrado forzado; no hay
+cascadas globales ni desactivación de guardas. El taller permanece RESTRINGIDO.
+
+El flag interno `ordenfix.cuenta.cierre.operational-deletion-enabled` está apagado
+por defecto. No hay endpoint, scheduler ni llamadas reales a proveedores. Las
+identidades, evidencia legal, suscripciones y backups siguen pendientes del alcance
+final; este resultado no equivale a eliminación integral del taller.
+
+
+Validación del corte: gate integral de 8.010 unitarias y 1.919 IT. Su única falla
+fue una expectativa SQL de capacidad que aún no contemplaba V37; se corrigieron
+dos literales y se repitió la clase completa, aprobada junto al control de JAR sin
+propiedades secretas. Evidencia combinada: **9.929 casos distintos sin pendientes**.
+El diseño enlazado conserva el resultado original y el comando de corrección; no
+se afirma una segunda corrida integral. V27–V36 y frontend intactos. Entrega
+atómica sin push; D sigue parcial para el alcance integral de cuenta.

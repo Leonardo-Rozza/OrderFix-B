@@ -69,7 +69,7 @@ class LegalPrivatePhotoOperationsIT {
         owner.execute("GRANT UPDATE(estado,asset_id,asset_version,lease_id,lease_hasta,asociada_en) ON public.reparacion_fotos_privadas TO "+ROLE);
         owner.execute("GRANT SELECT(id,taller_id),UPDATE(id) ON public.reparaciones TO "+ROLE);
         owner.execute("GRANT EXECUTE ON FUNCTION public.foto_privada_insert_guard_v30(),public.foto_atestacion_insert_guard_v30(),public.foto_privada_completa_v30(),public.foto_privada_update_guard_v30() TO "+ROLE);
-        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("36").load().migrate();
+        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("37").load().migrate();
         owner.execute("GRANT SELECT(cierre_estado) ON public.talleres TO "+ROLE);
         grantDeletionEvidence(owner,ROLE);
         JdbcTemplate restricted=new JdbcTemplate(new DriverManagerDataSource(credentials.jdbcUrl(),credentials.username(),credentials.password()));
@@ -557,6 +557,72 @@ class LegalPrivatePhotoOperationsIT {
         assertThat(result.count(WorkshopClosureDeletionInventory.Metric.PRIVATE_PHOTO_DELETIONS_CONFIRMED)).isZero();
         assertThat(result.categories().get(WorkshopClosureDeletionInventory.Category.PRIVATE_PHOTOS).reviewReasons())
                 .contains(WorkshopClosureDeletionInventory.ReviewReason.PHOTO_DELETION_RECONCILIATION_REQUIRED);
+    }
+
+    @Test void operationalErasureDetachesOnlyAConfirmedPhotoAndPreservesItsEvidence() throws Exception {
+        var photo=associate();service.delete(principal(actor),repair,photo.id());confirmed(photo.id());
+        var receipt=deletion(photo.id());
+        var attestation=owner.queryForMap("SELECT to_jsonb(a)::text AS content,xmin::text AS version FROM reparacion_foto_atestaciones a WHERE foto_id=?",photo.id());
+        UUID closure=expiredOperationalClosure();
+        var photoBefore=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id());
+        int calls=storage.deleteAttempts.size();
+        assertThatThrownBy(()->owner.update("DELETE FROM reparaciones WHERE id=?",repair)).isInstanceOf(RuntimeException.class);
+        var deletionService=new WorkshopOperationalDeletionService(owner,new DataSourceTransactionManager(owner.getDataSource()),true);
+        var result=deletionService.deleteBatch(actor.tallerId(),closure,UUID.randomUUID(),WorkshopOperationalDeletionService.Category.REPARACIONES);
+        assertThat(result.status()).isEqualTo(WorkshopOperationalDeletionService.Status.DELETED);
+        assertThat(result.deleted()).isEqualTo(1);
+        var photoAfter=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo.id());
+        assertThat(photoAfter).containsEntry("reparacion_id",null).containsEntry("reparacion_original_id",repair);
+        photoBefore.remove("reparacion_id");photoAfter.remove("reparacion_id");assertThat(photoAfter).isEqualTo(photoBefore);
+        assertThat(deletion(photo.id())).isEqualTo(receipt);
+        assertThat(owner.queryForMap("SELECT to_jsonb(a)::text AS content,xmin::text AS version FROM reparacion_foto_atestaciones a WHERE foto_id=?",photo.id())).isEqualTo(attestation);
+        assertThat(storage.deleteAttempts).hasSize(calls);
+        assertThat(owner.queryForObject("SELECT cierre_estado FROM talleres WHERE id=?",String.class,actor.tallerId())).isEqualTo("RESTRINGIDO");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"ASSOCIATED","ABSENCE_ONLY","MISSING_RECEIPT"})
+    void operationalErasureCannotTreatPendingOrUnprovenPhotoDeletionAsComplete(String kind) throws Exception {
+        UUID id;
+        if(kind.equals("ABSENCE_ONLY")) {id=create().id();service.delete(principal(actor),repair,id);}
+        else {
+            id=associate().id();
+            if(kind.equals("MISSING_RECEIPT")) {
+                service.delete(principal(actor),repair,id);
+                // Disposable historical fixture, as in the existing pre-V35 tombstone test.
+                owner.execute("TRUNCATE reparacion_foto_eliminaciones");
+            }
+        }
+        UUID closure=expiredOperationalClosure();
+        var before=owner.queryForMap("SELECT to_jsonb(f)::text AS content,xmin::text AS version FROM reparacion_fotos_privadas f WHERE id=?",id);
+        long receipts=count("cuenta_borrado_lotes");int calls=storage.deleteAttempts.size();
+        var deletionService=new WorkshopOperationalDeletionService(owner,new DataSourceTransactionManager(owner.getDataSource()),true);
+        assertThatThrownBy(()->deletionService.deleteBatch(actor.tallerId(),closure,UUID.randomUUID(),WorkshopOperationalDeletionService.Category.REPARACIONES))
+                .isInstanceOf(WorkshopOperationalDeletionService.Rejected.class).hasNoCause();
+        assertThat(owner.queryForObject("SELECT count(*) FROM reparaciones WHERE id=?",Long.class,repair)).isEqualTo(1);
+        assertThat(owner.queryForMap("SELECT to_jsonb(f)::text AS content,xmin::text AS version FROM reparacion_fotos_privadas f WHERE id=?",id)).isEqualTo(before);
+        assertThat(count("cuenta_borrado_lotes")).isEqualTo(receipts);assertThat(count("cuenta_borrado_contextos")).isZero();
+        assertThat(storage.deleteAttempts).hasSize(calls);
+    }
+
+    /** Historical consumer fixture with real V33 guards; no production clock or policy is changed. */
+    private UUID expiredOperationalClosure() {
+        UUID reference=UUID.randomUUID();
+        var tx=new org.springframework.transaction.support.TransactionTemplate(new DataSourceTransactionManager(owner.getDataSource()));
+        tx.executeWithoutResult(status->{
+            new WorkshopClosureGate(owner).lockExclusive(actor.tallerId());
+            var confirmed=owner.queryForObject("SELECT clock_timestamp()-INTERVAL '8 days'",OffsetDateTime.class);
+            owner.update("UPDATE users SET token_version=token_version+1 WHERE taller_id=?",actor.tallerId());
+            owner.update("""
+                    INSERT INTO cuenta_cierres(referencia,taller_id,titular_id,generacion,estado,politica,confirmado_en,reversible_hasta,eliminacion_prevista_en)
+                    VALUES(?,?,?,1,'RESTRINGIDO','ordenfix-cierre/1',?,?,?)
+                    """,reference,actor.tallerId(),actor.userId(),confirmed,confirmed.plusDays(7),confirmed.plusDays(37));
+            owner.update("""
+                    UPDATE talleres SET cierre_estado='RESTRINGIDO',cierre_version=1,cierre_referencia=?,cierre_confirmado_en=?,
+                      cierre_reversible_hasta=?,cierre_eliminacion_prevista_en=? WHERE id=?
+                    """,reference,confirmed,confirmed.plusDays(7),confirmed.plusDays(37),actor.tallerId());
+        });
+        return reference;
     }
 
     private static void assertSqlGuard(Runnable action,String message) {

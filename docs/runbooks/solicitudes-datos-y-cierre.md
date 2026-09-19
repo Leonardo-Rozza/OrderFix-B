@@ -248,3 +248,33 @@ llama al proveedor real por defecto y carece de scheduler/endpoint.
 Los avisos inciertos y REVISAR_RENOVACION conservan su circuito pendiente. El
 registro de la suscripción de OrdenFix se mantiene separado del control opcional de
 cobros del taller: esta conciliación no interviene en pagos taller–cliente.
+
+
+### Borrado operativo por categorías — V37
+
+El alcance confirmado comprende ítems de presupuestos, presupuestos, registros de
+cobros, repuestos, reparaciones, equipos, clientes y artículos. La operación interna
+`WorkshopOperationalDeletionService.deleteBatch(taller,cierre,lote,categoria)`
+requiere V37 acreditada y opt-in explícito; permanece deshabilitada por defecto.
+Es una herramienta de desarrollo/operación controlada, sin endpoint o scheduler.
+Los IDs no reemplazan autorización HTTP ni facultan a soporte a ejecutar SQL libre.
+
+Cada invocación elige hasta 25 filas elegibles de una sola categoría. Procesar las
+categorías en el orden del enum del servicio; un UUID distinto representa otro
+lote, y repetir el mismo recupera su constancia original. DELETED acredita sólo
+esas filas; REUSED conserva cantidad/fecha/pendientes originales. EMPTY indica que
+no se eligieron filas, y `remaining=true` exige revisar dependencias pendientes.
+No declarar completado por recibir EMPTY ni por sumar cantidades de replays.
+
+Las fotos legacy y privadas sin borrado de identidad acreditado bloquean el trabajo.
+Usar su circuito de resolución; no quitar URLs o recibos para sortear el control.
+Las fotos privadas ya eliminadas conservan identidad y evidencia, aunque la FK
+opcional a la reparación se desvincule. Referencias cruzadas o ciclos de garantías
+requieren revisión, sin cascadas forzadas o ediciones de la constancia.
+
+Usuarios, ancla/historial del taller, evidencia legal, fotos/recibos conservados y
+suscripciones no se eliminan por este servicio. Los tokens/exportaciones mantienen
+el mantenimiento temporal existente; sus copias no se incluyen en la constancia de
+borrado de filas operativas. Continúan pendientes retención final, supresión de
+identidad, efectos remotos restantes, registro externo y recuperación del despliegue.
+El estado continúa RESTRINGIDO y el cierre productivo conserva su gate pendiente.

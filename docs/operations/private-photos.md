@@ -6,8 +6,8 @@ Describe la implementación del corte del 9 de septiembre de 2026; el gate y la 
 
 V35 incorpora constancias durables de eliminación. V36 agrega categorías de equipos
 sin modificar los catálogos ni permisos de fotos; el preflight admite ambas versiones
-explícitas y sus checksums. El backend completo actual requiere V36 para su modelo
-JPA de equipos. V27–V35 se conservan congeladas.
+explícitas y sus checksums. V37 agrega el borrado operativo y su desvinculación acotada de fotos ya eliminadas.
+El backend completo actual se migra hasta V37. V27–V36 se conservan congeladas.
 
 ## Activación y configuración
 
@@ -118,7 +118,7 @@ El pool privado tiene como máximo dos conexiones y no es el DataSource de JPA. 
 
 ## Esquema, publicación y rol
 
-El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Para el backend completo actual, aplicar las migraciones hasta V36 con la identidad de migraciones; no editar V27–V35. V33 coordina las operaciones con el estado de cierre del taller, V34 agrega confirmaciones y efectos internos y V35 conserva objetivos y resultados de eliminación de fotos. El servicio de fotos exige la capacidad de constancias introducida por V35, acreditada sobre V35 o V36; los demás consumidores mantienen los contratos históricos que les corresponden. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
+El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Para el backend completo actual, aplicar las migraciones hasta V37 con la identidad de migraciones; no editar V27–V36. V33 coordina las operaciones con el estado de cierre del taller, V34 agrega confirmaciones y efectos internos y V35 conserva objetivos y resultados de eliminación de fotos. El servicio de fotos exige la capacidad de constancias introducida por V35, acreditada sobre V35, V36 o V37; los demás consumidores mantienen los contratos históricos que les corresponden. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
 
 El consumidor usa el inventario de `LegalAcceptancePrivilegeVerifier` más su extensión de fotos. Es un rol dedicado `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, sin pertenencias ni propiedad de base/esquema/objetos. Necesita el inventario nominal legal previo y, adicionalmente:
 
@@ -178,3 +178,15 @@ borrado remoto, y esta decisión no fija la retención de futuros datos de clien
 Con el flag activo, crear/actualizar una reparación no puede introducir URLs legacy nuevas, duplicarlas ni cambiarles el momento. Se preserva la lectura de URLs ya existentes y su eliminación de la lista; no hay migración automática ni privatización/borrado remoto de esos objetos históricos. Con el flag apagado, permanece el comportamiento legacy anterior: el flag no es una medida para cerrar las referencias antiguas en el proveedor.
 
 El laboratorio de navegador conserva PostgreSQL y HTTP reales con almacenamiento local por defecto; los tests predeterminados del adapter usan un servidor controlado. Además del ensayo separado del 2026-09-12, la corrida opt-in del 2026-09-19 acreditó navegador → HTTP → PostgreSQL → Cloudinary real según la sección anterior. Queda repetir ese recorrido en staging con su rol/configuración reales: acceso por taller, lectura sólo vía backend, denegación anónima, borrado y reintento. La ruta de seguimiento anónimo y el resumen digital no deben recibir URLs ni IDs del proveedor. La ausencia del asset en Admin API no acredita destrucción de todas las copias de backup ni invalidación de cachés CDN. No activar MP ni transporte de email para acreditar este flujo.
+
+
+### Compatibilidad con borrado operativo V37
+
+V37 conserva las guardas V30/V35 y agrega una excepción limitada a la FK opcional
+`reparacion_id` de una foto ELIMINADA con recibo IDENTIDAD_ELIMINADA. Sólo procede en
+el lote de borrado autorizado del cierre, con identidad y objetivos comprobados.
+La intención, `reparacion_original_id`, atestación y recibo se conservan; no se
+convierten en evidencia de eliminación de la cuenta o de respaldos remotos.
+El rol de fotos no recibe acceso a las tablas/función de borrado operativo. Los
+nuevos guards se ejecutan mediante triggers con su propietario, y se acreditan
+con huellas V37 separadas de los contratos anteriores.
