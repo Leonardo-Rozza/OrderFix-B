@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.persistence.entity;
 
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -27,6 +28,11 @@ public class Equipo {
 
     @Column(nullable = false, length = 60)
     private String modelo;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private EquipoTipo tipo = EquipoTipo.OTRO;
 
     @Column(length = 30)
     private String imei;

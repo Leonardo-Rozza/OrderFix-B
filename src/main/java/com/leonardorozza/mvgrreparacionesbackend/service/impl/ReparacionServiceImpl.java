@@ -10,6 +10,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Repuesto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Taller;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.MomentoFoto;
@@ -154,6 +155,7 @@ public class ReparacionServiceImpl implements ReparacionService {
         Equipo equipo = new Equipo();
         equipo.setMarca(request.getEquipoMarca());
         equipo.setModelo(request.getEquipoModelo());
+        equipo.setTipo(request.getEquipoTipo() != null ? request.getEquipoTipo() : EquipoTipo.OTRO);
         equipo.setCliente(cliente);
         equipo.setTaller(tenantService.currentTallerRef());
         equipo = equipoRepository.save(equipo);

@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service.dto.reparacion;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.CuentaVinculada;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoReparacion;
 import lombok.Data;
@@ -18,6 +19,7 @@ public class ReparacionResponseDTO {
     // Denormalizado (para listados autocontenidos)
     private String equipoMarca;
     private String equipoModelo;
+    private EquipoTipo equipoTipo;
     private Long clienteId;
     private String clienteNombre;
     private String clienteApellido;

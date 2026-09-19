@@ -296,7 +296,7 @@ class WorkshopClosureBackupRecoveryIT {
         assertThat(sequences(target)).isEqualTo(backup.sequences());
         assertThat(triggers(target)).isEqualTo(backup.triggers());
         assertThat(target.jdbc().queryForObject("SELECT max(version::int) FROM flyway_schema_history WHERE success", Integer.class))
-                .isEqualTo(35);
+                .isEqualTo(36);
     }
 
     private String copyToTarget(Path file) throws Exception {

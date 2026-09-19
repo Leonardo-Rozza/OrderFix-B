@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.persistence.repository;
 
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -28,6 +29,7 @@ public interface EquipoRepository extends JpaRepository<Equipo, Long> {
             SELECT e FROM Equipo e
             JOIN FETCH e.cliente c
             WHERE e.taller.id = :tallerId
+              AND (:tipo IS NULL OR e.tipo = :tipo)
               AND (:q IS NULL OR :q = ''
                    OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%'))
@@ -38,6 +40,7 @@ public interface EquipoRepository extends JpaRepository<Equipo, Long> {
             countQuery = """
             SELECT COUNT(e) FROM Equipo e JOIN e.cliente c
             WHERE e.taller.id = :tallerId
+              AND (:tipo IS NULL OR e.tipo = :tipo)
               AND (:q IS NULL OR :q = ''
                    OR LOWER(e.marca) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(e.modelo) LIKE LOWER(CONCAT('%', :q, '%'))
@@ -45,7 +48,8 @@ public interface EquipoRepository extends JpaRepository<Equipo, Long> {
                    OR LOWER(c.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(c.apellido) LIKE LOWER(CONCAT('%', :q, '%')))
             """)
-    Page<Equipo> search(@Param("tallerId") Long tallerId, @Param("q") String q, Pageable pageable);
+    Page<Equipo> search(@Param("tallerId") Long tallerId, @Param("q") String q,
+                       @Param("tipo") EquipoTipo tipo, Pageable pageable);
 
     @Query("SELECT e.cliente.id, COUNT(e) FROM Equipo e WHERE e.cliente.id IN :clienteIds GROUP BY e.cliente.id")
     List<Object[]> countByClienteIds(@Param("clienteIds") List<Long> clienteIds);

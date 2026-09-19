@@ -1,6 +1,7 @@
 package com.leonardorozza.mvgrreparacionesbackend.service;
 
 
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoResponseDTO;
 import org.springframework.data.domain.Page;
@@ -15,7 +16,7 @@ public interface EquipoService {
 
     EquipoResponseDTO obtenerPorId(Long id);
 
-    Page<EquipoResponseDTO> listar(String q, Pageable pageable);
+    Page<EquipoResponseDTO> listar(String q, EquipoTipo tipo, Pageable pageable);
 
     List<EquipoResponseDTO> listarPorCliente(Long clienteId);
 

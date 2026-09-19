@@ -1,5 +1,6 @@
 package com.leonardorozza.mvgrreparacionesbackend.controller;
 
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.service.EquipoService;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoRequestDTO;
 import com.leonardorozza.mvgrreparacionesbackend.service.dto.equipo.EquipoResponseDTO;
@@ -51,11 +52,12 @@ public class EquipoController {
     }
 
     @GetMapping
-    @Operation(summary = "Listar equipos (paginado). Búsqueda por marca/modelo/IMEI con ?q=")
+    @Operation(summary = "Listar equipos (paginado). Búsqueda por marca/modelo/serie/IMEI con ?q= y filtro exacto ?tipo=")
     public ResponseEntity<Page<EquipoResponseDTO>> listar(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) EquipoTipo tipo,
             @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ResponseEntity.ok(equipoService.listar(q, pageable));
+        return ResponseEntity.ok(equipoService.listar(q, tipo, pageable));
     }
 
     @GetMapping("/cliente/{clienteId}")
@@ -72,4 +74,3 @@ public class EquipoController {
         return ResponseEntity.noContent().build();
     }
 }
-

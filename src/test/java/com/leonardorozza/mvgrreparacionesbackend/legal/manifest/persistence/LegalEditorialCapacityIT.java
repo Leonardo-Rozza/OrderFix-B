@@ -253,7 +253,7 @@ class LegalEditorialCapacityIT {
                     "\"flyway_schema_history\" WHERE version = ?"),
             readCap("compatibility-flyway-history", 1,
                     COMPATIBILITY_HISTORY_SQL,
-                    "history.version IN (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "history.version IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     "WHERE first_v27.version = ?"),
             readCap("compatibility-v29-absence", 1,
                     COMPATIBILITY_ABSENCE_SQL,
@@ -340,7 +340,7 @@ class LegalEditorialCapacityIT {
     private static final Map<String, String> SQL_LITERAL_LIMITS = Map.of(
             "publication-by-external-id", " LIMIT 2",
             "publication-by-id", " LIMIT 2",
-            "compatibility-flyway-history", " LIMIT 10");
+            "compatibility-flyway-history", " LIMIT 11");
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine")

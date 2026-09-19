@@ -5,6 +5,7 @@ import com.leonardorozza.mvgrreparacionesbackend.exceptions.ConflictException;
 import com.leonardorozza.mvgrreparacionesbackend.exceptions.ResourceNotFoundException;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.EquipoRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ReparacionRepository;
@@ -59,6 +60,7 @@ public class EquipoServiceImpl implements EquipoService {
 
         equipo.setMarca(request.getMarca());
         equipo.setModelo(request.getModelo());
+        if (request.getTipo() != null) equipo.setTipo(request.getTipo());
         equipo.setImei(request.getImei());
         equipo.setColor(request.getColor());
         equipo.setDescripcion(request.getDescripcion());
@@ -78,8 +80,8 @@ public class EquipoServiceImpl implements EquipoService {
 
     @Override
     @Transactional(readOnly = true)
-    public Page<EquipoResponseDTO> listar(String q, Pageable pageable) {
-        Page<Equipo> page = equipoRepository.search(tenantService.currentTallerId(), q, pageable);
+    public Page<EquipoResponseDTO> listar(String q, EquipoTipo tipo, Pageable pageable) {
+        Page<Equipo> page = equipoRepository.search(tenantService.currentTallerId(), q, tipo, pageable);
 
         java.util.List<Long> ids = page.getContent().stream().map(Equipo::getId).toList();
         java.util.Map<Long, Long> conteos = ids.isEmpty()

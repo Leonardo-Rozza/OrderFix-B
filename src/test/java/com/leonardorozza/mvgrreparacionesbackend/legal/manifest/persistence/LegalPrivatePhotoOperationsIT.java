@@ -69,7 +69,7 @@ class LegalPrivatePhotoOperationsIT {
         owner.execute("GRANT UPDATE(estado,asset_id,asset_version,lease_id,lease_hasta,asociada_en) ON public.reparacion_fotos_privadas TO "+ROLE);
         owner.execute("GRANT SELECT(id,taller_id),UPDATE(id) ON public.reparaciones TO "+ROLE);
         owner.execute("GRANT EXECUTE ON FUNCTION public.foto_privada_insert_guard_v30(),public.foto_atestacion_insert_guard_v30(),public.foto_privada_completa_v30(),public.foto_privada_update_guard_v30() TO "+ROLE);
-        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("35").load().migrate();
+        Flyway.configure().dataSource(owner.getDataSource()).locations("classpath:db/migration").target("36").load().migrate();
         owner.execute("GRANT SELECT(cierre_estado) ON public.talleres TO "+ROLE);
         grantDeletionEvidence(owner,ROLE);
         JdbcTemplate restricted=new JdbcTemplate(new DriverManagerDataSource(credentials.jdbcUrl(),credentials.username(),credentials.password()));

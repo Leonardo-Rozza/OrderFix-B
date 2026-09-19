@@ -103,9 +103,9 @@ class PostgresMigrationIT {
                 .map(MigrationInfo::getVersion)
                 .filter(version -> version != null)
                 .map(Object::toString))
-                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35");
+                .contains("17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36");
 
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("35");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("36");
 
         Integer migracionV28Exitosa = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -308,7 +308,7 @@ class PostgresMigrationIT {
     }
 
     @Test
-    void latestV35ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
+    void latestV36ConservaLaEstructuraLegalFotosYCuentaSinDatosSemilla() {
         var tablasLegales = jdbcTemplate.queryForList("""
                 SELECT table_name
                 FROM information_schema.tables

@@ -26,6 +26,9 @@ import java.util.regex.Pattern;
 final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
 
     static final String ISSUE_LOCATION = "database/schema";
+    // V36 changes an independent business column. Legal/photo catalogs stay at their frozen V35 values.
+    static final String V36_FLYWAY_SCRIPT = "V36__tipo_equipos_multidispositivo.sql";
+    static final int V36_FLYWAY_CHECKSUM = -1571524851; // Captured by LegalV36SchemaSnapshot on clean PostgreSQL 16.
 
     private static final Pattern SAFE_SCHEMA = Pattern.compile("[a-z_][a-z0-9_]{0,62}");
     private static final String TABLE_NAMES = sqlStrings(
@@ -97,7 +100,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             incompatible();
         }
         verifySchemaFunctions();
-        if (version == RuntimeVersion.V35) LegalV35PhotoDeletionSchema.verify(jdbc);
+        if (version.ordinal() >= RuntimeVersion.V35.ordinal()) LegalV35PhotoDeletionSchema.verify(jdbc);
         if (photos) LegalPrivatePhotoSchema.verify(jdbc, closure);
         if (version == RuntimeVersion.V34) LegalV34ClosureSchema.verify(jdbc);
         else if (version == RuntimeVersion.V33) LegalV33ClosureSchema.verify(jdbc);
@@ -127,13 +130,14 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             case V33 -> 33;
             case V34 -> 34;
             case V35 -> 35;
+            case V36 -> 36;
             default -> 0;
         };
     }
 
-    boolean usesPhotoDeletionSchema() { return compatibleVersion() == RuntimeVersion.V35; }
+    boolean usesPhotoDeletionSchema() { return compatibleVersion().ordinal() >= RuntimeVersion.V35.ordinal(); }
 
-    /** Exact ordered history since V27; the tenth row is a bounded incompatibility sentinel. */
+    /** Exact ordered history since V27; the eleventh row is a bounded incompatibility sentinel. */
     private RuntimeVersion compatibleVersion() {
         List<FlywayState> actual = flywayStates();
         for (RuntimeVersion version : RuntimeVersion.values()) {
@@ -255,14 +259,14 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                                      FROM %s candidate
                                ) AS latest
                           FROM %s history
-                         WHERE history.version IN (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         WHERE history.version IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             OR history.installed_rank >= (
                                 SELECT pg_catalog.min(first_v27.installed_rank)
                                   FROM %s first_v27
                                  WHERE first_v27.version = ?
                             )
                          ORDER BY history.installed_rank
-                         LIMIT 10
+                         LIMIT 11
                         """.formatted(history, history, history),
                 (resultSet, rowNumber) -> new FlywayState(
                         resultSet.getString("version"),
@@ -274,7 +278,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V28,
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V29,
-                "30", "31", "32", "33", "34", "35",
+                "30", "31", "32", "33", "34", "35", "36",
                 LegalV29AcceptanceInventory.FLYWAY_VERSION_V27);
     }
 
@@ -327,9 +331,12 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             states.add(new FlywayState("34", "SQL", LegalV34ClosureSchema.FLYWAY_SCRIPT,
                     LegalV34ClosureSchema.FLYWAY_CHECKSUM, true, version == RuntimeVersion.V34));
         }
-        if (version == RuntimeVersion.V35) {
+        if (version.ordinal() >= RuntimeVersion.V35.ordinal()) {
             states.add(new FlywayState("35", "SQL", LegalV35PhotoDeletionSchema.FLYWAY_SCRIPT,
-                    LegalV35PhotoDeletionSchema.FLYWAY_CHECKSUM, true, true));
+                    LegalV35PhotoDeletionSchema.FLYWAY_CHECKSUM, true, version == RuntimeVersion.V35));
+        }
+        if (version == RuntimeVersion.V36) {
+            states.add(new FlywayState("36", "SQL", V36_FLYWAY_SCRIPT, V36_FLYWAY_CHECKSUM, true, true));
         }
         return List.copyOf(states);
     }
@@ -686,7 +693,7 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
             boolean success,
             boolean latest) { }
 
-    private enum RuntimeVersion { V27, V28, V29, V30, V31, V32, V33, V34, V35 }
+    private enum RuntimeVersion { V27, V28, V29, V30, V31, V32, V33, V34, V35, V36 }
 
     private record RelationTopologyState(
             String relation,

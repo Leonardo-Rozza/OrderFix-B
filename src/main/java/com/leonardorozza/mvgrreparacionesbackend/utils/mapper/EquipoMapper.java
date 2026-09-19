@@ -11,6 +11,7 @@ import org.mapstruct.Mapping;
 public interface EquipoMapper {
 
     @Mapping(target = "cliente.id", source = "clienteId")
+    @Mapping(target = "tipo", source = "tipo", defaultValue = "OTRO")
     Equipo toEntity(EquipoRequestDTO dto);
 
     @Mapping(target = "clienteId", source = "cliente.id")
