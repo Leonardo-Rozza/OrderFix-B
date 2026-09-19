@@ -861,3 +861,29 @@ Corte V35 entregado en `826ea28`. La validación focal y el gate consolidado con
 se registran en el diseño y en el plan de equipos. La integral ejecutó todas sus
 clases; las dos fixtures antiguas detectadas se corrigieron y revalidaron focalmente.
 Esto no cambia el estado parcial de D ni habilita supresión o reapertura productiva.
+
+
+## Continuación D — conciliación de renovaciones inciertas (2026-09-19)
+
+Se agrega `WorkshopClosureRenewalReconciler.reconcile(tallerId, effectId)` para
+resolver un CANCELAR_RENOVACION incierto mediante una consulta al puerto existente.
+Sólo confirma CANCELED con identidad exacta y con las versiones del efecto y vínculo
+sin cambios desde la captura. Las respuestas ambiguas dejan INCIERTO sin DML;
+repetir un objetivo confirmado devuelve REUSED sin proveedor ni escritura.
+
+El [diseño del corte](2026-09-19-cierre-conciliacion-renovaciones-design.md) detalla
+pertenencia, causalidad, plazo de 120 s y orden gate → vínculo → efecto. No se usa un
+lease EN_CURSO: permitiría al worker existente retomar una conciliación vencida como
+cancelación. No se reinician intentos, no se vuelve a cancelar ni se envían avisos.
+No modifica planes, vínculos, reglas de renovación o migraciones V27–V36.
+
+Esto resuelve localmente el caso concreto CANCELAR_RENOVACION/INCIERTO del punto 4.
+Persisten REVISAR_RENOVACION, avisos inciertos, alertas, adaptador real y registro
+externo. D sigue parcial, incluida la retención/supresión definitiva y recuperación
+de despliegue. No habilita cierre público ni opera con proveedores reales.
+
+Validación focal: **118 pruebas aprobadas** (57 unitarias y 61 IT), incluidas 22
+nuevas de conciliación. BUILD SUCCESS en 1:06 min, PostgreSQL 16 descartable y
+control de empaquetado sin propiedades secretas aprobado. Se conservaron V27–V36
+y el frontend sin cambios. Detalle y comando reproducible en el diseño enlazado;
+no se afirma un nuevo clean verify integral. Entrega atómica sin push.

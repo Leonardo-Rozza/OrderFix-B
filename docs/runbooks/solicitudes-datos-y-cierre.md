@@ -218,3 +218,33 @@ cargas tardías y copias remotas, resolución de efectos inciertos y recuperaci�
 productiva requieren ejecución y verificación posteriores. V35 ya conserva objetivos
 y resultados de las rutas de fotos privadas actuales, con los límites documentados. Una limpieza local sin pendientes nunca debe comunicarse
 como baja o eliminación integral completada.
+
+
+### Conciliación interna de renovaciones inciertas
+
+Desde el corte del 2026-09-19, `WorkshopClosureRenewalReconciler.reconcile(tallerId,
+effectId)` puede consultar un objetivo CANCELAR_RENOVACION/INCIERTO y registrar
+CONFIRMADO sólo si el puerto informa CANCELED con ambas identidades exactas. El
+servicio verifica pertenencia y que las filas no cambiaron durante la consulta;
+no envía otra cancelación, no modifica el plan ni quita la marca de bloqueo del
+vínculo. También sirve para un vínculo histórico después de restaurar el taller.
+
+| Resultado | Interpretación interna |
+| --- | --- |
+| CONFIRMED | Confirmación durable de esta identidad; no acredita eliminación de datos. |
+| REUSED | Ya estaba confirmado; sin consulta al proveedor ni escritura. |
+| UNRESOLVED | Consulta fallida, ambigua, activa o identidad discrepante; continúa pendiente. |
+| STALE | Captura vencida o registro cambiado; exige una consulta nueva. |
+| NOT_ELIGIBLE | Objetivo ausente/ajeno, identidad incompleta, otro estado o tipo de efecto. |
+| PORT_UNAVAILABLE | No hay puerto instalado; no se puede comprobar el resultado remoto. |
+
+Errores SQL o gate ocupado rechazan la operación sin acreditar éxito; cualquier
+escritura de confirmación fallida hace rollback. No resetear intentos ni editar
+CONFIRMADO por SQL. Los IDs son argumentos internos, no autorización para soporte
+ni para una API. El puerto real sigue sin instalarse; deberá acreditar la cuenta y
+aplicación del proveedor, frescura de la observación y timeout. La operación no
+llama al proveedor real por defecto y carece de scheduler/endpoint.
+
+Los avisos inciertos y REVISAR_RENOVACION conservan su circuito pendiente. El
+registro de la suscripción de OrdenFix se mantiene separado del control opcional de
+cobros del taller: esta conciliación no interviene en pagos taller–cliente.
