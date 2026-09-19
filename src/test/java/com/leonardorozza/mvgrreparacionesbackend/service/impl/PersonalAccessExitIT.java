@@ -95,6 +95,8 @@ class PersonalAccessExitIT extends IntegrationTestBase {
     @Test
     void ownExitRevokesEverySessionAndAdminReactivationDoesNotRestoreOldTokens() throws Exception {
         Identity admin = seed(UserRole.ADMIN);
+        // Reactivation requires a verified owner; the exiting employee remains unverified.
+        owner().update("UPDATE users SET email_verificado=true WHERE id=?", admin.userId());
         Identity employee = seedInWorkshop(UserRole.USER, admin.workshopId());
         Identity colleague = seedInWorkshop(UserRole.USER, admin.workshopId());
         Identity foreign = seed(UserRole.USER);

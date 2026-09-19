@@ -3,6 +3,7 @@ package com.leonardorozza.mvgrreparacionesbackend.service.impl;
 import com.leonardorozza.mvgrreparacionesbackend.config.tenant.TenantService;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cliente;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Cobro;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Equipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Presupuesto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPago;
@@ -94,7 +95,7 @@ public class ExportService {
 
     private void hojaOrdenes(Workbook wb, Estilos estilos, List<Reparacion> reparaciones) {
         Sheet hoja = nuevaHoja(wb, "Órdenes", estilos,
-                "N° orden", "Fecha ingreso", "Cliente", "Teléfono", "Equipo", "IMEI",
+                "N° orden", "Fecha ingreso", "Cliente", "Teléfono", "Equipo", "Tipo de equipo", "Serie / IMEI",
                 "Problema", "Estado", "Técnico", "Total", "Cobrado", "Pendiente de cobro",
                 "Excedente", "Requiere revisión", "Estado de pago", "Fecha entrega",
                 "Garantía hasta", "Código seguimiento");
@@ -113,25 +114,39 @@ public class ExportService {
             texto(r, 2, cliente.getNombre() + " " + cliente.getApellido());
             texto(r, 3, cliente.getTelefono());
             texto(r, 4, rep.getEquipo().getMarca() + " " + rep.getEquipo().getModelo());
-            texto(r, 5, rep.getEquipo().getImei());
-            texto(r, 6, rep.getDescripcionProblema());
-            texto(r, 7, rep.getEstado().name());
-            texto(r, 8, rep.getTecnico() != null ? rep.getTecnico().getUsername() : null);
-            numero(r, 9, cuenta.total());
-            numero(r, 10, cuenta.cobrado());
-            numero(r, 11, cuenta.saldo());
-            numero(r, 12, cuenta.excedente());
-            texto(r, 13, cuenta.requiereRevision() ? "Sí" : "No");
-            texto(r, 14, EstadoPago.de(cuenta.total(), cuenta.cobrado()).name());
-            fecha(r, 15, rep.getFechaEntrega());
-            fecha(r, 16, rep.getGarantiaFin());
-            texto(r, 17, rep.getCodigoSeguimiento());
+            texto(r, 5, tipoEquipo(rep.getEquipo()));
+            texto(r, 6, rep.getEquipo().getImei());
+            texto(r, 7, rep.getDescripcionProblema());
+            texto(r, 8, rep.getEstado().name());
+            texto(r, 9, rep.getTecnico() != null ? rep.getTecnico().getUsername() : null);
+            numero(r, 10, cuenta.total());
+            numero(r, 11, cuenta.cobrado());
+            numero(r, 12, cuenta.saldo());
+            numero(r, 13, cuenta.excedente());
+            texto(r, 14, cuenta.requiereRevision() ? "Sí" : "No");
+            texto(r, 15, EstadoPago.de(cuenta.total(), cuenta.cobrado()).name());
+            fecha(r, 16, rep.getFechaEntrega());
+            fecha(r, 17, rep.getGarantiaFin());
+            texto(r, 18, rep.getCodigoSeguimiento());
         }
         terminarHoja(hoja, estilos,
-                col(19), col(17, Formato.FECHA), col(30), col(23), col(28), col(23),
+                col(19), col(17, Formato.FECHA), col(30), col(23), col(28), col(24), col(23),
                 col(48), col(24), col(23), col(22, Formato.MONEDA), col(22, Formato.MONEDA),
                 col(22, Formato.MONEDA), col(22, Formato.MONEDA), col(19), col(23),
                 col(17, Formato.FECHA), col(17, Formato.FECHA), col(28));
+    }
+
+    private static String tipoEquipo(Equipo equipo) {
+        if (equipo.getTipo() == null) return "Otro / sin clasificar";
+        return switch (equipo.getTipo()) {
+            case CELULAR -> "Celular";
+            case NOTEBOOK -> "Notebook";
+            case CONSOLA -> "Consola";
+            case PC_ESCRITORIO -> "PC de escritorio";
+            case MONITOR -> "Monitor";
+            case TV -> "TV";
+            case OTRO -> "Otro / sin clasificar";
+        };
     }
 
     private void hojaCobros(Workbook wb, Estilos estilos, List<Cobro> cobros) {

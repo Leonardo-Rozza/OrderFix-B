@@ -857,4 +857,7 @@ supresión de negocio/identidad y estado terminal, conciliación/alertas, journa
 y recuperación del despliegue. E permanece aprobado en local; flags productivos
 conservan su estado anterior. No se opera sobre cuentas ni fotos reales en este corte.
 
-La validación del corte se registra en el diseño antes de realizar su commit.
+Corte V35 entregado en `826ea28`. La validación focal y el gate consolidado con V36
+se registran en el diseño y en el plan de equipos. La integral ejecutó todas sus
+clases; las dos fixtures antiguas detectadas se corrigieron y revalidaron focalmente.
+Esto no cambia el estado parcial de D ni habilita supresión o reapertura productiva.

@@ -37,7 +37,7 @@ public final class ExportBusinessCatalog {
                      ORDER BY c.id
                     """),
             new ExportQuery("equipos", """
-                    SELECT e.id, e.taller_id, e.marca, e.modelo, e.imei, e.color,
+                    SELECT e.id, e.taller_id, e.marca, e.modelo, e.tipo, e.imei, e.color,
                            e.descripcion, e.cliente_id,
                            EXISTS (SELECT 1 FROM public.clientes c
                                     WHERE c.id = e.cliente_id

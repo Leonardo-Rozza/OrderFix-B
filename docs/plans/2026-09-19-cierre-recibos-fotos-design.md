@@ -103,3 +103,14 @@ a su callback protegido. No cambia la política de autenticación ni los presupu
 La repetición focal de las cuatro clases aprobó 104 casos, sin fallos, errores ni
 omisiones (`fixture-corrections.log`, `BUILD SUCCESS`). La integral completa
 queda como gate final del corte C de equipos; incluye estos cambios sin modificarlos.
+
+
+### Validación consolidada con V36
+
+La integral posterior del corte C ejecutó 8.010 unitarias y 1.838 IT; detectó dos
+fixtures antiguas (sentinel de historia y ADMIN no verificado en reactivación),
+corregidas y revalidadas en 41+15 casos focales. No hubo cambios productivos después
+de esa integral. El [acta de equipos](2026-09-19-equipos-multidispositivo-implementation.md)
+conserva el resultado original fallido y el detalle de sus repeticiones; no afirma
+una segunda integral verde. Las clases V35 y sus consumidores pasaron en ese gate.
+V35 permanece congelada. D sigue parcial por los límites funcionales descritos arriba.

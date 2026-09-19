@@ -80,6 +80,8 @@ class WorkshopExportSnapshotServiceIT {
         long base = IDS.getAndAdd(100);
         own = seed(base, "OWN_" + base);
         foreign = seed(base + 40, "FOREIGN_" + base);
+        owner.update("UPDATE equipos SET tipo='NOTEBOOK',imei='000123456789012' WHERE id=?", own.equipo());
+        owner.update("UPDATE equipos SET tipo='TV' WHERE id=?", foreign.equipo());
         observed = new ObservedDataSource(dataSource, false);
         service = service(observed);
     }
@@ -104,6 +106,8 @@ class WorkshopExportSnapshotServiceIT {
         assertThat(categories.get("users").size()).isEqualTo(2);
         assertThat(categories.get("clientes").size()).isEqualTo(1);
         assertThat(categories.get("equipos").size()).isEqualTo(1);
+        assertThat(categories.get("equipos").get(0).path("tipo").asText()).isEqualTo("NOTEBOOK");
+        assertThat(categories.get("equipos").get(0).path("imei").asText()).isEqualTo("000123456789012");
         assertThat(categories.get("reparaciones").size()).isEqualTo(1);
         assertThat(categories.get("repuestos").size()).isEqualTo(2);
         assertThat(categories.get("articulos").size()).isEqualTo(1);

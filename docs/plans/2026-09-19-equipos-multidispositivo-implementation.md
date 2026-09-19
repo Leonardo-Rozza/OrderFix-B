@@ -64,8 +64,8 @@ validación integral al cerrar C, salvo fallo transversal que exija adelantarla.
 
 ## Estado backend
 
-Base V35 `826ea28`. A integrado después del commit de constancias; B preparado en
-frontend y C preparado en copia aislada. No se mezcla C en el commit A.
+Base V35 `826ea28`. A entregado en `e3f43bc`, B en frontend `86e5138`.
+C implementado y validado; se entrega en un commit separado.
 
 La integral V35 se interrumpió con fixtures antiguas ya identificadas; sus cuatro
 clases corregidas aprobaron 104 casos. La integral final C ejecutará todo el estado
@@ -88,4 +88,87 @@ V35/V36. Este orden evita repetir dos gates completos durante la misma continuac
 
 Evidencia local: `/private/tmp/ordenfix-multidispositivo-backend-20260919/`:
 `snapshot.log`, `cut-a-focal.log`, `cut-a-retry.log`. Comandos Maven `-Dtest=` con las
-clases indicadas y `test`, sin llamadas a proveedores. Gate integral pendiente de C.
+clases indicadas y `test`, sin llamadas a proveedores. El gate final se registra a continuación.
+
+
+### B — frontend entregado
+
+Frontend `86e5138`: selector en ambas altas, filtro URL/query key, categoría en
+listas/detalles y Serie / IMEI. Edición omite tipo si no cambia; conserva credenciales.
+996 pruebas en 112 archivos, TypeScript, ESLint focal y build local aprobados.
+
+### C — exportación y recorrido integrado
+
+Excel: 19 columnas de órdenes con categoría legible y Serie / IMEI; mantiene formatos
+de dinero/fechas, identificadores como texto y ausencia de credenciales. ZIP: agrega
+`tipo` a snapshots nuevos; los artefactos preparados conservan bytes/hash/vencimiento.
+No se amplían los enlaces públicos.
+
+78 casos focales aprobados: ExportServiceTest 3, ExportTests 2,
+ProtectedExcelExportServiceTest 14, WorkshopExportSnapshotServiceIT 20,
+ProtectedExcelExportIT 8 y LegalPrivatePhotoOperationsIT 31.
+
+Cuatro recorridos de navegador + una comprobación JUnit aprobados sobre PostgreSQL
+16 y almacenamiento sintético: celular/TV nuevos, notebook/consola existentes,
+titular/empleado, con y sin serie, fotos/reintento/aislamiento/borrado con recibos,
+filtro y edición de color que omite tipo. La comprobación SQL acredita conservación
+de todos los demás datos existentes. Sin llamadas a Cloudinary, email o MP.
+
+Se conserva evidencia descartable en el directorio del corte (`cut-c-focal.log`,
+`browser.log`, `browser-screenshots/`). La integral final y sus correcciones focales se registran a continuación.
+La repetición de capturas estables se registra al final.
+
+
+### Orden de despliegue posterior
+
+Aplicar backend/V36 primero y después frontend B/C. El backend conserva compatibilidad
+con formularios anteriores que omiten el tipo; la UI nueva necesita ese contrato
+para guardar y filtrar categorías. Los roles de fotos deben tener los grants nominales
+V35 documentados en `docs/operations/private-photos.md` antes de activar el servicio.
+V36 no agrega grants legales/fotos. No se ha ejecutado este despliegue ni se alteró
+la base local de uso habitual: los ensayos utilizan bases temporales.
+
+
+### Gate final — 2026-09-19
+
+`./mvnw -B clean verify` ejecutó la suite completa en 35:16 min: 8.010 pruebas
+unitarias aprobadas (265 clases) y 1.838 IT (124 clases), con dos fallos de fixture,
+sin errores ni omisiones. Esa ejecución terminó BUILD FAILURE; se conserva el log
+original y no se presenta como un `clean verify` verde.
+
+Las dos correcciones afectan exclusivamente pruebas:
+
+1. LegalV29AcceptanceSchemaVerifierIT esperaba nueve filas máximas de historia;
+   V27–V36 requieren diez versiones más un sentinel de rechazo: once. La prueba
+   conserva la comprobación de rechazo de historia desconocida.
+2. PersonalAccessExitIT usaba un ADMIN sin email verificado para reactivar al empleado.
+   Sólo ese ADMIN se marca verificado antes del login. El empleado permanece sin
+   verificar; se conserva la cobertura de baja, revocación de sesiones y tokens
+   antiguos que no recuperan validez tras reactivarlo.
+
+Repeticiones focales aprobadas, sin errores ni omisiones:
+`-Dtest=LegalV29AcceptanceSchemaVerifierIT,LegalV36CompatibilityIT test` (41 casos) y
+`-Dtest=PersonalAccessExitIT test` (15 casos). No cambió código productivo después de
+la integral, ni se repitió toda la suite por estos ajustes de fixtures. Combinando la
+integral y esas repeticiones, todas sus clases tienen resultado aprobado; no quedan
+fallos pendientes. Evidencia: `final-clean-verify.log`, `final-integral-reports/`,
+`final-sentinel-correction.log`, `final-exit-fixture-correction.log` y
+`final-corrected-reports/` dentro del directorio local del corte.
+
+La baja definitiva de todo el taller continúa fuera de este cierre: el mantenimiento,
+los recibos de fotos y la clasificación de equipos no sustituyen política real,
+supresión por categorías ni recuperación del despliegue. No se activaron proveedores,
+schedulers productivos, publicación ni push.
+
+
+### C — cierre local
+
+La repetición final de navegador aprobó nuevamente los cuatro escenarios y la
+comprobación JUnit (`browser-stable.log`, BUILD SUCCESS). Veinte capturas conservadas
+en `browser-screenshots-stable/`; se revisaron visualmente listado a 320 px y edición
+de notebook/TV en escritorio/móvil, sin desbordamiento horizontal. Las capturas de
+equipos desactivan sólo las animaciones durante la toma; no cambió la UI por ese ajuste.
+
+A/B/C quedan implementados y probados localmente. No quedan defectos abiertos de este
+alcance. Se preservan las diez migraciones V27–V36 y los 179 archivos ajenos no
+versionados del frontend. Entrega atómica por repositorio/corte, sin push.

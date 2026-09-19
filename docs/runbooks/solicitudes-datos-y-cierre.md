@@ -213,7 +213,8 @@ indica NO_AUTORIZA_REAPERTURA. La coincidencia parcial no reemplaza un registro
 externo completo, ni implementa la cuarentena de arranque. Mantener el entorno
 recuperado aislado mientras no se acrediten esos requisitos.
 
-D sigue parcial: política real, supresión por categorías, recibos de archivos,
-resolución de efectos inciertos y recuperación productiva requieren ejecución y
-verificación posteriores. Una limpieza local sin pendientes nunca debe comunicarse
+D sigue parcial: política real, supresión por categorías, cobertura de archivos legacy,
+cargas tardías y copias remotas, resolución de efectos inciertos y recuperación
+productiva requieren ejecución y verificación posteriores. V35 ya conserva objetivos
+y resultados de las rutas de fotos privadas actuales, con los límites documentados. Una limpieza local sin pendientes nunca debe comunicarse
 como baja o eliminación integral completada.

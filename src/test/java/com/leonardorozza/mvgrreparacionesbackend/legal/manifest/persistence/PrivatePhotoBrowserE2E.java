@@ -167,7 +167,7 @@ class PrivatePhotoBrowserE2E {
         assertThat(path).isRegularFile(); assertThat(Files.size(path)).isBetween(1L,65_536L);
         JsonNode entries=JSON.readTree(Files.readAllBytes(path)); assertThat(entries.isArray()).isTrue(); assertThat(entries).hasSize(4);
         Set<String> scenarios=new HashSet<>(); Set<UUID> photoIds=new HashSet<>(); Set<Long> repairs=new HashSet<>();
-        Set<String> fields=Set.of("runId","project","scenario","repairId","equipmentId","actorId","actorRole","workshopId",
+        Set<String> fields=Set.of("runId","project","scenario","repairId","equipmentId","equipmentType","equipmentSerial","filteredRead","equipmentUpdated","actorId","actorRole","workshopId",
                 "peerId","foreignId","photoId","bytes","sha256","uploadFailure","finalized","deleted","ownRead","peerRead","foreignRead","anonymousRead");
         for(JsonNode entry:entries) {
             assertThat(entry.isObject()).isTrue(); assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrderElementsOf(fields);
@@ -187,6 +187,14 @@ class PrivatePhotoBrowserE2E {
             UUID photo=UUID.fromString(text(entry,"photoId")); assertThat(photo.toString()).isEqualTo(text(entry,"photoId")); assertThat(photoIds.add(photo)).isTrue();
             long repair=id(entry,"repairId"), equipment=id(entry,"equipmentId"); assertThat(repairs.add(repair)).isTrue();
             if(!admin)assertThat(equipment).isEqualTo(account.equipmentId());
+            String equipmentType=admin ? (project.equals("desktop")?"CELULAR":"TV") : (project.equals("desktop")?"NOTEBOOK":"CONSOLA");
+            String equipmentSerial=!admin && project.equals("desktop")?"NB-000001":null;
+            assertThat(text(entry,"equipmentType")).isEqualTo(equipmentType);
+            if(equipmentSerial==null)assertThat(entry.get("equipmentSerial").isNull()).isTrue();
+            else assertThat(text(entry,"equipmentSerial")).isEqualTo(equipmentSerial);
+            assertThat(id(entry,"filteredRead")).isEqualTo(200);assertThat(id(entry,"equipmentUpdated")).isEqualTo(200);
+            assertThat(owner.queryForMap("SELECT tipo,imei,color FROM equipos WHERE id=? AND taller_id=?",equipment,account.tallerId()))
+                    .containsEntry("tipo",equipmentType).containsEntry("imei",equipmentSerial).containsEntry("color","Azul E2E");
             assertThat(owner.queryForObject("SELECT taller_id=? AND equipo_id=? FROM reparaciones WHERE id=?",Boolean.class,account.tallerId(),equipment,repair)).isTrue();
             Map<String,Object> row=owner.queryForMap("SELECT * FROM reparacion_fotos_privadas WHERE id=?",photo);
             assertThat(((Number)row.get("reparacion_id")).longValue()).isEqualTo(repair);
@@ -280,9 +288,10 @@ class PrivatePhotoBrowserE2E {
             long workshop=workshop("Taller fotos "+project), otherWorkshop=workshop("Taller ajeno "+project);
             long own=user("Titular "+suffix,ownEmail,hash,"ADMIN",workshop), employee=user("Empleado "+suffix,employeeEmail,hash,"USER",workshop), other=user("Ajeno "+suffix,otherEmail,hash,"ADMIN",otherWorkshop);
             long client=owner.queryForObject("INSERT INTO clientes(nombre,apellido,telefono,taller_id) VALUES('Cliente','Existente',?,?) RETURNING id",Long.class,project.equals("desktop")?"1155010801":"1155010802",workshop);
-            String model=project.equals("desktop")?"Photo desktop":"Photo mobile";
-            long equipment=owner.queryForObject("INSERT INTO equipos(marca,modelo,cliente_id,taller_id) VALUES('Samsung',?,?,?) RETURNING id",Long.class,model,client,workshop);
-            ACCOUNTS.put(project,new Account(own,employee,other,workshop,ownEmail,employeeEmail,otherEmail,equipment,"Samsung "+model));
+            boolean desktop=project.equals("desktop");String brand=desktop?"Lenovo":"Sony",model=desktop?"Notebook local":"Consola local";
+            String type=desktop?"NOTEBOOK":"CONSOLA",serial=desktop?"NB-000001":null;
+            long equipment=owner.queryForObject("INSERT INTO equipos(marca,modelo,tipo,imei,cliente_id,taller_id) VALUES(?,?,?,?,?,?) RETURNING id",Long.class,brand,model,type,serial,client,workshop);
+            ACCOUNTS.put(project,new Account(own,employee,other,workshop,ownEmail,employeeEmail,otherEmail,equipment,brand+" "+model));
         }
     }
     private static long workshop(String name) {
@@ -318,6 +327,10 @@ class PrivatePhotoBrowserE2E {
         Map<String,List<String>> result=new LinkedHashMap<>();
         for(String table:UNCHANGED_TABLES)result.put(table,owner.queryForList("SELECT to_jsonb(t)::text || ':' || xmin::text FROM public."+table+" t ORDER BY 1",String.class));
         result.put("talleres-stable",owner.queryForList("SELECT (to_jsonb(t)-'secuencia_orden'-'anio_secuencia_orden'-'updated_at')::text FROM talleres t ORDER BY 1",String.class));
+        // Only color is edited through the browser. Category, identifier, owner and every other seeded value survive.
+        List<String> equipment=new ArrayList<>();
+        for(Account account:ACCOUNTS.values())equipment.add(owner.queryForObject("SELECT (to_jsonb(e)-'color')::text FROM equipos e WHERE id=?",String.class,account.equipmentId()));
+        result.put("seeded-equipment-stable",List.copyOf(equipment));
         return result;
     }
     private static String text(JsonNode node,String field) { assertThat(node.path(field).isTextual()).as(field).isTrue();String value=node.path(field).textValue();assertThat(value).isNotBlank();return value; }

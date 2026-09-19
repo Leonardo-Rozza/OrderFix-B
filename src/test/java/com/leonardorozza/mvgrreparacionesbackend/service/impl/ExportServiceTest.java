@@ -8,6 +8,7 @@ import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Presupuesto;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.Reparacion;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.User;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EstadoPresupuesto;
+import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.EquipoTipo;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.entity.enums.MetodoPago;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.ClienteRepository;
 import com.leonardorozza.mvgrreparacionesbackend.persistence.repository.CobroRepository;
@@ -58,7 +59,7 @@ class ExportServiceTest {
         try (XSSFWorkbook libro = abrir(servicio.exportarExcel())) {
             assertThat(libro.getNumberOfSheets()).isEqualTo(4);
             comprobarHoja(libro.getSheet("Clientes"), 0, 6, "A1:F1");
-            comprobarHoja(libro.getSheet("Órdenes"), 0, 18, "A1:R1");
+            comprobarHoja(libro.getSheet("Órdenes"), 0, 19, "A1:S1");
             comprobarHoja(libro.getSheet("Cobros"), 0, 10, "A1:J1");
             comprobarHoja(libro.getSheet("Presupuestos"), 0, 7, "A1:G1");
             assertThat(libro.getSheetName(0)).isEqualTo("Clientes");
@@ -84,7 +85,7 @@ class ExportServiceTest {
         try (XSSFWorkbook libro = abrir(archivo)) {
             assertThat(libro.getNumberOfSheets()).isEqualTo(4);
             comprobarHoja(libro.getSheet("Clientes"), 3, 6, "A1:F4");
-            comprobarHoja(libro.getSheet("Órdenes"), 3, 18, "A1:R4");
+            comprobarHoja(libro.getSheet("Órdenes"), 3, 19, "A1:S4");
             comprobarHoja(libro.getSheet("Cobros"), 2, 10, "A1:J3");
             comprobarHoja(libro.getSheet("Presupuestos"), 2, 7, "A1:G3");
 
@@ -98,15 +99,20 @@ class ExportServiceTest {
             comprobarTexto(orden.getCell(0), "00000042");
             comprobarFecha(orden.getCell(1), INGRESO.atStartOfDay(), "dd/MM/yyyy");
             comprobarTexto(orden.getCell(3), "001155001122");
-            comprobarTexto(orden.getCell(5), "000123456789012");
-            comprobarTexto(orden.getCell(6), "=SUM(1,2)\nPantalla sin imagen; conservar el texto original.");
-            comprobarImporte(orden.getCell(9), 80250.75);
-            comprobarImporte(orden.getCell(10), 30000.25);
-            comprobarImporte(orden.getCell(11), 50250.50);
-            comprobarImporte(orden.getCell(12), 0);
-            comprobarFecha(orden.getCell(15), INGRESO.plusDays(2).atStartOfDay(), "dd/MM/yyyy");
-            comprobarFecha(orden.getCell(16), INGRESO.plusDays(32).atStartOfDay(), "dd/MM/yyyy");
-            comprobarTexto(orden.getCell(17), "SYNTHETIC-001");
+            comprobarTexto(libro.getSheet("Órdenes").getRow(0).getCell(5), "Tipo de equipo");
+            comprobarTexto(libro.getSheet("Órdenes").getRow(0).getCell(6), "Serie / IMEI");
+            comprobarTexto(orden.getCell(5), "Celular");
+            comprobarTexto(orden.getCell(6), "000123456789012");
+            comprobarTexto(libro.getSheet("Órdenes").getRow(2).getCell(5), "Notebook");
+            comprobarTexto(libro.getSheet("Órdenes").getRow(3).getCell(5), "Consola");
+            comprobarTexto(orden.getCell(7), "=SUM(1,2)\nPantalla sin imagen; conservar el texto original.");
+            comprobarImporte(orden.getCell(10), 80250.75);
+            comprobarImporte(orden.getCell(11), 30000.25);
+            comprobarImporte(orden.getCell(12), 50250.50);
+            comprobarImporte(orden.getCell(13), 0);
+            comprobarFecha(orden.getCell(16), INGRESO.plusDays(2).atStartOfDay(), "dd/MM/yyyy");
+            comprobarFecha(orden.getCell(17), INGRESO.plusDays(32).atStartOfDay(), "dd/MM/yyyy");
+            comprobarTexto(orden.getCell(18), "SYNTHETIC-001");
 
             Row cobro = libro.getSheet("Cobros").getRow(1);
             comprobarFecha(cobro.getCell(0), REGISTRO, "dd/MM/yyyy HH:mm");
@@ -129,6 +135,8 @@ class ExportServiceTest {
                 for (Row fila : hoja) {
                     for (Cell celda : fila) {
                         assertThat(celda.getCellType()).isNotEqualTo(CellType.FORMULA);
+                        if (celda.getCellType() == CellType.STRING)
+                            assertThat(celda.getStringCellValue()).doesNotContain("SYNTHETIC-PIN", "SYNTHETIC-PATTERN");
                     }
                 }
             }
@@ -144,11 +152,11 @@ class ExportServiceTest {
             Row cliente = libro.getSheet("Clientes").getRow(2);
             comprobarVacio(cliente, 4, 5);
             Row orden = libro.getSheet("Órdenes").getRow(2);
-            comprobarVacio(orden, 1, 5, 8, 15, 16, 17);
+            comprobarVacio(orden, 1, 6, 9, 16, 17, 18);
             comprobarTexto(libro.getSheet("Órdenes").getRow(3).getCell(0), "#203");
             comprobarVacio(libro.getSheet("Cobros").getRow(1), 6, 7, 8);
             comprobarVacio(libro.getSheet("Presupuestos").getRow(2), 0, 5, 6);
-            assertThat(libro.getSheet("Órdenes").getRow(1).getCell(6).getCellStyle().getWrapText()).isTrue();
+            assertThat(libro.getSheet("Órdenes").getRow(1).getCell(7).getCellStyle().getWrapText()).isTrue();
             assertThat(libro.getSheet("Clientes").getRow(1).getCell(5).getCellStyle().getWrapText()).isTrue();
         }
     }
@@ -164,15 +172,20 @@ class ExportServiceTest {
                 .telefono("001155005566").email("carla@synthetic.invalid")
                 .direccion("Avenida de prueba 456, departamento 12. Entrada por el pasillo lateral.").build();
         Reparacion primera = orden(201L, "00000042", ana, "Samsung", "Galaxy A54", new BigDecimal("80250.75"));
+        primera.getEquipo().setTipo(EquipoTipo.CELULAR);
         primera.getEquipo().setImei("000123456789012");
+        primera.setPinDesbloqueoCifrado("SYNTHETIC-PIN");
+        primera.setPatronDesbloqueoCifrado("SYNTHETIC-PATTERN");
         primera.setFechaIngreso(INGRESO);
         primera.setFechaEntrega(INGRESO.plusDays(2));
         primera.setGarantiaFin(INGRESO.plusDays(32));
         primera.setTecnico(User.builder().username("Técnica de prueba").build());
         primera.setCodigoSeguimiento("SYNTHETIC-001");
         primera.setDescripcionProblema("=SUM(1,2)\nPantalla sin imagen; conservar el texto original.");
-        Reparacion segunda = orden(202L, "ORD-2026-0043", bruno, "Motorola", "Moto G84", new BigDecimal("15000.00"));
-        Reparacion tercera = orden(203L, null, carla, "Apple", "iPhone 13", BigDecimal.ZERO);
+        Reparacion segunda = orden(202L, "ORD-2026-0043", bruno, "Lenovo", "ThinkPad", new BigDecimal("15000.00"));
+        Reparacion tercera = orden(203L, null, carla, "Sony", "PlayStation 5", BigDecimal.ZERO);
+        segunda.getEquipo().setTipo(EquipoTipo.NOTEBOOK);
+        tercera.getEquipo().setTipo(EquipoTipo.CONSOLA);
         tercera.setFechaIngreso(INGRESO.plusDays(1));
         tercera.setDescripcionProblema("No enciende. Diagnóstico pendiente y revisión de conector de carga.");
         Cobro activo = Cobro.builder().id(301L).reparacion(primera).monto(new BigDecimal("30000.25"))

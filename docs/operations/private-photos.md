@@ -2,6 +2,13 @@
 
 Describe la implementación del corte del 9 de septiembre de 2026; el gate y la configuración de staging se registran por separado en el plan de fotos privadas.
 
+## Compatibilidad actual
+
+V35 incorpora constancias durables de eliminación. V36 agrega categorías de equipos
+sin modificar los catálogos ni permisos de fotos; el preflight admite ambas versiones
+explícitas y sus checksums. El backend completo actual requiere V36 para su modelo
+JPA de equipos. V27–V35 se conservan congeladas.
+
 ## Activación y configuración
 
 `photos.private.enabled=false` es el estado predeterminado. No construye el servicio, el pool ni el adapter Cloudinary; los endpoints privados devuelven 503 `FOTOS_PRIVADAS_NO_DISPONIBLES`. Apagarlo también detiene su tarea de limpieza y hace inaccesibles por esta API los archivos privados existentes, sin borrarlos. El almacenamiento y las credenciales se configuran sólo en el backend; el navegador envía bytes autenticados al backend.
@@ -111,7 +118,7 @@ El pool privado tiene como máximo dos conexiones y no es el DataSource de JPA. 
 
 ## Esquema, publicación y rol
 
-El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Aplicar las migraciones hasta V35 con la identidad de migraciones; no editar V27–V34. V33 coordina las operaciones con el estado de cierre del taller, V34 agrega confirmaciones y efectos internos y V35 conserva objetivos y resultados de eliminación de fotos. El servicio de fotos exige V35 acreditada; los demás consumidores mantienen los contratos históricos que les corresponden. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
+El consumidor de fotos admite únicamente el esquema `public`; su configuración no admite `currentSchema`. La acreditación histórica de V29 en otros esquemas se conserva por separado y no acredita fotos V30 allí. Para el backend completo actual, aplicar las migraciones hasta V36 con la identidad de migraciones; no editar V27–V35. V33 coordina las operaciones con el estado de cierre del taller, V34 agrega confirmaciones y efectos internos y V35 conserva objetivos y resultados de eliminación de fotos. El servicio de fotos exige la capacidad de constancias introducida por V35, acreditada sobre V35 o V36; los demás consumidores mantienen los contratos históricos que les corresponden. Debe existir una publicación legal vigente y coherente para `USO_CONTINUADO` y `ATESTACION_FOTOS`, con las audiencias de ADMIN y USER. La declaración FOTOS requerida se vuelve a confirmar por cada intención, sin duplicar los actos legales; cada nueva operación conserva su propio resultado idempotente y vínculo contextual sobre la persistencia legal existente.
 
 El consumidor usa el inventario de `LegalAcceptancePrivilegeVerifier` más su extensión de fotos. Es un rol dedicado `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, sin pertenencias ni propiedad de base/esquema/objetos. Necesita el inventario nominal legal previo y, adicionalmente:
 

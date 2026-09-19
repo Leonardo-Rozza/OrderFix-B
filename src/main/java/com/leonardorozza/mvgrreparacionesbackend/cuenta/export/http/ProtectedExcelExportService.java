@@ -49,7 +49,7 @@ public class ProtectedExcelExportService {
                     "nombre", "apellido", "telefono", "email", "direccion"),
             estimate("equipos", "LEFT JOIN public.clientes c ON c.id = q.cliente_id", "q.taller_id = ?",
                     "c.id IS NOT NULL AND c.taller_id = q.taller_id", false,
-                    "marca", "modelo", "imei", "color", "descripcion"),
+                    "marca", "modelo", "tipo", "imei", "color", "descripcion"),
             estimate("reparaciones", """
                     LEFT JOIN public.equipos e ON e.id = q.equipo_id
                     LEFT JOIN public.clientes c ON c.id = e.cliente_id

@@ -114,9 +114,9 @@ class ProtectedExcelExportIT {
             assertThat(sheetNames(workbook)).containsExactly("Clientes", "Órdenes", "Cobros", "Presupuestos");
             assertThat(workbook.getSheet("Clientes").getLastRowNum()).isEqualTo(1);
             assertThat(workbook.getSheet("Clientes").getRow(1).getCell(0).getNumericCellValue()).isEqualTo(own.customerId());
-            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(9).getNumericCellValue()).isEqualTo(120);
-            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(10).getNumericCellValue()).isEqualTo(25);
-            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(11).getNumericCellValue()).isEqualTo(95);
+            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(10).getNumericCellValue()).isEqualTo(120);
+            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(11).getNumericCellValue()).isEqualTo(25);
+            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(12).getNumericCellValue()).isEqualTo(95);
             assertThat(workbook.getSheet("Cobros").getLastRowNum()).isEqualTo(2);
             assertThat(workbook.getSheet("Presupuestos").getLastRowNum()).isEqualTo(1);
             assertThat(text(workbook)).contains(own.marker(), "Cobro activo", "Anulado sintético", "ANULADO");
@@ -196,8 +196,8 @@ class ProtectedExcelExportIT {
 
         jdbc.update(table.equals("cobros") ? "DELETE FROM cobros WHERE id=?" : "DELETE FROM repuestos WHERE id=?", corruptedId);
         try (var workbook = new XSSFWorkbook(new ByteArrayInputStream(download(own, access, proof)))) {
-            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(9).getNumericCellValue()).isEqualTo(120);
-            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(10).getNumericCellValue()).isEqualTo(25);
+            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(10).getNumericCellValue()).isEqualTo(120);
+            assertThat(workbook.getSheet("Órdenes").getRow(1).getCell(11).getNumericCellValue()).isEqualTo(25);
             assertThat(text(workbook)).doesNotContain("Foreign reverse fixture", other.marker());
         }
         used(proof, true);

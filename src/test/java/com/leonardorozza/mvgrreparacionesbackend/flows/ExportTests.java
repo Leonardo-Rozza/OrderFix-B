@@ -118,21 +118,21 @@ class ExportTests extends IntegrationTestBase {
                     .contains("Pendiente de cobro", "Excedente", "Requiere revisión");
 
             Row ordenParcial = filaPorValor(hojaOrdenes, 0, numeroOrden);
-            assertThat(ordenParcial.getCell(11).getNumericCellValue()).isEqualTo(50000);
-            assertThat(ordenParcial.getCell(12).getNumericCellValue()).isEqualTo(0);
-            assertThat(valor(ordenParcial, 13)).isEqualTo("No");
-            assertThat(valor(ordenParcial, 14)).isEqualTo("PARCIAL");
+            assertThat(ordenParcial.getCell(12).getNumericCellValue()).isEqualTo(50000);
+            assertThat(ordenParcial.getCell(13).getNumericCellValue()).isEqualTo(0);
+            assertThat(valor(ordenParcial, 14)).isEqualTo("No");
+            assertThat(valor(ordenParcial, 15)).isEqualTo("PARCIAL");
 
             Row ordenLegacy = filaPorValor(hojaOrdenes, 0, numeroOrdenLegacy);
-            assertThat(ordenLegacy.getCell(11).getNumericCellValue()).isEqualTo(0);
-            assertThat(ordenLegacy.getCell(12).getNumericCellValue()).isEqualTo(10000);
-            assertThat(valor(ordenLegacy, 13)).isEqualTo("Sí");
-            assertThat(valor(ordenLegacy, 14)).isEqualTo("PAGADO");
+            assertThat(ordenLegacy.getCell(12).getNumericCellValue()).isEqualTo(0);
+            assertThat(ordenLegacy.getCell(13).getNumericCellValue()).isEqualTo(10000);
+            assertThat(valor(ordenLegacy, 14)).isEqualTo("Sí");
+            assertThat(valor(ordenLegacy, 15)).isEqualTo("PAGADO");
 
             Row ordenAnulada = filaPorValor(hojaOrdenes, 0, numeroOrdenAnulada);
-            assertThat(ordenAnulada.getCell(10).getNumericCellValue()).isEqualTo(0);
-            assertThat(ordenAnulada.getCell(11).getNumericCellValue()).isEqualTo(15000);
-            assertThat(valor(ordenAnulada, 14)).isEqualTo("SIN_COBRAR");
+            assertThat(ordenAnulada.getCell(11).getNumericCellValue()).isEqualTo(0);
+            assertThat(ordenAnulada.getCell(12).getNumericCellValue()).isEqualTo(15000);
+            assertThat(valor(ordenAnulada, 15)).isEqualTo("SIN_COBRAR");
 
             Sheet hojaCobros = wb.getSheet("Cobros");
             String cobros = textoDe(hojaCobros);
