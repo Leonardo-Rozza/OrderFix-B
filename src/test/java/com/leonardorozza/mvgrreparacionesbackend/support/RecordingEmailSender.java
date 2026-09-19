@@ -27,6 +27,7 @@ public class RecordingEmailSender implements EmailSender {
     private final Map<String, String> ultimoCuerpoPorEmail = new ConcurrentHashMap<>();
 
     private volatile Path verificationMailbox;
+    private volatile Path passwordResetMailbox;
 
     /** Opt-in browser harness capture. No production endpoint or external email delivery. */
     public void captureVerificationTokens(Path directory) {
@@ -34,9 +35,21 @@ public class RecordingEmailSender implements EmailSender {
         verificationMailbox = directory;
     }
 
+    /** Captures the actual rendered reset email only in the opt-in local browser harness. */
+    public void capturePasswordResetEmails(Path directory) {
+        if (directory != null && !Files.isDirectory(directory)) throw new IllegalArgumentException("Mailbox directory does not exist");
+        passwordResetMailbox = directory;
+    }
+
     @Override
     public void enviar(String para, String asunto, String cuerpoHtml) {
         ultimoCuerpoPorEmail.put(para, cuerpoHtml);
+        Path resetDirectory = passwordResetMailbox;
+        if (resetDirectory != null && asunto.equals("Restablecer tu contraseña de OrdenFix")) {
+            String filename = Base64.getUrlEncoder().withoutPadding().encodeToString(para.getBytes(StandardCharsets.UTF_8)) + ".html";
+            try { Files.writeString(resetDirectory.resolve(filename), cuerpoHtml, StandardCharsets.UTF_8); }
+            catch (IOException failure) { throw new IllegalStateException("Could not capture synthetic password reset email", failure); }
+        }
         Path directory = verificationMailbox;
         if (directory != null && asunto.equals("Confirmá tu email de OrdenFix")) {
             Matcher match = TOKEN.matcher(cuerpoHtml);

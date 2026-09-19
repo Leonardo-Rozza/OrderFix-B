@@ -102,6 +102,12 @@ incluye MIME y previews de navegador con datos sintéticos. Antes de cerrar Emai
 comprobar los mensajes recibidos y sus enlaces en los clientes de correo elegidos,
 incluido móvil. Un preview de HTML no acredita el render del cliente receptor.
 
+La [recuperación integrada local](../plans/2026-09-19-recuperacion-password-integracion-local-design.md)
+también quedó acreditada con navegador y PostgreSQL 16: solicitud genérica, CTA del
+HTML real, reemplazo/uso único del enlace, revocación de la sesión anterior e ingreso
+con la nueva clave. Usa un buzón sintético y no entrega correos a proveedores;
+Email C conserva la validación del recorrido desplegado.
+
 ## Dominio configurado y siguiente entorno
 
 El dominio de envío ya configurado es `cuenta.orden-fix.com.ar`, con remitente

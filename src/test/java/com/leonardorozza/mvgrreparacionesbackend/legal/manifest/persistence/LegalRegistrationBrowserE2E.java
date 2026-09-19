@@ -80,6 +80,7 @@ class LegalRegistrationBrowserE2E {
     private static final String ACCOUNT_PASSWORD = "registration-browser-account-fixture";
     private static final String FRONTEND_ORIGIN = "http://127.0.0.1:5175";
     private static final String PASSWORD = "Clave-sintetica-E2E-123";
+    private static final String RESET_PASSWORD = "Clave-renovada-E2E-456";
     private static final String RUN_ID = UUID.randomUUID().toString();
     private static final List<String> BUSINESS_TABLES = List.of("users", "talleres", "suscripciones", "auth_tokens",
             "clientes", "equipos", "reparaciones", "repuestos", "reparacion_fotos", "presupuestos", "presupuesto_items",
@@ -132,8 +133,8 @@ class LegalRegistrationBrowserE2E {
         values.put("security.rate-limit.enabled", "true");
         values.put("security.rate-limit.trust-forwarded-headers", "false");
         values.put("security.rate-limit.register.requests", "20");
-        values.put("security.rate-limit.login.requests", "30"); // Includes two sessions per employee in the access-exit drill; production remains ten.
-        values.put("security.rate-limit.account-recovery.requests", "30"); // Twelve email confirmations plus account exits across both viewports; production remains five.
+        values.put("security.rate-limit.login.requests", "30"); // Twenty-six logins including recovery; production remains ten.
+        values.put("security.rate-limit.account-recovery.requests", "30"); // Twelve confirmations plus twelve recovery requests; production remains five.
         values.put("security.rate-limit.register.window", "1h");
         values.put("security.jwt.secret", LegalRegistrationHttpITSupport.JWT_SECRET);
         values.put("security.jwt.issuer", "ordenfix-registration-browser");
@@ -141,6 +142,7 @@ class LegalRegistrationBrowserE2E {
         values.put("security.jwt.expiration", "3600000");
         values.put("DEVICE_CREDENTIALS_ENCRYPTION_KEY", Base64.getEncoder().encodeToString("dddddddddddddddddddddddddddddddd".getBytes(StandardCharsets.US_ASCII)));
         values.put("mail.enabled", "false");
+        values.put("auth.token.reset-horas", "1");
         values.put("photos.private.enabled", "false");
         values.put("mercadopago.enabled", "false");
         values.put("mercadopago.checkout-enabled", "false");
@@ -185,6 +187,8 @@ class LegalRegistrationBrowserE2E {
         Instant started = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
         Path mailbox = Files.createDirectory(evidenceDirectory.resolve("mailbox"));
         recordingEmails.captureVerificationTokens(mailbox);
+        Path resetMailbox = Files.createDirectory(evidenceDirectory.resolve("password-reset-mailbox"));
+        recordingEmails.capturePasswordResetEmails(resetMailbox);
         Path report = evidenceDirectory.resolve("browser-evidence.json");
         Path log = evidenceDirectory.resolve("playwright.log");
         ProcessBuilder builder = new ProcessBuilder("npm", "exec", "--", "playwright", "test", "--config=playwright.registration-real.config.ts")
@@ -193,6 +197,7 @@ class LegalRegistrationBrowserE2E {
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_RUN_ID", RUN_ID);
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_REPORT", report.toString());
         builder.environment().put("ORDENFIX_REGISTRATION_E2E_MAILBOX", mailbox.toString());
+        builder.environment().put("ORDENFIX_REGISTRATION_E2E_RESET_MAILBOX", resetMailbox.toString());
         Process process = builder.start();
         Map<Long, OwnedProcess> descendants = new LinkedHashMap<>();
         Throwable primary = null;
@@ -208,10 +213,16 @@ class LegalRegistrationBrowserE2E {
             assertThat(process.exitValue()).as("Playwright failed.\n%s", tail(log)).isZero();
             Instant finishedAt = fixture.owner.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class).toInstant();
             verifyReport(report, baseline, otherWorkshop, repairAccounts, unchangedRows, originalCobros, started, finishedAt);
+            try (var files = Files.list(resetMailbox)) {
+                assertThat(files.map(path -> path.getFileName().toString()).toList()).containsExactlyInAnyOrderElementsOf(
+                        List.of("desktop", "mobile-320").stream().map(project -> Base64.getUrlEncoder().withoutPadding()
+                                .encodeToString(("created-" + project + "-" + RUN_ID + "@ordenfix-e2e.test").getBytes(StandardCharsets.UTF_8)) + ".html").toList());
+            }
         } catch (Throwable failure) {
             primary = failure; throw failure;
         } finally {
             recordingEmails.captureVerificationTokens(null);
+            recordingEmails.capturePasswordResetEmails(null);
             try { stopOwnedProcesses(process, descendants); }
             catch (Throwable cleanup) { if (primary != null) primary.addSuppressed(cleanup); else throw cleanup; }
         }
@@ -257,7 +268,7 @@ class LegalRegistrationBrowserE2E {
                     : scenario.equals("collections") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances",
                             "idempotencyKey", "ownerId", "employee", "clientId", "equipmentId", "repairId",
                             "originalCobroId", "correctedCobroId", "otherOwnerId")
-                    : scenario.equals("created") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey", "legalHistoryAcceptanceIds")
+                    : scenario.equals("created") ? Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey", "legalHistoryAcceptanceIds", "recovery")
                     : Set.of("case", "project", "email", "requiredSetRevision", "acceptances", "idempotencyKey");
             assertThat(entry.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrderElementsOf(fields);
             assertThat(email).isEqualTo(scenario + "-" + project + "-" + RUN_ID + "@ordenfix-e2e.test");
@@ -269,12 +280,13 @@ class LegalRegistrationBrowserE2E {
             }
             var accepted = readAcceptances(entry.path("acceptances"));
             acts += accepted.size(); documents += accepted.stream().mapToInt(value -> value.documentos().size()).sum();
-            var identity = verifyRegistration(email, text(entry, "requiredSetRevision"), text(entry, "idempotencyKey"), accepted, started, finished);
+            var identity = verifyRegistration(email, text(entry, "requiredSetRevision"), text(entry, "idempotencyKey"), accepted, scenario.equals("created"), started, finished);
             assertThat(users.add(identity.userId())).isTrue(); assertThat(workshops.add(identity.tallerId())).isTrue();
             assertThat(fixture.owner.queryForList("SELECT id FROM users WHERE taller_id=? AND role='ADMIN'", Long.class,
                     identity.tallerId())).containsExactly(identity.userId());
             if (scenario.equals("created")) {
                 verifyOwnLegalHistory(entry, identity);
+                verifyPasswordRecovery(entry, project, identity, started, finished);
             } else if (scenario.equals("employees")) {
                 assertThat(entry.path("employeeLegalHistoryTotal").isIntegralNumber()).isTrue();
                 assertThat(entry.path("employeeLegalHistoryTotal").intValue()).isZero();
@@ -326,7 +338,7 @@ class LegalRegistrationBrowserE2E {
         for (String table : List.of("presupuestos", "presupuesto_items")) {
             assertThat(after.get(table) - baseline.get(table)).as("repair graph delta for %s", table).isEqualTo(4);
         }
-        assertThat(after.get("auth_tokens") - baseline.get("auth_tokens")).isEqualTo(12);
+        assertThat(after.get("auth_tokens") - baseline.get("auth_tokens")).isEqualTo(14);
         for (String table : List.of("talleres", "suscripciones", "legal_aceptacion_lotes",
                 "legal_aceptacion_metadatos", "legal_idempotencia_resultados")) {
             assertThat(after.get(table) - baseline.get(table)).as("durable delta for %s", table).isEqualTo(8);
@@ -335,6 +347,25 @@ class LegalRegistrationBrowserE2E {
         assertThat(after.get("legal_aceptacion_documentos") - baseline.get("legal_aceptacion_documentos")).isEqualTo(documents);
         assertThat(after.get("legal_aceptacion_metadatos_cifrados") - baseline.get("legal_aceptacion_metadatos_cifrados")).isEqualTo(16);
         assertThat(after.get("legal_idempotencia_sin_actos")).isEqualTo(baseline.get("legal_idempotencia_sin_actos"));
+    }
+
+    private void verifyPasswordRecovery(JsonNode entry, String project, Identity identity, Instant started, Instant finished) {
+        JsonNode recovery = entry.path("recovery");
+        assertThat(recovery.isObject()).isTrue();
+        assertThat(recovery.properties()).extracting(Map.Entry::getKey).containsExactlyInAnyOrder("resetTokenHash", "replacedTokenHash");
+        String hash = text(recovery, "resetTokenHash"), replaced = text(recovery, "replacedTokenHash");
+        assertThat(hash).matches("[0-9a-f]{64}"); assertThat(replaced).matches("[0-9a-f]{64}").isNotEqualTo(hash);
+        var rows = fixture.owner.queryForList("SELECT token_hash,created_at,expira_en,usado_en FROM auth_tokens WHERE user_id=? AND tipo='RESET_PASSWORD'", identity.userId());
+        assertThat(rows).hasSize(1); var token = rows.getFirst();
+        assertThat(token.get("token_hash")).isEqualTo(hash);
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE token_hash=?", Long.class, replaced)).isZero();
+        LocalDateTime created = localTimestamp(token, "created_at"), used = localTimestamp(token, "usado_en");
+        LocalDateTime expires = localTimestamp(token, "expira_en");
+        withinRun(created, started, finished); withinRun(used, started, finished);
+        assertThat(used).isAfterOrEqualTo(created).isBefore(expires);
+        assertThat(expires).isBetween(created.plusMinutes(59), created.plusMinutes(61));
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM users WHERE email=?", Long.class,
+                "reset-missing-" + project + "-" + RUN_ID + "@ordenfix-e2e.test")).isZero();
     }
 
     private void verifyOwnLegalHistory(JsonNode entry, Identity identity) {
@@ -631,7 +662,7 @@ class LegalRegistrationBrowserE2E {
     }
 
     private Identity verifyRegistration(String email, String revision, String key, List<LegalAcceptanceCommand.Acceptance> accepted,
-                                        Instant started, Instant finished) throws Exception {
+                                        boolean recovered, Instant started, Instant finished) throws Exception {
         var rows = fixture.owner.queryForList("""
                 SELECT u.id,u.taller_id,u.username,u.email,u.password,u.role,u.active,u.email_verificado,u.token_version,
                        t.nombre,t.telefono,t.activo,s.plan,s.estado,s.fecha_inicio,s.fecha_fin_trial
@@ -642,11 +673,14 @@ class LegalRegistrationBrowserE2E {
         assertThat(row.get("username")).isEqualTo("Prueba local"); assertThat(row.get("nombre")).isEqualTo("Laboratorio OrdenFix");
         assertThat(row.get("telefono")).isNull(); assertThat(row.get("role")).isEqualTo("ADMIN");
         assertThat(row.get("active")).isEqualTo(true); assertThat(row.get("activo")).isEqualTo(true);
-        assertThat(row.get("email_verificado")).isEqualTo(true); assertThat(((Number) row.get("token_version")).longValue()).isZero();
+        assertThat(row.get("email_verificado")).isEqualTo(true);
+        assertThat(((Number) row.get("token_version")).longValue()).isEqualTo(recovered ? 1 : 0);
         assertThat(row.get("plan")).isEqualTo("FREE"); assertThat(row.get("estado")).isEqualTo("TRIAL");
         LocalDate start = ((java.sql.Date) row.get("fecha_inicio")).toLocalDate();
         assertThat(((java.sql.Date) row.get("fecha_fin_trial")).toLocalDate()).isEqualTo(start.plusDays(14));
-        assertThat(new BCryptPasswordEncoder().matches(PASSWORD, (String) row.get("password"))).isTrue();
+        var encoder = new BCryptPasswordEncoder();
+        assertThat(encoder.matches(recovered ? RESET_PASSWORD : PASSWORD, (String) row.get("password"))).isTrue();
+        if (recovered) assertThat(encoder.matches(PASSWORD, (String) row.get("password"))).isFalse();
         var command = LegalAcceptanceCommandValidator.registration(new LegalAcceptanceCommand.Registration(
                 (String) row.get("nombre"), null, (String) row.get("username"), email, PASSWORD), revision, accepted);
         byte[] secret = Base64.getDecoder().decode(LegalRegistrationWriterITSupport.HMAC);
@@ -682,12 +716,16 @@ class LegalRegistrationBrowserE2E {
         assertThat(fields).extracting(LegalAcceptanceMetadataITSupport.CipherRow::type).containsExactly("IP", "USER_AGENT");
         assertThat(LegalAcceptanceMetadataITSupport.decrypt(lot, fields.getFirst())).isEqualTo("127.0.0.1");
         assertThat(LegalAcceptanceMetadataITSupport.decrypt(lot, fields.getLast())).contains("Chrome/");
-        assertEmailConfirmed(userId);
+        assertEmailConfirmed(userId, recovered ? 2 : 1);
         return new Identity(userId, tallerId);
     }
 
     private void assertEmailConfirmed(long userId) {
-        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, userId)).isEqualTo(1);
+        assertEmailConfirmed(userId, 1);
+    }
+
+    private void assertEmailConfirmed(long userId, int expectedTokens) {
+        assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=?", Long.class, userId)).isEqualTo(expectedTokens);
         assertThat(fixture.owner.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id=? AND tipo='VERIFICACION_EMAIL' AND usado_en IS NOT NULL AND usado_en>=created_at AND usado_en<expira_en", Long.class, userId)).isEqualTo(1);
     }
 
