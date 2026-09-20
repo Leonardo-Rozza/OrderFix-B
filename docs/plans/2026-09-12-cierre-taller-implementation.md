@@ -974,3 +974,20 @@ escritura con la representación de metadatos posterior a pg_restore. La lectura
 usa dos perfiles completos exactos revisados; no cambia los gates históricos ni
 autoriza DML. Resolver y probar esa compatibilidad queda explícitamente pendiente
 antes de reabrir un backend restaurado.
+
+
+## Continuación D — avisos de cierre/restauración por SMTP — 2026-09-19
+
+El [corte de avisos](2026-09-19-cierre-avisos-email-design.md) conecta los efectos V34
+AVISO_CIERRE/AVISO_RESTAURACION al transporte SMTP ya configurado. Se resolvieron
+plantillas HTML/texto, destinatario titular verificado, validación de lease y entrega
+fuera de transacciones, con aceptación/reintento seguro/incertidumbre explícitos.
+El scheduler separado toma sólo avisos y permanece desactivado por defecto; nunca
+activa cancelaciones de renovación. Una confirmación SQL perdida después del envío
+no dispara otro mensaje.
+
+Validación: 149 casos focalizados aprobados, incluidos PostgreSQL 16 y SMTP loopback.
+No envíos reales, cambios de migraciones congeladas ni push. D sigue parcial por
+retención/supresión final de identidad y evidencia, avisos inciertos y restantes
+pruebas de proveedores/operación desplegada. Estas plantillas informan operaciones
+registradas y nunca anuncian borrado total ni suscripciones reactivadas.

@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Explicit internal invocation only: no scheduler, real adapter, endpoint or external call by default. */
+/** Internal effects runner. Missing ports never claim work; notification scheduling is opt-in. */
 @Service
 public final class WorkshopClosureEffectWorker {
     private final JdbcTemplate jdbc;
@@ -32,9 +32,18 @@ public final class WorkshopClosureEffectWorker {
     }
     /** Missing ports never claim work or pretend to succeed. */
     public boolean runNext() {
+        requireNoCallerTransaction();
+        return run(renewal.getIfAvailable(),notification.getIfAvailable());
+    }
+    /** Does not resolve or invoke renewal providers, even if one is installed. */
+    public boolean runNextNotification() {
+        requireNoCallerTransaction();
+        return run(null,notification.getIfAvailable());
+    }
+    private static void requireNoCallerTransaction() {
         if(TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("Closure worker requires no caller transaction");
-        ClosureRenewalPort renewalPort=renewal.getIfAvailable();
-        ClosureNotificationPort notificationPort=notification.getIfAvailable();
+    }
+    private boolean run(ClosureRenewalPort renewalPort,ClosureNotificationPort notificationPort) {
         if(renewalPort==null && notificationPort==null) return false;
         Claim claim=transaction.execute(status->claim(renewalPort!=null,notificationPort!=null));
         if(claim==null) return false;
@@ -97,8 +106,9 @@ public final class WorkshopClosureEffectWorker {
                 && Objects.equals(claim.reference(),observed.externalReference());
     }
     private Outcome notify(ClosureNotificationPort port,Claim claim) {
+        if(!clock.instant().isBefore(claim.deadline())) return Outcome.UNCERTAIN;
         var kind="AVISO_CIERRE".equals(claim.type())?ClosureNotificationPort.Kind.CLOSED:ClosureNotificationPort.Kind.RESTORED;
-        var result=port.send(new ClosureNotificationPort.Event(claim.id(),claim.closure(),claim.tallerId(),claim.userId(),kind,claim.createdAt()));
+        var result=port.send(new ClosureNotificationPort.Event(claim.id(),claim.closure(),claim.tallerId(),claim.userId(),kind,claim.createdAt(),claim.lease(),claim.deadline()));
         if(result==null) return Outcome.UNCERTAIN;
         return switch(result) {case ACCEPTED->Outcome.CONFIRMED;case RETRYABLE->Outcome.RETRY;case UNCERTAIN->Outcome.UNCERTAIN;};
     }

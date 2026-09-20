@@ -245,6 +245,7 @@ ni para una API. El puerto real sigue sin instalarse; deberá acreditar la cuent
 aplicación del proveedor, frescura de la observación y timeout. La operación no
 llama al proveedor real por defecto y carece de scheduler/endpoint.
 
+Los avisos de cierre/restauración tienen ahora adaptador SMTP opt-in (ver abajo).
 Los avisos inciertos y REVISAR_RENOVACION conservan su circuito pendiente. El
 registro de la suscripción de OrdenFix se mantiene separado del control opcional de
 cobros del taller: esta conciliación no interviene en pagos taller–cliente.
@@ -331,3 +332,18 @@ modifican las ACL V37. No habilitar un rol con acceso ampliado para sortear pref
 Esta configuración queda apagada en el corte. No habilita el cierre público,
 no llama a MP/Cloudinary/email y no modifica las excepciones de conservación.
 Las pruebas se ejecutan sólo con talleres sintéticos en PostgreSQL descartable.
+
+
+### Avisos de cierre y restauración
+
+El adaptador y scheduler de avisos quedaron implementados con opt-in apagado.
+Consultar [configuración y estados de email](../operations/email.md#avisos-de-cierre-y-restauración--opt-in-local).
+Los mensajes van únicamente al titular activo con email verificado y describen la
+operación histórica, no el estado actual ni la finalización del borrado. Empleados,
+clientes y destinatarios alternativos no reciben estos avisos.
+
+El scheduler sólo toma AVISO_CIERRE/AVISO_RESTAURACION. No activa el adaptador de MP,
+la eliminación operativa, el cierre público ni el borrado de identidad/evidencia.
+CONFIRMADO significa aceptación SMTP más confirmación SQL; INCIERTO requiere revisión
+sin reenvío automático. El cierre productivo conserva pendientes la prueba real de
+proveedores, retención final, identidad y recuperación/operación del despliegue.

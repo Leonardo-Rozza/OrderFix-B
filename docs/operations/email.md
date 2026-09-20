@@ -1,7 +1,7 @@
 # Email transaccional — Resend y dominio OrdenFix
 
 Fecha: 2026-09-12. Proveedor existente: Resend por SMTP, desde el backend Java.
-Alcance: verificación de cuenta y recuperación de contraseña. No agrega marketing,
+Alcance: verificación de cuenta, recuperación de contraseña y avisos opt-in de cierre/restauración. No agrega marketing,
 notificaciones de reparaciones, cobros, endpoints de prueba ni infraestructura de colas.
 
 ## Estado comprobado
@@ -168,3 +168,59 @@ registral siguen diferidas hasta después de MP y Email, por decisión del usuar
 - [Registros Resend en Vercel](https://resend.com/docs/knowledge-base/vercel).
 - [Errores y permiso de envío](https://www.resend.com/docs/api-reference/errors).
 - [Agregar dominio al proyecto Vercel](https://vercel.com/docs/domains/working-with-domains/add-a-domain).
+
+
+## Avisos de cierre y restauración — opt-in local
+
+El [corte de avisos](../plans/2026-09-19-cierre-avisos-email-design.md) conecta la cola
+V34 al mismo `JavaMailSender` y remitente. Conserva el comportamiento best effort del
+alta/recuperación; los avisos usan un adaptador con resultado explícito. Sin cambios
+SQL, colas nuevas, endpoint o envío real durante este corte.
+
+| Configuración | Predeterminado | Efecto |
+| --- | --- | --- |
+| `MAIL_ENABLED` | `false` | Permite transporte de correo; también debe estar activo para los avisos. |
+| `ORDENFIX_CLOSURE_NOTIFICATIONS_ENABLED` | `false` | Registra el adaptador de avisos. |
+| `ORDENFIX_CLOSURE_NOTIFICATIONS_SCHEDULED` | `false` | Con los dos anteriores activos, agenda sólo avisos cada 60 s tras 60 s iniciales. |
+
+Las propiedades internas son `ordenfix.cuenta.cierre.notifications-enabled` y
+`ordenfix.cuenta.cierre.notifications-scheduled`. El worker manual interno
+`runNextNotification()` tampoco procesa cancelaciones de renovación. Sin puerto de
+notificación no reclama filas ni consume intentos. El scheduler procesa como máximo
+dos efectos por ronda/instancia y evita superposición local; la cola coordina otras
+instancias. Desactivar los flags impide nuevos reclamos, no cancela un SMTP en curso.
+No habilitar estos flags sobre datos restaurados sin completar la cuarentena y la
+conciliación del [runbook de recuperación](../runbooks/cierre-recuperacion-backup.md).
+
+El destinatario se resuelve del titular ADMIN activo/verificado del taller y del
+historial exacto de la operación. Dos lecturas REQUIRES_NEW/READ_COMMITTED comprueban
+identidad y lease antes del envío, sin bloquear filas durante SMTP. La dirección debe
+ser única, sin listas/grupos/nombre visible ni caracteres de control. Los cambios del
+titular posteriores a la última lectura no son atómicos con el transporte; no existe
+una transacción distribuida SMTP/SQL. No se copian destinatarios/cuerpos a la cola.
+
+`APP_PUBLIC_URL` para estos avisos debe ser un origen HTTPS sin usuario, ruta, query
+ni fragmento; se acepta `/` final. HTTP sólo admite localhost/127.0.0.1/[::1] para
+laboratorio. El único enlace agrega `/cuenta` y requiere sesión del titular, sin token.
+Las plantillas HTML/texto describen operaciones históricas, fechas de Argentina y
+remiten a Cuenta para el estado actual. No prometen borrado total ni reactivación de
+suscripciones. Un cierre anterior a una restauración puede enviarse después: su
+fecha y redacción no afirman que el taller siga cerrado.
+
+| Estado durable | Interpretación |
+| --- | --- |
+| `PENDIENTE` | No enviado todavía o fallo conocido antes de llamar SMTP; reintento con backoff y mismo efecto. |
+| `EN_CURSO` | Un worker conserva un lease de 120 s; no iniciar otro envío. |
+| `CONFIRMADO` | SMTP retornó aceptación y el ACK SQL se confirmó dentro del lease. No acredita Recibidos. |
+| `INCIERTO` | Posible envío, lease vencida, identidad inválida o intentos agotados; requiere revisión y no se reenvía automáticamente. |
+
+Cualquier excepción a partir de `JavaMailSender.send` es incierta, aun si parece un
+rechazo de transporte. Si SMTP aceptó pero se pierde el ACK SQL, el efecto vence a
+INCIERTO. Los timeouts SMTP de 5/10/10 s siguen siendo por operación, no una garantía
+sobre duración total. No forzar PENDIENTE ni invocar el adaptador suelto para resolver
+avisos inciertos: conservar evidencia y revisar con el proveedor en un corte posterior.
+No hay logs con correo, cuerpo, SQL, token o causa del proveedor.
+
+Esta implementación sigue desactivada. La aceptación SMTP local sintética no prueba
+entrega de estas plantillas en un buzón real; esa comprobación se reserva para la
+activación autorizada y el recorrido desplegado de Email C.
