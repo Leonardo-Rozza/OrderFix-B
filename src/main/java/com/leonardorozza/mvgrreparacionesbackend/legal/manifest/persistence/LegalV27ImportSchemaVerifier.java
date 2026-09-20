@@ -56,11 +56,14 @@ final class LegalV27ImportSchemaVerifier implements LegalDatabasePreflight {
         }
     }
 
-    /** Frozen V27 surface, deliberately without compatibility dispatch. */
+    /** Frozen migrated V27 surface, plus its exact public/V37 logical-restore representation. */
     void verifyBase() {
         verifySessionSchema();
         verifyFlywayHistory();
-        if (!catalogFingerprint().equals(LegalV27ImportInventory.EXPECTED_CATALOG)) {
+        var catalog = catalogFingerprint();
+        if (!catalog.equals(LegalV27ImportInventory.EXPECTED_CATALOG)
+                && !(catalog.equals(LegalRestoredV37Catalogs.IMPORT)
+                    && LegalRestoredV37Catalogs.hasExactV37History(jdbc, expectedSchema))) {
             incompatible();
         }
         verifyImportFunctions();

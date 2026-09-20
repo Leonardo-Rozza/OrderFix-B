@@ -227,6 +227,91 @@ class WorkshopClosureBackupRecoveryIT {
         assertThat(report.findings()).hasSize(2);
     }
 
+    @Test void restoredDeletionUsesRestrictedRoleNewReadCommittedTransactionAndImmutableReplay() throws Exception {
+        Actor actor = actor(), foreign = actor();
+        source.jdbc().update("INSERT INTO articulos(taller_id,nombre) SELECT ?,'Restore write fixture' FROM generate_series(1,26)", actor.workshop());
+        source.jdbc().update("INSERT INTO articulos(taller_id,nombre) VALUES(?,'Foreign fixture')", foreign.workshop());
+        UUID reference = UUID.randomUUID(), foreignReference = UUID.randomUUID();
+        transition(actor, reference, false, Instant.now().minus(8, ChronoUnit.DAYS));
+        transition(foreign, foreignReference, false, Instant.now().minus(8, ChronoUnit.DAYS));
+        recover(dump());
+        JdbcTemplate restricted = restrictedRestoreExecutor();
+        var manager = new DataSourceTransactionManager(restricted.getDataSource());
+        var service = new WorkshopOperationalDeletionService(restricted, manager, true);
+        UUID batchId = UUID.randomUUID();
+        var category = WorkshopOperationalDeletionService.Category.ARTICULOS;
+        var foreignBefore = controlRows(target, foreign);
+        var outer = new TransactionTemplate(manager);
+        outer.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        outer.executeWithoutResult(status -> {
+            assertThat(restricted.queryForObject("SHOW transaction_isolation", String.class)).isEqualTo("repeatable read");
+            var deleted = service.deleteBatch(actor.workshop(), reference, batchId, category);
+            assertThat(deleted.status()).isEqualTo(WorkshopOperationalDeletionService.Status.DELETED);
+            assertThat(deleted.deleted()).isEqualTo(25);
+            assertThat(deleted.remaining()).isTrue();
+            status.setRollbackOnly();
+        });
+        // The service committed its own RC transaction despite the caller's RR rollback.
+        assertThat(target.jdbc().queryForObject("SELECT count(*) FROM articulos WHERE taller_id=?", Long.class, actor.workshop())).isEqualTo(1);
+        var beforeReplay = rows(target, true);
+        var sequenceValues = sequences(target);
+        var replay = service.deleteBatch(actor.workshop(), reference, batchId, category);
+        assertThat(replay.status()).isEqualTo(WorkshopOperationalDeletionService.Status.REUSED);
+        assertThat(replay.deleted()).isEqualTo(25);
+        assertThat(replay.receiptId()).isEqualTo(batchId);
+        assertThat(rows(target, true)).as("replay must not change even xmin").isEqualTo(beforeReplay);
+        assertThat(sequences(target)).isEqualTo(sequenceValues);
+        assertThatThrownBy(() -> service.deleteBatch(foreign.workshop(), foreignReference, batchId, category))
+                .isInstanceOf(WorkshopOperationalDeletionService.Rejected.class).hasNoCause();
+        assertThatThrownBy(() -> service.deleteBatch(actor.workshop(), reference, batchId, WorkshopOperationalDeletionService.Category.CLIENTES))
+                .isInstanceOf(WorkshopOperationalDeletionService.Rejected.class).hasNoCause();
+        assertThat(rows(target, true)).as("collisions cannot rebind a restored receipt").isEqualTo(beforeReplay);
+        assertThat(controlRows(target, foreign)).isEqualTo(foreignBefore);
+        assertThat(target.jdbc().queryForObject("SELECT count(*) FROM articulos WHERE taller_id=?", Long.class, foreign.workshop())).isEqualTo(1);
+        assertThat(target.jdbc().queryForObject("SELECT count(*) FROM cuenta_borrado_contextos", Long.class)).isZero();
+        assertThat(restricted.queryForObject("SELECT has_table_privilege(current_user,'public.articulos','DELETE')", Boolean.class)).isFalse();
+        assertThat(restricted.queryForObject("SELECT has_table_privilege(current_user,'public.cuenta_borrado_lotes','SELECT')", Boolean.class)).isFalse();
+    }
+
+    @Test void restoredDeletionRollsBackRowsAndReceiptAfterFailureFollowingDml() throws Exception {
+        Actor actor = actor();
+        source.jdbc().update("INSERT INTO articulos(taller_id,nombre) VALUES(?,'Rollback fixture')", actor.workshop());
+        UUID reference = UUID.randomUUID();
+        transition(actor, reference, false, Instant.now().minus(8, ChronoUnit.DAYS));
+        recover(dump());
+        var dataSource = restrictedRestoreExecutor().getDataSource();
+        var reachedDml = new AtomicBoolean();
+        var failing = new JdbcTemplate(dataSource) {
+            @Override public <T> T queryForObject(String sql, org.springframework.jdbc.core.RowMapper<T> mapper, Object... args) {
+                T result = super.queryForObject(sql, mapper, args);
+                if (sql.contains("public.cuenta_cierre_borrar_lote_v37(")) {
+                    assertThat(((WorkshopOperationalDeletionService.Batch) result).status()).isEqualTo(WorkshopOperationalDeletionService.Status.DELETED);
+                    reachedDml.set(true);
+                    throw new org.springframework.dao.DataAccessResourceFailureException("Synthetic failure after SQL deletion");
+                }
+                return result;
+            }
+        };
+        var service = new WorkshopOperationalDeletionService(failing, new DataSourceTransactionManager(dataSource), true);
+        var before = rows(target, true);
+        assertThatThrownBy(() -> service.deleteBatch(actor.workshop(), reference, UUID.randomUUID(), WorkshopOperationalDeletionService.Category.ARTICULOS))
+                .isInstanceOf(WorkshopOperationalDeletionService.Rejected.class).hasNoCause();
+        assertThat(reachedDml).isTrue();
+        assertThat(rows(target, true)).as("the deletion and its receipt roll back together").isEqualTo(before);
+        assertThat(target.jdbc().queryForObject("SELECT count(*) FROM cuenta_borrado_contextos", Long.class)).isZero();
+    }
+
+    private JdbcTemplate restrictedRestoreExecutor() {
+        String role = "restore_executor_" + UUID.randomUUID().toString().replace("-", "");
+        target.jdbc().execute("CREATE ROLE " + role + " LOGIN PASSWORD 'synthetic-restore-executor' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS");
+        target.jdbc().execute("GRANT CONNECT ON DATABASE " + target.name() + " TO " + role);
+        target.jdbc().execute("GRANT USAGE ON SCHEMA public TO " + role);
+        target.jdbc().execute("GRANT SELECT ON public.flyway_schema_history TO " + role);
+        target.jdbc().execute("GRANT EXECUTE ON FUNCTION public.cuenta_cierre_borrar_lote_v37(uuid,bigint,uuid,text) TO " + role);
+        String url = ((DriverManagerDataSource) target.jdbc().getDataSource()).getUrl();
+        return new JdbcTemplate(new DriverManagerDataSource(url, role, "synthetic-restore-executor"));
+    }
+
     @ParameterizedTest(name="read profile rejects {0}")
     @ValueSource(strings={"TRIGGER", "FUNCTION", "DEFAULT", "FOREIGN_KEY", "ACL", "INHERITANCE", "CHECK"})
     void recoveryCaptureRejectsChangedSchemaWithoutChangingRows(String change) {

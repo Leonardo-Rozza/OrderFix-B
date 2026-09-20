@@ -69,7 +69,9 @@ final class LegalPrivatePhotoSchema {
             String expected=version>=37 ? LegalV37OperationalDeletionSchema.PHOTO_CATALOG
                     : version>=35 ? LegalV35PhotoDeletionSchema.PHOTO_CATALOG
                     : version!=0 ? LegalV33ClosureSchema.PHOTO_CATALOG : EXPECTED;
-            if(!expected.equals(snapshot(jdbc)))throw new IllegalStateException("Esquema de fotos privadas incompatible");
+            String catalog = snapshot(jdbc);
+            if (!expected.equals(catalog) && !(version == 37 && LegalRestoredV37Catalogs.PHOTO.equals(catalog)))
+                throw new IllegalStateException("Esquema de fotos privadas incompatible");
     }
     /** Fresh-PG diagnostic hashes catalog metadata only, never photo rows or remote identifiers. */
     static String snapshot(JdbcTemplate jdbc) {

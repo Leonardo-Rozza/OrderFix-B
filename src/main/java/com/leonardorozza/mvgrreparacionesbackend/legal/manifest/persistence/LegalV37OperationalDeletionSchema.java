@@ -96,10 +96,10 @@ public final class LegalV37OperationalDeletionSchema {
 
     /** Delta only, invoked by V29 after its full historical/legal surface; no recursive dispatch. */
     static void verify(JdbcTemplate jdbc) {
-        if (!V33_DELTA.equals(LegalV33ClosureSchema.snapshot(jdbc))
-                || !LegalV34ClosureSchema.EXPECTED.equals(LegalV34ClosureSchema.snapshot(jdbc))
-                || !V35_DELTA.equals(LegalV35PhotoDeletionSchema.snapshot(jdbc))
-                || !EXPECTED.equals(snapshot(jdbc))) incompatible();
+        var catalogs = List.of(LegalV33ClosureSchema.snapshot(jdbc),
+                LegalV34ClosureSchema.snapshot(jdbc), LegalV35PhotoDeletionSchema.snapshot(jdbc), snapshot(jdbc));
+        if (!catalogs.equals(List.of(V33_DELTA, LegalV34ClosureSchema.EXPECTED, V35_DELTA, EXPECTED))
+                && !catalogs.equals(LegalRestoredV37Catalogs.CLOSURE_DELTAS)) incompatible();
         // The SQL entry is deliberately grantable to a restricted executor role. Its name/OID is
         // installation-specific; PUBLIC, delegation, and non-owner grantors are never acceptable.
         Boolean unsafeGrant = jdbc.queryForObject("""

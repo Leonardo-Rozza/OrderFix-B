@@ -96,7 +96,9 @@ final class LegalV29AcceptanceSchemaVerifier implements LegalDatabasePreflight {
         if (closure && !"public".equals(expectedSchema)) incompatible();
         var expected = version.ordinal() >= RuntimeVersion.V34.ordinal() ? LegalV34ClosureSchema.LEGAL_CATALOG
                 : closure ? LegalV33ClosureSchema.LEGAL_CATALOG : photos ? LegalPrivatePhotoSchema.LEGAL_CATALOG : LegalV29AcceptanceInventory.EXPECTED_CATALOG;
-        if (!catalogFingerprint().equals(expected)) {
+        var catalog = catalogFingerprint();
+        if (!catalog.equals(expected)
+                && !(version == RuntimeVersion.V37 && catalog.equals(LegalRestoredV37Catalogs.ACCEPTANCE))) {
             incompatible();
         }
         verifySchemaFunctions();

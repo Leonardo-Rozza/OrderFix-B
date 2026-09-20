@@ -186,10 +186,25 @@ configuración de collation/locale distinta o cambios de catálogo requieren rev
 el perfil; no hay opción para omitir la comprobación. No certifica roles globales ni
 privilegios de infraestructura. No reemplaza los gates históricos de escritura legal.
 
-El ensayo detectó que esos gates históricos rechazan metadatos reconstruidos por
-pg_restore, aunque la comparación de lectura sea compatible. Su compatibilidad debe
-resolverse y probarse por separado **antes de reabrir un backend restaurado**. No
-modificar migraciones, registros Flyway o hashes a mano para silenciar el rechazo.
+El [corte de compatibilidad V37](../plans/2026-09-19-compatibilidad-restauracion-v37-design.md)
+agrega variantes exactas para los metadatos reconstruidos por pg_dump/pg_restore
+PostgreSQL 16. Los consumidores de importación, edición legal, agregados, aceptación,
+registro, fotos y borrado operativo mantienen sus controles de sesión, historial,
+funciones y privilegios. El alcance es el esquema actual **public/V37**; no habilita
+restauraciones de V27–V36 ni representaciones de catálogo desconocidas. Las huellas
+originales y las migraciones permanecen congeladas.
+
+Esto resuelve la compatibilidad de esos verificadores, **no autoriza la reapertura**:
+los datos pueden seguir atrasados y contener sesiones o filas que debían estar
+revocadas o borradas. Mantener la cuarentena, contrastar evidencia externa y resolver
+las divergencias antes de cualquier decisión operativa. No modificar migraciones,
+registros Flyway o hashes a mano para silenciar un rechazo.
+
+Un pg_dump de una base no incorpora la definición de roles globales ni toda su
+configuración de sesión. Reponer los roles y configuración por el procedimiento
+externo del despliegue, manteniendo las capacidades mínimas; el catálogo restaurado
+no concede permisos adicionales. Las pruebas locales provisionan roles sintéticos
+explícitamente después de restaurar y comprueban sus fronteras de privilegios.
 
 Tras empaquetar con Java 21 (`./mvnw -B -DskipTests package`), usar el launcher:
 
