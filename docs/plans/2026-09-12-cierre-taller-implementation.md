@@ -942,3 +942,35 @@ recuperación del avance, concurrencia, fotos y control de JAR sin propiedades
 secretas. V27–V37 y frontend intactos; no se repitió clean verify ni se activaron
 flags/proveedores. Comando y evidencia en el diseño enlazado. Commit atómico local
 `feat(cuenta): orquesta borrado operativo por lotes`, sin push.
+
+
+## Continuación D — checkpoint externo y cuarentena (2026-09-19)
+
+Se agrega una captura de sólo lectura de inventario completo de talleres, épocas de
+todos los usuarios, cierres/operaciones, recibos V37 y huellas de las ocho categorías
+operativas. El archivo externo se autentica con HMAC y se liga a un recibo/entorno
+esperados por un canal independiente. El comparador distingue inventarios y
+superficies diferentes, incluso con igual generación de cierre o igual cantidad.
+
+El [diseño y plan del corte](2026-09-19-recuperacion-checkpoint-cuarentena-design.md)
+define límites y cobertura. La CLI aislada no inicia el backend; una marca externa
+de cuarentena bloquea su arranque antes del contexto Spring. La marca debe
+configurarse antes de conectar la restauración y no detecta un restore por sí sola.
+
+Es un checkpoint explícito, no un journal transaccional continuo. No acredita
+operaciones posteriores, proveedores, exportaciones, evidencia retenida o respaldos.
+MATCH sigue devolviendo NO_AUTORIZA_REAPERTURA, sin mutar estado ni quitar el bloqueo.
+D permanece parcial para conservación integral, conciliación y recuperación del
+despliegue. No se modifican V27–V37, frontend, flags ni datos reales.
+
+Validación focal: 114 casos (81 unitarias + 33 IT). Gate integral `clean verify`:
+**10.070 pruebas aprobadas (8.115 unitarias + 1.955 IT)**, sin fallos, errores u
+omisiones; BUILD SUCCESS en 42:33 min y control de secretos en los tres JAR aprobado.
+V27–V37 y frontend conservados, incluidos sus 179 archivos no versionados previos.
+Entrega atómica local, sin push.
+
+El ensayo identificó una incompatibilidad de los verificadores históricos de
+escritura con la representación de metadatos posterior a pg_restore. La lectura
+usa dos perfiles completos exactos revisados; no cambia los gates históricos ni
+autoriza DML. Resolver y probar esa compatibilidad queda explícitamente pendiente
+antes de reabrir un backend restaurado.

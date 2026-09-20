@@ -1,7 +1,7 @@
 # Recuperación de backups y cierres de taller
 
-Estado: procedimiento propuesto y comprobador interno de comparación parcial del
-corte D. No hay adaptador de journal externo ni gate automático de cuarentena.
+Estado: comprobador parcial D, checkpoint externo autenticado y barrera de arranque
+configurable disponibles en local. No hay journal externo transaccional continuo.
 Este documento no autoriza restaurar bases reales ni reabrir producción.
 
 ## Qué debe conservar la cuarentena
@@ -16,10 +16,12 @@ una cuenta antigua que vuelve a aparecer abierta.
 Antes de conectar una restauración, mantenerla aislada de tráfico de usuarios y de
 workers, webhooks y proveedores. Esta restricción debe depender del procedimiento y
 entorno de despliegue, fuera de la base restaurada. Un flag guardado dentro del mismo
-backup puede retroceder con ella. Hoy la aplicación no implementa esa barrera de
-arranque: el equipo de operación debe acreditar el aislamiento antes del ensayo o
-recuperación. No iniciar la aplicación con los proveedores habilitados para hacer
-esta comprobación.
+backup puede retroceder con ella. Configurar `ORDENFIX_RECOVERY_QUARANTINE=true` en
+el entorno del backend antes de apuntarlo a una restauración: aborta antes de crear
+el contexto Spring, DataSource, Flyway, HTTP o workers. Un valor inválido también
+bloquea; ausencia o `false` conservan el arranque previo. No detiene procesos ya
+iniciados ni detecta una restauración por sí sola. Acreditar también aislamiento
+de red/proveedores; no iniciar el backend para ejecutar el diagnóstico.
 
 ## Evidencia externa necesaria
 
@@ -92,9 +94,11 @@ reenvía correos, cancela suscripciones ni modifica la configuración de arranqu
    referencias, versiones, cobertura y resultado saneado. Una persona responsable
    debe acreditar por separado todos los requisitos operativos antes de reabrir.
 
-Las herramientas de borrado por categorías, política real de conservación, journal
-externo, reconciliación y barrera automática de arranque siguen pendientes. El cierre
-D parcial y una comparación compatible no sustituyen esos requisitos.
+El borrado operativo por categorías y su worker V37 ya existen como capacidades
+opt-in; identidad y evidencia retenida siguen fuera de ese borrado. Permanecen
+pendientes la conservación real por categoría, journal continuo, reconciliación
+específica y operación del despliegue. La barrera de arranque requiere configuración
+externa previa; ninguna comparación compatible sustituye esos requisitos.
 
 ## Ensayo automatizado local
 
@@ -134,7 +138,8 @@ DOCKER_AUTH_CONFIG='{"auths":{}}' ./mvnw -B \
   -Dit.test=WorkshopClosureBackupRecoveryIT,WorkshopClosureBackupCheckIT verify
 ```
 
-El aislamiento lo establece este harness, no un gate de arranque de OrdenFix. Es un
+El aislamiento de este ensayo lo establece el harness; las pruebas de la nueva
+barrera de arranque son independientes. Es un
 backup lógico con el mismo rol sintético en ambas instancias y ACL del archivo; no
 acredita roles globales, cuentas restringidas de producción, infraestructura, claves,
 WAL/PITR, backups cifrados, objetos remotos ni tiempos de recuperación a volumen real.
@@ -142,3 +147,82 @@ Tampoco constituye un journal externo completo, reconciliación o aprobación de
 reapertura. La eliminación integral del corte D conserva sus pendientes.
 El diseño y el resultado de ejecución se registran en
 [el acta del ensayo](../plans/2026-09-19-recuperacion-backup-local-design.md).
+
+
+## Checkpoint externo autenticado y CLI aislada
+
+El corte de [checkpoint y cuarentena](../plans/2026-09-19-recuperacion-checkpoint-cuarentena-design.md)
+amplía el diagnóstico a todos los talleres presentes, las épocas de todos sus
+usuarios, historial/operaciones, recibos V37 y ocho categorías operativas. Detecta
+filas recuperadas después de un borrado aunque el cierre siga coincidiendo, y
+cambios de contenido aun con igual cantidad. Sólo escribe el checkpoint externo;
+las consultas a PostgreSQL son de sólo lectura y no migran ni corrigen la base.
+
+Preparar **fuera del repositorio y del backup principal**, mediante la operación
+del entorno, un directorio privado 0700 y una clave binaria aleatoria de 32 bytes
+con permisos 0600. Conservar y respaldar la clave por un canal seguro independiente.
+No reutilizar JWT, claves de email, MP o Cloudinary como clave HMAC. El archivo
+contiene IDs y huellas sensibles; no publicarlo ni adjuntarlo a tickets abiertos.
+
+Variables obligatorias para el proceso CLI:
+
+| Variable | Procedencia y significado |
+| --- | --- |
+| `ORDENFIX_RECOVERY_ENVIRONMENT_ID` | UUID estable del despliegue, autorizado fuera de la base restaurada. Es una identidad declarada por el operador; verificar también a qué instancia conecta JDBC. |
+| `ORDENFIX_RECOVERY_CHECKPOINT_ID` | UUID nuevo para capturar; UUID exacto del recibo externo esperado para comparar. |
+| `ORDENFIX_RECOVERY_KEY_FILE` | Ruta al archivo privado con la clave binaria de 32 bytes. |
+| `ORDENFIX_RECOVERY_JDBC_URL` | Conexión PostgreSQL a la fuente autorizada o al destino aislado. Mantener timeouts de conexión/socket y TLS adecuados en la configuración de infraestructura. |
+| `ORDENFIX_RECOVERY_JDBC_USERNAME` | Cuenta de mantenimiento con las lecturas requeridas, separada del rol HTTP. |
+| `ORDENFIX_RECOVERY_JDBC_PASSWORD` | Secreto inyectado por el entorno seguro; no incluir en comandos, commits o registros. |
+| `ORDENFIX_RECOVERY_EXPECTED_SHA256` | Sólo `compare`: huella del recibo esperado conservado por un canal independiente. No recalcularla a partir del archivo que se pretende validar. |
+
+El proceso necesita leer metadatos del preflight de lectura V37 y las superficies capturadas,
+incluidos recibos privados. No modifica ACL ni crea roles: permisos insuficientes
+rechazan la captura. No otorgar privilegios al rol público para forzar un diagnóstico.
+La transacción impone READ ONLY y `row_security=off` para rechazar filtrados RLS,
+no producir una falsa captura completa. El preflight admite exactamente dos perfiles
+V37 revisados: migrado y restaurado en PostgreSQL 16. Otra huella, nuevos grants,
+configuración de collation/locale distinta o cambios de catálogo requieren revisar
+el perfil; no hay opción para omitir la comprobación. No certifica roles globales ni
+privilegios de infraestructura. No reemplaza los gates históricos de escritura legal.
+
+El ensayo detectó que esos gates históricos rechazan metadatos reconstruidos por
+pg_restore, aunque la comparación de lectura sea compatible. Su compatibilidad debe
+resolverse y probarse por separado **antes de reabrir un backend restaurado**. No
+modificar migraciones, registros Flyway o hashes a mano para silenciar el rechazo.
+
+Tras empaquetar con Java 21 (`./mvnw -B -DskipTests package`), usar el launcher:
+
+```sh
+# Variables y permisos provisionados previamente por el operador.
+# ORDENFIX_RECOVERY_DIR debe ser un directorio privado externo al repositorio.
+scripts/recovery-checkpoint.sh capture "$ORDENFIX_RECOVERY_DIR/checkpoint.bin"
+
+# Conectar ahora al destino aislado y proporcionar el recibo esperado independiente.
+scripts/recovery-checkpoint.sh compare "$ORDENFIX_RECOVERY_DIR/checkpoint.bin"
+```
+
+El launcher retira JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS y _JAVA_OPTIONS, utiliza
+`ORDENFIX_JAVA_BIN` si se define y permite seleccionar artefacto con
+`ORDENFIX_RECOVERY_CLI_JAR`. La CLI no crea SpringApplication, no procesa sus imports
+ni contacta HTTP/proveedores; puede trabajar aunque el backend esté en cuarentena.
+
+`capture` devuelve `CAPTURED`, el UUID de entorno/checkpoint y SHA-256 del archivo.
+Guardar ese recibo por el canal independiente autorizado. El archivo no se sobrescribe.
+`compare` valida HMAC, formato, límites y recibo antes de abrir la conexión al destino;
+devuelve MATCH o DIFFERENCES con IDs técnicos/superficies, sin contenido de negocio.
+Salidas: 0 = captura o comparación ejecutada y coincidente; 2 = diferencias; 1 =
+rechazo/error. **Ni siquiera 0 autoriza reapertura**. Toda salida mantiene
+`NO_AUTORIZA_REAPERTURA`; el comando jamás quita la cuarentena.
+
+Límites por captura: 1.000 talleres y 10.000 filas por superficie en toda la base,
+archivo de hasta 4 MiB. Si se exceden, se rechaza sin emitir una captura parcial.
+No dividir manualmente talleres para presentar cobertura completa: ampliar capacidad
+requiere otro corte con validación. Una captura vacía se admite como inventario vacío
+observado, no como evidencia de ausencia de operaciones posteriores.
+
+Un checkpoint auténtico acredita sólo su instante/superficies. Una captura vieja
+más su recibo viejo pueden coincidir y seguir omitiendo cierres posteriores. El HMAC,
+la fecha y la coincidencia no prueban continuidad ni autoridad del operador. Mantener
+la cuarentena hasta reconciliar el intervalo faltante, sesiones, exportaciones,
+efectos remotos, evidencia retenida y respaldos. No hay reanudación automática.

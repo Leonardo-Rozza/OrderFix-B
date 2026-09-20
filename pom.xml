@@ -30,6 +30,7 @@
         <java.version>21</java.version>
         <start-class>com.leonardorozza.mvgrreparacionesbackend.MvgrReparacionesBackendApplication</start-class>
         <legal-cli.main-class>com.leonardorozza.mvgrreparacionesbackend.legal.manifest.cli.LegalManifestCli</legal-cli.main-class>
+        <recovery-cli.main-class>com.leonardorozza.mvgrreparacionesbackend.cuenta.recovery.RecoveryCheckpointCli</recovery-cli.main-class>
         <jackson-2-bom.version>2.22.1</jackson-2-bom.version>
         <networknt-json-schema-validator.version>2.0.7</networknt-json-schema-validator.version>
         <java-json-canonicalization.version>1.1</java-json-canonicalization.version>
@@ -198,6 +199,17 @@
                             <forceCreation>true</forceCreation>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>recovery-cli-source-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>recovery-cli</classifier>
+                            <forceCreation>true</forceCreation>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
             <plugin>
@@ -249,6 +261,16 @@
                         <configuration>
                             <classifier>legal-cli</classifier>
                             <mainClass>${legal-cli.main-class}</mainClass>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>repackage-recovery-cli</id>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>recovery-cli</classifier>
+                            <mainClass>${recovery-cli.main-class}</mainClass>
                         </configuration>
                     </execution>
                 </executions>
@@ -306,6 +328,11 @@
                                         src="${project.build.directory}/${project.build.finalName}-legal-cli.jar"
                                         includes="application-secret.properties,**/application-secret.properties"/>
                                 </resourcecount>
+                                <resourcecount property="application.secret.entries.recovery">
+                                    <zipfileset
+                                        src="${project.build.directory}/${project.build.finalName}-recovery-cli.jar"
+                                        includes="application-secret.properties,**/application-secret.properties"/>
+                                </resourcecount>
                                 <condition property="application.secret.present">
                                     <or>
                                         <not>
@@ -313,6 +340,9 @@
                                         </not>
                                         <not>
                                             <equals arg1="${application.secret.entries.cli}" arg2="0"/>
+                                        </not>
+                                        <not>
+                                            <equals arg1="${application.secret.entries.recovery}" arg2="0"/>
                                         </not>
                                     </or>
                                 </condition>
