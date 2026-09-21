@@ -66,7 +66,7 @@ class WorkshopClosureBackupRecoveryIT {
         source = freshDatabase(SOURCE);
         target = freshDatabase(TARGET);
         Flyway.configure().dataSource(source.jdbc().getDataSource())
-                .locations("classpath:db/migration").load().migrate();
+                .locations("classpath:db/migration").target("37").load().migrate();
         assertThat(target.jdbc().queryForList("SELECT tablename FROM pg_tables WHERE schemaname='public'"))
                 .as("the recovery destination has not been migrated").isEmpty();
     }

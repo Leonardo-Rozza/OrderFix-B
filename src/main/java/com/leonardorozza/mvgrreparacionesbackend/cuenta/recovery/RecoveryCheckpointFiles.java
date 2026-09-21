@@ -33,15 +33,8 @@ import static com.leonardorozza.mvgrreparacionesbackend.cuenta.recovery.Recovery
 public final class RecoveryCheckpointFiles {
     public static final int MAX_FILE_BYTES = 4 * 1024 * 1024;
     private static final long MAGIC = 0x4f46585245433031L; // OFXREC01
-    private static final int VERSION = 1;
     private static final int HASH_BYTES = 32;
     private static final int HEADER_BYTES = 60;
-    // Explicit order is part of version 1. Enum additions must not silently change the file format.
-    private static final List<Surface> SURFACES = List.of(Surface.WORKSHOP, Surface.USERS,
-            Surface.CLOSURES, Surface.OPERATIONS, Surface.DELETION_BATCHES, Surface.ITEMS,
-            Surface.PRESUPUESTOS, Surface.COBROS, Surface.REPUESTOS, Surface.REPARACIONES,
-            Surface.EQUIPOS, Surface.CLIENTES, Surface.ARTICULOS);
-    private static final int WORKSHOP_BYTES = Long.BYTES + SURFACES.size() * (Long.BYTES + HASH_BYTES);
     private static final Set<PosixFilePermission> DIRECTORY_PERMISSIONS = PosixFilePermissions.fromString("rwx------");
     private static final Set<PosixFilePermission> FILE_PERMISSIONS = PosixFilePermissions.fromString("rw-------");
     private static final String FAILURE = "No se pudo leer o guardar el checkpoint de recuperación.";
@@ -128,14 +121,16 @@ public final class RecoveryCheckpointFiles {
     }
 
     private static byte[] encode(Snapshot snapshot) throws IOException {
+        List<Surface> captured = surfaces(snapshot.formatVersion());
+        int workshopBytes = Long.BYTES + captured.size() * (Long.BYTES + HASH_BYTES);
         int count = snapshot.workshops().size();
         if (count < 0 || count > MAX_WORKSHOPS) throw new Rejected();
-        int length = HEADER_BYTES + count * WORKSHOP_BYTES;
+        int length = HEADER_BYTES + count * workshopBytes;
         if (length > MAX_FILE_BYTES - HASH_BYTES) throw new Rejected();
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(length);
         try (DataOutputStream out = new DataOutputStream(bytes)) {
             out.writeLong(MAGIC);
-            out.writeInt(VERSION);
+            out.writeInt(snapshot.formatVersion());
             uuid(out, snapshot.environmentId());
             uuid(out, snapshot.checkpointId());
             out.writeLong(snapshot.observedAt().getEpochSecond());
@@ -143,10 +138,10 @@ public final class RecoveryCheckpointFiles {
             out.writeInt(count);
             long previous = 0;
             for (Workshop workshop : snapshot.workshops()) {
-                if (workshop.tallerId() <= previous || workshop.surfaces().size() != SURFACES.size()) throw new Rejected();
+                if (workshop.tallerId() <= previous || workshop.surfaces().size() != captured.size()) throw new Rejected();
                 previous = workshop.tallerId();
                 out.writeLong(workshop.tallerId());
-                for (Surface surface : SURFACES) {
+                for (Surface surface : captured) {
                     Digest value = Objects.requireNonNull(workshop.surfaces().get(surface));
                     if (value.rows() < 0 || value.rows() > MAX_ROWS_PER_SURFACE) throw new Rejected();
                     out.writeLong(value.rows());
@@ -162,7 +157,10 @@ public final class RecoveryCheckpointFiles {
 
     private static Snapshot decode(byte[] payload) throws IOException {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(payload))) {
-            if (in.readLong() != MAGIC || in.readInt() != VERSION) throw new Rejected();
+            if (in.readLong() != MAGIC) throw new Rejected();
+            int formatVersion = in.readInt();
+            List<Surface> captured = surfaces(formatVersion);
+            int workshopBytes = Long.BYTES + captured.size() * (Long.BYTES + HASH_BYTES);
             UUID environment = uuid(in), checkpoint = uuid(in);
             long seconds = in.readLong();
             int nanos = in.readInt();
@@ -170,17 +168,17 @@ public final class RecoveryCheckpointFiles {
             Instant observed = Instant.ofEpochSecond(seconds, nanos);
             int count = in.readInt();
             // Validate dimensions and exact byte count before allocating any records from the file.
-            if (count < 0 || count > MAX_WORKSHOPS || payload.length != HEADER_BYTES + count * WORKSHOP_BYTES)
+            if (count < 0 || count > MAX_WORKSHOPS || payload.length != HEADER_BYTES + count * workshopBytes)
                 throw new Rejected();
             var workshops = new ArrayList<Workshop>(count);
-            long[] totals = new long[SURFACES.size()];
+            long[] totals = new long[Surface.values().length];
             long previous = 0;
             for (int index = 0; index < count; index++) {
                 long taller = in.readLong();
                 if (taller <= previous) throw new Rejected();
                 previous = taller;
                 var surfaces = new EnumMap<Surface, Digest>(Surface.class);
-                for (Surface surface : SURFACES) {
+                for (Surface surface : captured) {
                     long rows = in.readLong();
                     if (rows < 0 || rows > MAX_ROWS_PER_SURFACE) throw new Rejected();
                     totals[surface.ordinal()] += rows;
@@ -192,7 +190,7 @@ public final class RecoveryCheckpointFiles {
                 workshops.add(new Workshop(taller, surfaces));
             }
             if (in.read() != -1) throw new Rejected();
-            return new Snapshot(environment, checkpoint, observed, workshops);
+            return new Snapshot(formatVersion, environment, checkpoint, observed, workshops);
         }
     }
 

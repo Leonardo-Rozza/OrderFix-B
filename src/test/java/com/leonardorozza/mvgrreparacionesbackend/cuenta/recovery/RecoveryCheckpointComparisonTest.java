@@ -51,6 +51,34 @@ class RecoveryCheckpointComparisonTest {
         assertThatThrownBy(() -> snapshot(List.of(new Workshop(1, high), new Workshop(2, high))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+    @Test void legacyAndCurrentCoverageCannotMatchEvenForAnEmptyDatabase() {
+        var legacy = new Snapshot(1, environment, UUID.randomUUID(), Instant.EPOCH, List.of());
+        var current = new Snapshot(2, environment, UUID.randomUUID(), Instant.EPOCH, List.of());
+        assertThatThrownBy(() -> compare(legacy, current)).isInstanceOf(IllegalArgumentException.class).hasNoCause();
+        assertThatThrownBy(() -> compare(current, legacy)).isInstanceOf(IllegalArgumentException.class).hasNoCause();
+        assertThat(compare(legacy, legacy).status()).isEqualTo(Status.MATCH);
+    }
+    @Test void profileRestorationChangesCannotHideBehindTheSameUserEpochAndClosure() {
+        var expected = snapshot(List.of(workshop(7)));
+        var changed = new EnumMap<>(workshop(7).surfaces());
+        changed.put(Surface.PROFILE_DELETIONS, new Digest(1, "b".repeat(64)));
+        var actual = snapshot(List.of(new Workshop(7, changed)));
+        assertThat(actual.workshops().getFirst().surfaces().get(Surface.USERS))
+                .isEqualTo(expected.workshops().getFirst().surfaces().get(Surface.USERS));
+        assertThat(compare(expected, actual).findings()).containsExactly(
+                new Finding(7, Surface.PROFILE_DELETIONS, Issue.SURFACE_CHANGED));
+    }
+    @Test void snapshotVersionRequiresItsExactCoverageWithoutFillingMissingSurfaces() {
+        var legacy = new EnumMap<>(workshop(7).surfaces());
+        legacy.remove(Surface.PROFILE_DELETIONS);
+        var workshop = new Workshop(7, legacy);
+        assertThatThrownBy(() -> new Snapshot(2, environment, UUID.randomUUID(), Instant.EPOCH, List.of(workshop)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Snapshot(1, environment, UUID.randomUUID(), Instant.EPOCH, List.of(workshop(7))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Snapshot(3, environment, UUID.randomUUID(), Instant.EPOCH, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     private Snapshot snapshot(List<Workshop> workshops) {
         return new Snapshot(environment, UUID.randomUUID(), Instant.now(), workshops);
     }

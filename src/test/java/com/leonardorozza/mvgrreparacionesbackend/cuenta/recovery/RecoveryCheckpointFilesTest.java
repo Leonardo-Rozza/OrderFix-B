@@ -9,6 +9,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.RandomAccessFile;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +52,45 @@ class RecoveryCheckpointFilesTest {
         assertThat(Files.getPosixFilePermissions(file)).isEqualTo(PosixFilePermissions.fromString("rw-------"));
         assertThat(key).containsOnly((byte) 41);
         assertThat(directory.toFile().list()).containsExactly("checkpoint.bin");
+    }
+
+    @Test void legacyVersionOneFixtureRemainsReadableWithOnlyItsOriginalCoverage() throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(bytes)) {
+            out.writeLong(0x4f46585245433031L);
+            out.writeInt(1);
+            out.writeLong(ENVIRONMENT.getMostSignificantBits()); out.writeLong(ENVIRONMENT.getLeastSignificantBits());
+            out.writeLong(CHECKPOINT.getMostSignificantBits()); out.writeLong(CHECKPOINT.getLeastSignificantBits());
+            out.writeLong(NOW.getEpochSecond()); out.writeInt(NOW.getNano());
+            out.writeInt(1); out.writeLong(7);
+            // Frozen v1 order/count independent of the current enum and writer.
+            for (int ordinal = 0; ordinal < 13; ordinal++) {
+                out.writeLong(ordinal == 0 ? 1 : 2);
+                out.write(HexFormat.of().parseHex(SHA));
+            }
+        }
+        byte[] signed = sign(bytes.toByteArray());
+        Path file = path("legacy-v1.bin");
+        writePrivate(file, signed);
+        Snapshot legacy = files.read(file, key, receipt(signed, ENVIRONMENT, CHECKPOINT));
+        assertThat(legacy.formatVersion()).isEqualTo(1);
+        assertThat(legacy.workshops().getFirst().surfaces()).hasSize(13).doesNotContainKey(Surface.PROFILE_DELETIONS);
+        assertThat(legacy.workshops().getFirst().surfaces().get(Surface.ARTICULOS)).isEqualTo(new Digest(2, SHA));
+        assertThatThrownBy(() -> RecoveryCheckpointComparison.compare(legacy, snapshot(CHECKPOINT)))
+                .isInstanceOf(IllegalArgumentException.class).hasNoCause();
+        Receipt rewritten = files.write(path("legacy-copy.bin"), legacy, key);
+        assertThat(rewritten.sha256()).isEqualTo(receipt(signed, ENVIRONMENT, CHECKPOINT).sha256());
+    }
+
+    @Test void versionTwoCannotBeRelabelledAsLegacyToDiscardTheNewSurface() throws Exception {
+        Path file = path("current.bin");
+        files.write(file, snapshot(CHECKPOINT), key);
+        byte[] payload = payload(file);
+        assertThat(ByteBuffer.wrap(payload).getInt(8)).isEqualTo(2);
+        ByteBuffer.wrap(payload).putInt(8, 1);
+        byte[] altered = sign(payload);
+        Files.write(file, altered);
+        rejected(() -> files.read(file, key, receipt(altered, ENVIRONMENT, CHECKPOINT)));
     }
 
     @Test void emptyScopeStillHasAnAuthenticatedExplicitCheckpoint() throws Exception {
@@ -142,7 +183,7 @@ class RecoveryCheckpointFilesTest {
         byte[] payload = payload(file);
         ByteBuffer bytes = ByteBuffer.wrap(payload);
         bytes.putLong(68 + 40, 5001); // USERS in first workshop
-        bytes.putLong(68 + 40 + 528, 5001); // USERS in second workshop
+        bytes.putLong(68 + 40 + 568, 5001); // USERS in second workshop
         byte[] signed = sign(payload);
         Files.write(file, signed);
         rejected(() -> files.read(file, key, receipt(signed, ENVIRONMENT, CHECKPOINT)));
@@ -156,10 +197,10 @@ class RecoveryCheckpointFilesTest {
             ByteBuffer bytes = ByteBuffer.wrap(payload);
             switch (variant) {
                 case 0 -> bytes.putLong(0, 0);
-                case 1 -> bytes.putInt(8, 2);
+                case 1 -> bytes.putInt(8, 3);
                 case 2 -> bytes.putInt(52, 1_000_000_000);
                 case 3 -> bytes.putLong(60, 0);
-                case 4 -> bytes.putLong(60 + 528, 7); // duplicate second workshop
+                case 4 -> bytes.putLong(60 + 568, 7); // duplicate second workshop
                 case 5 -> bytes.putLong(44, -1);
                 case 6 -> bytes.putLong(44, Long.MAX_VALUE);
                 default -> throw new AssertionError();

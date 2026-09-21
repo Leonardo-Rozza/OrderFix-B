@@ -241,3 +241,20 @@ más su recibo viejo pueden coincidir y seguir omitiendo cierres posteriores. El
 la fecha y la coincidencia no prueban continuidad ni autoridad del operador. Mantener
 la cuarentena hasta reconciliar el intervalo faltante, sesiones, exportaciones,
 efectos remotos, evidencia retenida y respaldos. No hay reanudación automática.
+
+## Perfiles retirados — compatibilidad V38
+
+La supresión V38 retira perfiles y credenciales locales conservando referencias de
+evidencia. Restaurar un backup puede reponer email, nombre, contraseña o contactos
+sin cambiar la época de sesión: la comparación de épocas por sí sola no lo detecta.
+El formato v2 incorpora la constancia de supresión y el cumplimiento de los valores
+neutros del perfil, cantidad de usuarios y ausencia del QR. La evidencia no copia
+valores personales originales ni crea un hash del email para conservarlo indirectamente.
+
+Las capturas V37 conservan formato v1 y 13 superficies; las V38 usan v2 y la superficie
+PROFILE_DELETIONS adicional. Los formatos anteriores siguen legibles para sus entornos,
+pero comparar v1 con v2 no acredita compatibilidad, aunque la base esté vacía. El
+lector decide por catálogo acreditado; no bajar de versión para sortear un error.
+Una correspondencia v2 sigue siendo un requisito parcial, no autorización de reapertura.
+La política de retención, referencias de proveedores, nombres de archivos y copias
+externas permanecen separadas de esta prueba de perfil local.

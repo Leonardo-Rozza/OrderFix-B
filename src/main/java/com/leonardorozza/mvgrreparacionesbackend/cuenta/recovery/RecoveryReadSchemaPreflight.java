@@ -9,7 +9,7 @@ import java.util.HexFormat;
 import java.util.Objects;
 
 /**
- * Portable PostgreSQL 16/V37 maintenance read profile. Never confers write privileges and never
+ * Portable PostgreSQL 16/V37–V38 maintenance read profile. Never confers write privileges and never
  * replaces the historical write verifiers. Definitions are deparsed: physical OIDs, parse locations,
  * RI trigger names, storage statistics and mutable sequence values are deliberately not evidence.
  */
@@ -19,6 +19,9 @@ public final class RecoveryReadSchemaPreflight {
     // is identical. Accept only these two complete catalogs, never rewrite arbitrary SQL at runtime.
     static final String MIGRATED_V37 = "a9424a71510dc7b894b78a93fdebf81937c33998f996d894e076a1a609f9e964";
     static final String RESTORED_V37 = "48f45d690c48d3422f415c00c2ffd6facd4fd5457626d618473518b98ce1e428";
+    // Frozen independently after migration and logical restore; placeholders never accept a catalog.
+    static final String MIGRATED_V38 = "TO_FREEZE_MIGRATED_V38";
+    static final String RESTORED_V38 = "TO_FREEZE_RESTORED_V38";
     private static final String PROTOCOL = "ordenfix-recovery-read-schema/1\n";
     private static final int MAX_CATALOG_CHARS = 4 * 1024 * 1024;
 
@@ -210,8 +213,15 @@ public final class RecoveryReadSchemaPreflight {
     private RecoveryReadSchemaPreflight() { }
 
     public static void require(JdbcTemplate jdbc) {
+        checkpointVersion(jdbc);
+    }
+
+    /** A legacy schema can only produce legacy coverage, even when it contains no workshops. */
+    public static int checkpointVersion(JdbcTemplate jdbc) {
         String observed = fingerprint(jdbc);
-        if (!MIGRATED_V37.equals(observed) && !RESTORED_V37.equals(observed)) throw new Rejected();
+        if (MIGRATED_V37.equals(observed) || RESTORED_V37.equals(observed)) return 1;
+        if (MIGRATED_V38.equals(observed) || RESTORED_V38.equals(observed)) return 2;
+        throw new Rejected();
     }
 
     /** Diagnostic only: returning a hash does not accept it as a supported schema. */

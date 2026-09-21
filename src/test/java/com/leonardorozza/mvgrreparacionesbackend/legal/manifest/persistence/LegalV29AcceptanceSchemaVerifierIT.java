@@ -206,8 +206,8 @@ class LegalV29AcceptanceSchemaVerifierIT {
                     FROM (SELECT max(installed_rank) AS rank FROM flyway_schema_history) previous
                     CROSS JOIN generate_series(1, 16) AS candidate(ordinal)
                     """);
-            // Eleven admitted versions (V27–V37), plus one bounded rejection sentinel.
-            assertThat(verifier.snapshot().flyway()).hasSize(12);
+            // Twelve admitted versions (V27–V38), plus one bounded rejection sentinel.
+            assertThat(verifier.snapshot().flyway()).hasSize(13);
             assertThatThrownBy(verifier::verify).isInstanceOf(LegalEditorialOperationalException.class);
             status.setRollbackOnly();
         });

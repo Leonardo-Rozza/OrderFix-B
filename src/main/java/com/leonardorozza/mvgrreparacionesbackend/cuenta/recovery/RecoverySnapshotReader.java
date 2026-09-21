@@ -51,12 +51,12 @@ public final class RecoverySnapshotReader {
                 // First query pins the PostgreSQL RR snapshot. Wall time is informative, not a freshness proof.
                 var observed = Objects.requireNonNull(jdbc.queryForObject("SELECT statement_timestamp()",
                         OffsetDateTime.class)).toInstant();
-                RecoveryReadSchemaPreflight.require(jdbc);
+                int formatVersion = RecoveryReadSchemaPreflight.checkpointVersion(jdbc);
                 var ids = jdbc.queryForList("SELECT id FROM public.talleres ORDER BY id LIMIT " + (MAX_WORKSHOPS + 1), Long.class);
                 if (ids.size() > MAX_WORKSHOPS) throw new Rejected(Rejected.Code.CAPACITY_EXCEEDED);
                 var collected = new TreeMap<Long, EnumMap<Surface, Digest>>();
                 ids.forEach(id -> collected.put(id, new EnumMap<>(Surface.class)));
-                for (Surface surface : Surface.values()) {
+                for (Surface surface : surfaces(formatVersion)) {
                     var rows = jdbc.query(QUERIES.get(surface), (row, index) -> new Row(
                             row.getObject(1, Long.class), row.getString(2)));
                     if (rows.size() > MAX_ROWS_PER_SURFACE) throw new Rejected(Rejected.Code.CAPACITY_EXCEEDED);
@@ -69,7 +69,7 @@ public final class RecoverySnapshotReader {
                     }
                     collected.forEach((id, surfaces) -> surfaces.put(surface, digest(surface, grouped.getOrDefault(id, List.of()))));
                 }
-                return new Snapshot(environmentId, checkpointId, observed, collected.entrySet().stream()
+                return new Snapshot(formatVersion, environmentId, checkpointId, observed, collected.entrySet().stream()
                         .map(entry -> new Workshop(entry.getKey(), entry.getValue())).toList());
             }));
         } catch (Rejected rejected) { throw rejected;
@@ -111,6 +111,23 @@ public final class RecoverySnapshotReader {
         queries.put(Surface.EQUIPOS, query("SELECT * FROM public.equipos"));
         queries.put(Surface.CLIENTES, query("SELECT * FROM public.clientes"));
         queries.put(Surface.ARTICULOS, query("SELECT * FROM public.articulos"));
+        // Only the receipt and derived suppression facts leave PostgreSQL. No original identity,
+        // contact, credential, tombstone address or per-value hash is exported in this surface.
+        queries.put(Surface.PROFILE_DELETIONS, query("""
+                SELECT b.*,
+                       t.nombre='Taller dado de baja' AND t.email_contacto IS NULL AND t.telefono IS NULL
+                         AND t.alias_cobro IS NULL AND t.titular_cobro IS NULL AND t.entidad_cobro IS NULL
+                         AND NOT t.mostrar_en_resumen AS taller_suprimido,
+                       t.activo AND t.cierre_estado='RESTRINGIDO' AND t.cierre_referencia=b.cierre_referencia
+                         AND t.cierre_version=b.generacion AS cierre_coherente,
+                       (SELECT count(*) FROM public.users u WHERE u.taller_id=b.taller_id) AS usuarios_actuales,
+                       (SELECT coalesce(bool_and(u.username='Usuario dado de baja' AND u.password='!'
+                          AND NOT u.active AND NOT u.email_verificado
+                          AND u.email ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@cuenta-eliminada[.]invalid$'),false)
+                          FROM public.users u WHERE u.taller_id=b.taller_id) AS usuarios_suprimidos,
+                       (SELECT count(*) FROM public.taller_qr_cobro q WHERE q.taller_id=b.taller_id) AS qr_actuales
+                  FROM public.cuenta_perfil_bajas b JOIN public.talleres t ON t.id=b.taller_id
+                """));
         return Map.copyOf(queries);
     }
 

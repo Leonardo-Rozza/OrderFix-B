@@ -40,14 +40,15 @@ final class LegalEditorialSchemaVerifier implements LegalDatabasePreflight {
         LegalV29AcceptanceSchemaVerifier.verifyAfterEditorialBase(jdbc, expectedSchema);
     }
 
-    /** Frozen migrated V27 surface, plus its exact public/V37 logical-restore representation. */
+    /** Frozen V27 surface, plus explicitly accredited public/V37 and V38 representations. */
     void verifyBase() {
         verifySessionSchema();
         verifyFlywayHistory();
         var catalog = catalogFingerprint();
         if (!catalog.equals(LegalV27EditorialInventory.EXPECTED_CATALOG)
                 && !(catalog.equals(LegalRestoredV37Catalogs.EDITORIAL)
-                    && LegalRestoredV37Catalogs.hasExactV37History(jdbc, expectedSchema))) {
+                    && LegalRestoredV37Catalogs.hasExactV37History(jdbc, expectedSchema))
+                && !LegalV38ProfileErasureSchema.acceptsEditorial(jdbc, expectedSchema, catalog)) {
             incompatible();
         }
         verifyEditorialFunctions();

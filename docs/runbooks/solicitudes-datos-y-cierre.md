@@ -347,3 +347,42 @@ la eliminación operativa, el cierre público ni el borrado de identidad/evidenc
 CONFIRMADO significa aceptación SMTP más confirmación SQL; INCIERTO requiere revisión
 sin reenvío automático. El cierre productivo conserva pendientes la prueba real de
 proveedores, retención final, identidad y recuperación/operación del despliegue.
+
+### Supresión del perfil local — V38
+
+El [corte de perfil](../plans/2026-09-20-conservacion-baja-identidad-design.md) agrega
+`WorkshopProfileErasureService.suppress(taller,cierre,operacion)`, una entrada interna
+sin HTTP ni scheduler. Requiere opt-in `ORDENFIX_CLOSURE_PROFILE_ERASURE_ENABLED=true`
+(propiedad `ordenfix.cuenta.cierre.profile-erasure-enabled`), apagado por defecto.
+No ejecutar sobre cuentas reales sin política y operación de salida aprobadas.
+
+Antes de invocar: cierre vigente con gracia vencida, ocho categorías operativas sin
+filas, fotos resueltas según V37, limpieza de tokens/pruebas de exportación y ningún
+ZIP/payload activo. Una lease de aviso SMTP vigente obliga a esperar. La función no
+consulta MP ni modifica estados de proveedor; la conciliación de renovaciones sigue
+su circuito independiente. Un aviso incierto no retiene indefinidamente los perfiles.
+
+Suprime nombre/email/hash de contraseña de hasta 1.000 usuarios, revoca sus épocas y
+verificación, los desactiva, neutraliza nombre/contactos/datos de cobro del taller y
+borra el PNG/huella del QR. El email sustituto no deriva del original. Repetir la misma
+operación devuelve la constancia original sin nuevas escrituras; otra operación no
+reemplaza la constancia. Errores o capacidad excedida revierten todo el intento.
+
+SUPPRESSED acredita ese alcance local. REUSED recupera la misma constancia. Ninguno
+significa eliminación integral ni anonimización: los IDs, roles, historial, constancias
+legales, metadata retenida, identificadores de suscripción y de fotos permanecen.
+Los nombres originales de fotos también siguen presentes hasta su corte específico.
+No hay una copia nueva del email original para soporte. Una cuenta nueva puede usar
+ese email con otro ID, sin acceso ni asociación automática al taller anterior.
+
+El taller permanece RESTRINGIDO con ancla activa para los lectores/mantenimientos
+internos; todos sus usuarios quedan inactivos y sin credenciales utilizables. No
+cambiar manualmente `activo` ni `cierre_estado` para simular un terminal ELIMINADO.
+No volver a poner efectos en PENDIENTE para intentar avisar a la dirección sustituida.
+Los emails ya iniciados pueden terminar después del vencimiento de su lease.
+
+La conservación de aceptaciones y evidencias requiere una matriz con finalidad,
+fundamento, responsable, fecha inicial, vencimiento y excepciones concretas. No se
+adopta una retención indefinida por omisión ni un plazo universal de cinco/diez años.
+Una solicitud de supresión de datos debe seguir el circuito de derechos aplicable;
+los siete días de recuperación voluntaria del taller no sustituyen ese procedimiento.

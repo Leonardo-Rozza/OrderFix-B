@@ -21,7 +21,8 @@ public final class RecoveryCheckpointComparison {
     }
 
     public static Report compare(Snapshot expected, Snapshot actual) {
-        if (expected == null || actual == null || !expected.environmentId().equals(actual.environmentId()))
+        if (expected == null || actual == null || expected.formatVersion() != actual.formatVersion()
+                || !expected.environmentId().equals(actual.environmentId()))
             throw new IllegalArgumentException("Contexto de recuperación incompatible.");
         var previous = new TreeMap<Long, Workshop>();
         var current = new TreeMap<Long, Workshop>();
@@ -31,7 +32,7 @@ public final class RecoveryCheckpointComparison {
         previous.forEach((id, workshop) -> {
             Workshop restored = current.get(id);
             if (restored == null) findings.add(new Finding(id, null, Issue.MISSING_WORKSHOP));
-            else for (Surface surface : Surface.values())
+            else for (Surface surface : surfaces(expected.formatVersion()))
                 if (!workshop.surfaces().get(surface).equals(restored.surfaces().get(surface)))
                     findings.add(new Finding(id, surface, Issue.SURFACE_CHANGED));
         });
