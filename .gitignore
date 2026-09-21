@@ -239,3 +239,4 @@ generated-test-sources/
 .sass-cache/
 connect.lock
 typings/
+DEPLOY.md
